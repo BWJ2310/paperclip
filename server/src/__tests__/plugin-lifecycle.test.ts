@@ -1,6 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { PluginRecord, PluginStatus } from "@paperclipai/shared";
-import { isDisabledByOperator } from "../services/plugin-lifecycle.js";
 import type { PluginWorkerManager, PluginWorkerHandle, WorkerStartOptions } from "../services/plugin-worker-manager.js";
 
 // ---------------------------------------------------------------------------
@@ -159,6 +158,17 @@ describe("pluginLifecycleManager", () => {
   // =========================================================================
 
   describe("enable", () => {
+    it("transitions disabled → ready", async () => {
+      const plugin = makePlugin({ status: "disabled" as PluginStatus });
+      const readyPlugin = { ...plugin, status: "ready" as PluginStatus, lastError: null };
+
+      mockRegistry.getById.mockResolvedValue(plugin);
+      mockRegistry.updateStatus.mockResolvedValue(readyPlugin);
+
+      const result = await lifecycle.enable(plugin.id);
+      expect(result.status).toBe("ready");
+    });
+
     it("transitions error → ready", async () => {
       const plugin = makePlugin({ status: "error", lastError: "worker crashed" });
       const readyPlugin = { ...plugin, status: "ready" as PluginStatus, lastError: null };
@@ -232,41 +242,41 @@ describe("pluginLifecycleManager", () => {
   // =========================================================================
 
   describe("disable", () => {
-    it("transitions ready → error with disabled sentinel", async () => {
+    it("transitions ready → disabled", async () => {
       const plugin = makePlugin({ status: "ready" });
-      const errorPlugin = {
+      const disabledPlugin = {
         ...plugin,
-        status: "error" as PluginStatus,
-        lastError: "disabled_by_operator",
+        status: "disabled" as PluginStatus,
+        lastError: null,
       };
 
       mockRegistry.getById.mockResolvedValue(plugin);
-      mockRegistry.updateStatus.mockResolvedValue(errorPlugin);
+      mockRegistry.updateStatus.mockResolvedValue(disabledPlugin);
 
       const result = await lifecycle.disable(plugin.id);
-      expect(result.status).toBe("error");
+      expect(result.status).toBe("disabled");
       expect(mockRegistry.updateStatus).toHaveBeenCalledWith(plugin.id, {
-        status: "error",
-        lastError: "disabled_by_operator",
+        status: "disabled",
+        lastError: null,
       });
     });
 
-    it("includes reason in the disabled sentinel", async () => {
+    it("stores reason in lastError when provided", async () => {
       const plugin = makePlugin({ status: "ready" });
-      const errorPlugin = {
+      const disabledPlugin = {
         ...plugin,
-        status: "error" as PluginStatus,
-        lastError: "disabled_by_operator: maintenance window",
+        status: "disabled" as PluginStatus,
+        lastError: "maintenance window",
       };
 
       mockRegistry.getById.mockResolvedValue(plugin);
-      mockRegistry.updateStatus.mockResolvedValue(errorPlugin);
+      mockRegistry.updateStatus.mockResolvedValue(disabledPlugin);
 
       await lifecycle.disable(plugin.id, "maintenance window");
 
       expect(mockRegistry.updateStatus).toHaveBeenCalledWith(plugin.id, {
-        status: "error",
-        lastError: "disabled_by_operator: maintenance window",
+        status: "disabled",
+        lastError: "maintenance window",
       });
     });
 
@@ -281,9 +291,9 @@ describe("pluginLifecycleManager", () => {
 
     it("emits plugin.disabled event with reason", async () => {
       const plugin = makePlugin({ status: "ready" });
-      const errorPlugin = { ...plugin, status: "error" as PluginStatus };
+      const disabledPlugin = { ...plugin, status: "disabled" as PluginStatus };
       mockRegistry.getById.mockResolvedValue(plugin);
-      mockRegistry.updateStatus.mockResolvedValue(errorPlugin);
+      mockRegistry.updateStatus.mockResolvedValue(disabledPlugin);
 
       const events: any[] = [];
       lifecycle.on("plugin.disabled", (e) => events.push(e));
@@ -295,9 +305,9 @@ describe("pluginLifecycleManager", () => {
 
     it("does not double-fetch the plugin", async () => {
       const plugin = makePlugin({ status: "ready" });
-      const errorPlugin = { ...plugin, status: "error" as PluginStatus };
+      const disabledPlugin = { ...plugin, status: "disabled" as PluginStatus };
       mockRegistry.getById.mockResolvedValue(plugin);
-      mockRegistry.updateStatus.mockResolvedValue(errorPlugin);
+      mockRegistry.updateStatus.mockResolvedValue(disabledPlugin);
 
       await lifecycle.disable(plugin.id);
       expect(mockRegistry.getById).toHaveBeenCalledTimes(1);
@@ -1032,28 +1042,3 @@ describe("pluginLifecycleManager legacy API", () => {
   });
 });
 
-// ===========================================================================
-// isDisabledByOperator (standalone export)
-// ===========================================================================
-
-describe("isDisabledByOperator", () => {
-  it("returns true for disabled_by_operator sentinel", () => {
-    expect(isDisabledByOperator("disabled_by_operator")).toBe(true);
-  });
-
-  it("returns true for disabled_by_operator with reason", () => {
-    expect(isDisabledByOperator("disabled_by_operator: maintenance")).toBe(true);
-  });
-
-  it("returns false for regular error messages", () => {
-    expect(isDisabledByOperator("worker crashed")).toBe(false);
-  });
-
-  it("returns false for null", () => {
-    expect(isDisabledByOperator(null)).toBe(false);
-  });
-
-  it("returns false for empty string", () => {
-    expect(isDisabledByOperator("")).toBe(false);
-  });
-});

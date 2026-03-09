@@ -1042,13 +1042,14 @@ describe("constants re-exports", () => {
     it("contains all lifecycle statuses", () => {
       expect(PLUGIN_STATUSES).toContain("installed");
       expect(PLUGIN_STATUSES).toContain("ready");
+      expect(PLUGIN_STATUSES).toContain("disabled");
       expect(PLUGIN_STATUSES).toContain("error");
       expect(PLUGIN_STATUSES).toContain("upgrade_pending");
       expect(PLUGIN_STATUSES).toContain("uninstalled");
     });
 
-    it("has exactly 5 statuses", () => {
-      expect(PLUGIN_STATUSES).toHaveLength(5);
+    it("has exactly 6 statuses", () => {
+      expect(PLUGIN_STATUSES).toHaveLength(6);
     });
   });
 

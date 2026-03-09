@@ -26,7 +26,6 @@ export {
 } from "./plugin-state-store.js";
 export {
   pluginLifecycleManager,
-  isDisabledByOperator,
   type PluginLifecycleManager,
   type PluginLifecycleManagerOptions,
   type PluginLifecycleEvents,

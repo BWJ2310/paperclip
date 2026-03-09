@@ -1,5 +1,6 @@
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/api/client";
 
@@ -10,8 +11,21 @@ vi.mock("@/api/plugins", () => ({
   },
 }));
 
+vi.mock("@/api/auth", () => ({
+  authApi: {
+    getSession: vi.fn().mockResolvedValue({
+      session: { id: "session-1", userId: "user-1" },
+      user: { id: "user-1", email: "test@example.com", name: "Test User" },
+    }),
+  },
+}));
+
 import { pluginsApi } from "@/api/plugins";
-import { usePluginData, _resetBridgeState } from "./bridge";
+import {
+  usePluginData,
+  usePluginAction,
+  useHostContext,
+} from "./bridge";
 import {
   PluginSlotMount,
   registerPluginReactComponent,
@@ -21,18 +35,30 @@ import {
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+function createTestQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+    },
+  });
+}
+
 function renderNode(node: ReactNode) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
+  const queryClient = createTestQueryClient();
+  const wrappedNode = (n: ReactNode) => (
+    <QueryClientProvider client={queryClient}>{n}</QueryClientProvider>
+  );
   act(() => {
-    root.render(node);
+    root.render(wrappedNode(node));
   });
   return {
     container,
     rerender: (next: ReactNode) =>
       act(() => {
-        root.render(next);
+        root.render(wrappedNode(next));
       }),
     unmount: () =>
       act(() => {
@@ -82,7 +108,6 @@ const baseContext = {
 afterEach(() => {
   vi.clearAllMocks();
   vi.useRealTimers();
-  _resetBridgeState();
   _resetPluginModuleLoader();
   document.body.innerHTML = "";
 });
@@ -166,5 +191,194 @@ describe("plugin bridge regressions", () => {
     expect(pluginsApi.bridgeGetData).toHaveBeenCalledTimes(2);
     expect(view.container.querySelector("[data-testid='bridge-probe-status']")?.textContent).toBe("ready");
     view.unmount();
+  });
+});
+
+describe("usePluginAction", () => {
+  it("calls bridgePerformAction and returns the result", async () => {
+    vi.mocked(pluginsApi.bridgePerformAction).mockResolvedValueOnce({
+      data: { success: true },
+    });
+
+    let actionFn: ((params?: Record<string, unknown>) => Promise<unknown>) | null = null;
+
+    function ActionProbe() {
+      const action = usePluginAction("submit");
+      actionFn = action;
+      return <div data-testid="action-probe">ready</div>;
+    }
+
+    registerPluginReactComponent("acme.files", "ActionProbe", ActionProbe);
+    const actionSlot = { ...slot, exportName: "ActionProbe" };
+
+    const view = renderNode(
+      <PluginSlotMount
+        slot={actionSlot}
+        context={{ ...baseContext, companyId: "company-1" }}
+      />,
+    );
+
+    await flushBridgeUpdates();
+    expect(view.container.querySelector("[data-testid='action-probe']")?.textContent).toBe("ready");
+    expect(actionFn).not.toBeNull();
+
+    let result: unknown;
+    await act(async () => {
+      result = await actionFn!({ key: "value" });
+    });
+
+    expect(result).toEqual({ success: true });
+    expect(pluginsApi.bridgePerformAction).toHaveBeenCalledWith(
+      "plugin-1",
+      "submit",
+      { key: "value" },
+      "company-1",
+      null,
+    );
+    view.unmount();
+  });
+
+  it("throws a structured PluginBridgeError on failure", async () => {
+    vi.mocked(pluginsApi.bridgePerformAction).mockRejectedValueOnce(
+      new ApiError("denied", 403, {
+        code: "CAPABILITY_DENIED",
+        message: "Missing capability: issues.create",
+      }),
+    );
+
+    let actionFn: ((params?: Record<string, unknown>) => Promise<unknown>) | null = null;
+
+    function ActionErrorProbe() {
+      const action = usePluginAction("create-issue");
+      actionFn = action;
+      return <div>ready</div>;
+    }
+
+    registerPluginReactComponent("acme.files", "ActionErrorProbe", ActionErrorProbe);
+    const actionSlot = { ...slot, exportName: "ActionErrorProbe" };
+
+    const view = renderNode(
+      <PluginSlotMount
+        slot={actionSlot}
+        context={{ ...baseContext, companyId: "company-1" }}
+      />,
+    );
+
+    await flushBridgeUpdates();
+
+    let caughtError: unknown;
+    await act(async () => {
+      try {
+        await actionFn!();
+      } catch (err) {
+        caughtError = err;
+      }
+    });
+
+    expect(caughtError).toMatchObject({
+      code: "CAPABILITY_DENIED",
+      message: "Missing capability: issues.create",
+    });
+    view.unmount();
+  });
+});
+
+describe("useHostContext", () => {
+  it("returns the host context from the enclosing bridge scope", async () => {
+    let captured: ReturnType<typeof useHostContext> | null = null;
+
+    function HostContextProbe() {
+      captured = useHostContext();
+      return <div data-testid="host-ctx">ok</div>;
+    }
+
+    registerPluginReactComponent("acme.files", "HostContextProbe", HostContextProbe);
+    const ctxSlot = { ...slot, exportName: "HostContextProbe" };
+
+    const view = renderNode(
+      <PluginSlotMount
+        slot={ctxSlot}
+        context={{
+          companyId: "company-1",
+          companyPrefix: "ACME",
+          entityId: "project-1",
+          entityType: "project" as const,
+        }}
+      />,
+    );
+
+    await flushBridgeUpdates();
+
+    expect(captured).not.toBeNull();
+    expect(captured!.companyId).toBe("company-1");
+    expect(captured!.companyPrefix).toBe("ACME");
+    expect(captured!.entityId).toBe("project-1");
+    expect(captured!.entityType).toBe("project");
+    // projectId should be inferred from entityType === "project"
+    expect(captured!.projectId).toBe("project-1");
+    view.unmount();
+  });
+});
+
+describe("bridge hooks outside provider", () => {
+  it("usePluginData throws when used outside PluginBridgeContext", () => {
+    const errors: unknown[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => errors.push(args);
+
+    function Orphan() {
+      usePluginData("test");
+      return <div>should not render</div>;
+    }
+
+    try {
+      expect(() => {
+        renderNode(<Orphan />);
+      }).toThrow(
+        /Plugin bridge hook called outside of a <PluginBridgeContext\.Provider>/,
+      );
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  it("usePluginAction throws when used outside PluginBridgeContext", () => {
+    const originalError = console.error;
+    console.error = () => {};
+
+    function Orphan() {
+      usePluginAction("test");
+      return <div>should not render</div>;
+    }
+
+    try {
+      expect(() => {
+        renderNode(<Orphan />);
+      }).toThrow(
+        /Plugin bridge hook called outside of a <PluginBridgeContext\.Provider>/,
+      );
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  it("useHostContext throws when used outside PluginBridgeContext", () => {
+    const originalError = console.error;
+    console.error = () => {};
+
+    function Orphan() {
+      useHostContext();
+      return <div>should not render</div>;
+    }
+
+    try {
+      expect(() => {
+        renderNode(<Orphan />);
+      }).toThrow(
+        /Plugin bridge hook called outside of a <PluginBridgeContext\.Provider>/,
+      );
+    } finally {
+      console.error = originalError;
+    }
   });
 });

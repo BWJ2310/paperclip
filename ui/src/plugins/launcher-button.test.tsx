@@ -1,5 +1,6 @@
 import React from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginLauncherDeclaration } from "@paperclipai/shared";
 
@@ -7,6 +8,15 @@ vi.mock("@/api/plugins", () => ({
   pluginsApi: {
     listUiContributions: vi.fn(),
     bridgePerformAction: vi.fn(),
+  },
+}));
+
+vi.mock("@/api/auth", () => ({
+  authApi: {
+    getSession: vi.fn().mockResolvedValue({
+      session: { id: "session-1", userId: "user-1" },
+      user: { id: "user-1", email: "test@example.com", name: "Test User" },
+    }),
   },
 }));
 
@@ -46,6 +56,14 @@ function makeContribution(
   };
 }
 
+function createTestQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+    },
+  });
+}
+
 function renderLauncherButton(
   launcher: PluginLauncherDeclaration,
   options?: {
@@ -53,22 +71,25 @@ function renderLauncherButton(
   },
 ) {
   const contribution = makeContribution(launcher);
+  const queryClient = createTestQueryClient();
   return render(
-    <PluginLauncherProvider>
-      <PluginLauncherButton
-        launcher={{
-          ...launcher,
-          pluginId: contribution.pluginId,
-          pluginKey: contribution.pluginKey,
-          pluginDisplayName: contribution.displayName,
-          pluginVersion: contribution.version,
-          uiEntryFile: contribution.uiEntryFile,
-        }}
-        contribution={contribution}
-        context={{ companyId: "company-1", entityId: "issue-1", entityType: "issue" }}
-        onActivated={options?.onActivated}
-      />
-    </PluginLauncherProvider>,
+    <QueryClientProvider client={queryClient}>
+      <PluginLauncherProvider>
+        <PluginLauncherButton
+          launcher={{
+            ...launcher,
+            pluginId: contribution.pluginId,
+            pluginKey: contribution.pluginKey,
+            pluginDisplayName: contribution.displayName,
+            pluginVersion: contribution.version,
+            uiEntryFile: contribution.uiEntryFile,
+          }}
+          contribution={contribution}
+          context={{ companyId: "company-1", entityId: "issue-1", entityType: "issue" }}
+          onActivated={options?.onActivated}
+        />
+      </PluginLauncherProvider>
+    </QueryClientProvider>,
   );
 }
 

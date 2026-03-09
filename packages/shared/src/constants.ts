@@ -266,9 +266,9 @@ export const PLUGIN_API_VERSION = 1 as const;
 /**
  * Lifecycle statuses for an installed plugin.
  *
- * State machine: installed → ready | error, ready → error | upgrade_pending | uninstalled,
- * error → ready | uninstalled, upgrade_pending → ready | error | uninstalled,
- * uninstalled → installed (reinstall).
+ * State machine: installed → ready | error, ready → disabled | error | upgrade_pending | uninstalled,
+ * disabled → ready | uninstalled, error → ready | uninstalled,
+ * upgrade_pending → ready | error | uninstalled, uninstalled → installed (reinstall).
  *
  * @see {@link PluginStatus} — inferred union type
  * @see PLUGIN_SPEC.md §21.3 `plugins.status`
@@ -276,6 +276,7 @@ export const PLUGIN_API_VERSION = 1 as const;
 export const PLUGIN_STATUSES = [
   "installed",
   "ready",
+  "disabled",
   "error",
   "upgrade_pending",
   "uninstalled",

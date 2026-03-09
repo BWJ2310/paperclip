@@ -1,4 +1,5 @@
 import {
+  Component,
   createContext,
   createElement,
   useCallback,
@@ -9,6 +10,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ErrorInfo,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -22,13 +24,13 @@ import type {
   PluginUiSlotEntityType,
 } from "@paperclipai/shared";
 import { pluginsApi, type PluginUiContribution } from "@/api/plugins";
+import { authApi } from "@/api/auth";
 import { Button } from "@/components/ui/button";
 import { useNavigate, useLocation } from "@/lib/router";
 import { queryKeys } from "@/lib/queryKeys";
 import { cn } from "@/lib/utils";
 import {
-  clearActiveBridgeContext,
-  setActiveBridgeContext,
+  PluginBridgeContext,
   type PluginHostContext,
   type PluginModalBoundsRequest,
   type PluginRenderCloseEvent,
@@ -130,6 +132,7 @@ function getErrorMessage(error: unknown): string {
 function buildLauncherHostContext(
   context: PluginLauncherContext,
   renderEnvironment: PluginRenderEnvironmentContext | null,
+  userId: string | null,
 ): PluginHostContext {
   return {
     companyId: context.companyId ?? null,
@@ -137,7 +140,7 @@ function buildLauncherHostContext(
     projectId: context.projectId ?? (context.entityType === "project" ? context.entityId ?? null : null),
     entityId: context.entityId ?? null,
     entityType: context.entityType ?? null,
-    userId: null,
+    userId,
     renderEnvironment,
   };
 }
@@ -343,15 +346,50 @@ function PluginLauncherBridgeScope({
   hostContext: PluginHostContext;
   children: ReactNode;
 }) {
-  setActiveBridgeContext(pluginId, hostContext);
+  const value = useMemo(() => ({ pluginId, hostContext }), [pluginId, hostContext]);
 
-  useEffect(() => {
-    return () => {
-      clearActiveBridgeContext();
-    };
-  }, []);
+  return (
+    <PluginBridgeContext.Provider value={value}>
+      {children}
+    </PluginBridgeContext.Provider>
+  );
+}
 
-  return <>{children}</>;
+type LauncherErrorBoundaryProps = {
+  launcher: ResolvedPluginLauncher;
+  children: ReactNode;
+};
+
+type LauncherErrorBoundaryState = {
+  hasError: boolean;
+};
+
+class LauncherErrorBoundary extends Component<LauncherErrorBoundaryProps, LauncherErrorBoundaryState> {
+  override state: LauncherErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): LauncherErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  override componentDidCatch(error: unknown, info: ErrorInfo): void {
+    console.error("Plugin launcher render failed", {
+      pluginKey: this.props.launcher.pluginKey,
+      launcherId: this.props.launcher.id,
+      error,
+      info: info.componentStack,
+    });
+  }
+
+  override render() {
+    if (this.state.hasError) {
+      return (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+          {this.props.launcher.pluginDisplayName}: failed to render
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 function LauncherRenderContent({
@@ -362,9 +400,14 @@ function LauncherRenderContent({
   renderEnvironment: PluginRenderEnvironmentContext;
 }) {
   const component = instance.component;
+  const { data: session } = useQuery({
+    queryKey: queryKeys.auth.session,
+    queryFn: () => authApi.getSession(),
+  });
+  const userId = session?.user?.id ?? session?.session?.userId ?? null;
   const hostContext = useMemo(
-    () => buildLauncherHostContext(instance.hostContext, renderEnvironment),
-    [instance.hostContext, renderEnvironment],
+    () => buildLauncherHostContext(instance.hostContext, renderEnvironment, userId),
+    [instance.hostContext, renderEnvironment, userId],
   );
 
   if (!component) {
@@ -399,9 +442,11 @@ function LauncherRenderContent({
   } as never);
 
   return (
-    <PluginLauncherBridgeScope pluginId={instance.launcher.pluginId} hostContext={hostContext}>
-      {node}
-    </PluginLauncherBridgeScope>
+    <LauncherErrorBoundary launcher={instance.launcher}>
+      <PluginLauncherBridgeScope pluginId={instance.launcher.pluginId} hostContext={hostContext}>
+        {node}
+      </PluginLauncherBridgeScope>
+    </LauncherErrorBoundary>
   );
 }
 
@@ -536,12 +581,14 @@ function LauncherModalShell({
 
 export function PluginLauncherProvider({ children }: { children: ReactNode }) {
   const [stack, setStack] = useState<LauncherInstance[]>([]);
+  const stackRef = useRef(stack);
+  stackRef.current = stack;
   const location = useLocation();
   const navigate = useNavigate();
 
   const closeLauncher = useCallback(
     async (key: string, event: PluginRenderCloseEvent) => {
-      const instance = stack.find((entry) => entry.key === key);
+      const instance = stackRef.current.find((entry) => entry.key === key);
       if (!instance) return;
 
       for (const handler of [...instance.beforeCloseHandlers]) {
@@ -559,7 +606,7 @@ export function PluginLauncherProvider({ children }: { children: ReactNode }) {
         }
       });
     },
-    [stack],
+    [],
   );
 
   useEffect(() => {

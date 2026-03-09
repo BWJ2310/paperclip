@@ -174,7 +174,7 @@ export interface PluginRecord {
   installOrder: number | null;
   /** Resolved package path for local-path installs; used to find worker entrypoint. */
   packagePath: string | null;
-  /** Most recent error message, or `"disabled_by_operator"` sentinel. */
+  /** Most recent error message, or operator-provided disable reason. */
   lastError: string | null;
   /** Timestamp when the plugin was first installed. */
   installedAt: Date;

@@ -202,20 +202,16 @@ export function PluginManager() {
                   variant={
                     plugin.status === "ready"
                       ? "default"
-                      : plugin.status === "error" && plugin.lastError?.startsWith("disabled_by_operator")
-                        ? "secondary"
-                        : plugin.status === "error"
-                          ? "destructive"
-                          : "secondary"
+                      : plugin.status === "error"
+                        ? "destructive"
+                        : "secondary"
                   }
                   className={cn(
                     "shrink-0",
                     plugin.status === "ready" ? "bg-green-600 hover:bg-green-700" : ""
                   )}
                 >
-                  {plugin.status === "error" && plugin.lastError?.startsWith("disabled_by_operator")
-                    ? "disabled"
-                    : plugin.status}
+                  {plugin.status}
                 </Badge>
                 <div className="flex items-center gap-2 shrink-0">
                   <Button

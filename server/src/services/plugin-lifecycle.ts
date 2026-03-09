@@ -5,8 +5,9 @@
  * Each plugin moves through a well-defined state machine:
  *
  * ```
- *   installed ──→ ready ──→ error
+ *   installed ──→ ready ──→ disabled
  *       │            │         │
+ *       │            ├──→ error│
  *       │            ↓         │
  *       │     upgrade_pending  │
  *       │            │         │
@@ -58,11 +59,15 @@ import { logger } from "../middleware/logger.js";
  *   installed → error       (initial load fails)
  *   installed → uninstalled (abort installation)
  *
- *   ready → error           (runtime failure or operator disable*)
+ *   ready → disabled        (operator disables plugin)
+ *   ready → error           (runtime failure)
  *   ready → upgrade_pending (upgrade with new capabilities)
  *   ready → uninstalled     (uninstall)
  *
- *   error → ready           (retry / recovery / operator re-enable)
+ *   disabled → ready        (operator re-enables plugin)
+ *   disabled → uninstalled  (uninstall while disabled)
+ *
+ *   error → ready           (retry / recovery)
  *   error → uninstalled     (give up and uninstall)
  *
  *   upgrade_pending → ready       (operator approves new capabilities)
@@ -70,14 +75,11 @@ import { logger } from "../middleware/logger.js";
  *   upgrade_pending → uninstalled (reject upgrade and uninstall)
  *
  *   uninstalled → installed (reinstall)
- *
- * (*) Operator disable is modeled as ready → error with a
- *     "disabled_by_operator" sentinel in lastError. Use
- *     isDisabledByOperator() to distinguish from genuine errors.
  */
 const VALID_TRANSITIONS: Record<string, readonly PluginStatus[]> = {
   installed: ["ready", "error", "uninstalled"],
-  ready: ["ready", "error", "upgrade_pending", "uninstalled"],
+  ready: ["ready", "disabled", "error", "upgrade_pending", "uninstalled"],
+  disabled: ["ready", "uninstalled"],
   error: ["ready", "uninstalled"],
   upgrade_pending: ["ready", "error", "uninstalled"],
   uninstalled: ["installed"], // reinstall
@@ -104,7 +106,7 @@ export interface PluginLifecycleEvents {
   "plugin.loaded": { pluginId: string; pluginKey: string };
   /** Emitted after a plugin transitions to ready (enabled). */
   "plugin.enabled": { pluginId: string; pluginKey: string };
-  /** Emitted after a plugin is disabled (ready → error or explicit disable). */
+  /** Emitted after a plugin is disabled (ready → disabled). */
   "plugin.disabled": { pluginId: string; pluginKey: string; reason?: string };
   /** Emitted after a plugin is unloaded (any → uninstalled). */
   "plugin.unloaded": { pluginId: string; pluginKey: string; removeData: boolean };
@@ -143,19 +145,14 @@ export interface PluginLifecycleManager {
   load(pluginId: string): Promise<PluginRecord>;
 
   /**
-   * Enable a plugin that is in `error` or `upgrade_pending` state.
+   * Enable a plugin that is in `disabled`, `error`, or `upgrade_pending` state.
    * Transitions → `ready`.
    */
   enable(pluginId: string): Promise<PluginRecord>;
 
   /**
    * Disable a running plugin.
-   * Transitions `ready` → stores as `error` with a "disabled by operator" reason.
-   *
-   * Note: The PLUGIN_STATUSES constant does not include a dedicated "disabled"
-   * status.  We model operator-initiated disable as `error` with a sentinel
-   * lastError value so the existing DB schema is reused.  Future iterations
-   * may add a first-class "disabled" status.
+   * Transitions `ready` → `disabled`.
    */
   disable(pluginId: string, reason?: string): Promise<PluginRecord>;
 
@@ -258,22 +255,6 @@ export interface PluginLifecycleManager {
     event: K,
     listener: (payload: LifecycleEventPayload<K>) => void,
   ): void;
-}
-
-// ---------------------------------------------------------------------------
-// Disabled-by-operator sentinel
-// ---------------------------------------------------------------------------
-
-const DISABLED_BY_OPERATOR_PREFIX = "disabled_by_operator";
-
-function buildDisabledError(reason?: string): string {
-  return reason
-    ? `${DISABLED_BY_OPERATOR_PREFIX}: ${reason}`
-    : DISABLED_BY_OPERATOR_PREFIX;
-}
-
-export function isDisabledByOperator(lastError: string | null): boolean {
-  return lastError?.startsWith(DISABLED_BY_OPERATOR_PREFIX) ?? false;
 }
 
 // ---------------------------------------------------------------------------
@@ -494,11 +475,11 @@ export function pluginLifecycleManager(
     async enable(pluginId: string): Promise<PluginRecord> {
       const plugin = await requirePlugin(pluginId);
 
-      // Only allow enabling from error or upgrade_pending states
-      if (plugin.status !== "error" && plugin.status !== "upgrade_pending") {
+      // Only allow enabling from disabled, error, or upgrade_pending states
+      if (plugin.status !== "disabled" && plugin.status !== "error" && plugin.status !== "upgrade_pending") {
         throw badRequest(
           `Cannot enable plugin in status '${plugin.status}'. ` +
-            `Plugin must be in 'error' or 'upgrade_pending' status to be enabled.`,
+            `Plugin must be in 'disabled', 'error', or 'upgrade_pending' status to be enabled.`,
         );
       }
 
@@ -526,8 +507,7 @@ export function pluginLifecycleManager(
       // Stop the worker before transitioning state
       await stopWorkerIfRunning(pluginId, plugin.pluginKey);
 
-      const errorMsg = buildDisabledError(reason);
-      const result = await transition(pluginId, "error", errorMsg, plugin);
+      const result = await transition(pluginId, "disabled", reason ?? null, plugin);
       emitDomain("plugin.disabled", {
         pluginId,
         pluginKey: result.pluginKey,

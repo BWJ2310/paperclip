@@ -37,17 +37,18 @@ import type {
   PluginUiSlotType,
 } from "@paperclipai/shared";
 import { pluginsApi, type PluginUiContribution } from "@/api/plugins";
+import { authApi } from "@/api/auth";
 import { queryKeys } from "@/lib/queryKeys";
 import { cn } from "@/lib/utils";
 import {
-  setActiveBridgeContext,
-  clearActiveBridgeContext,
+  PluginBridgeContext,
   type PluginHostContext,
 } from "./bridge";
 
 export type PluginSlotContext = {
   companyId?: string | null;
   companyPrefix?: string | null;
+  projectId?: string | null;
   entityId?: string | null;
   entityType?: PluginUiSlotEntityType | null;
   projectRef?: string | null;
@@ -214,7 +215,7 @@ function applyJsxRuntimeKey(
   return { ...(props ?? {}), key };
 }
 
-function getShimBlobUrl(specifier: "react" | "react-dom" | "react/jsx-runtime" | "sdk-ui"): string {
+function getShimBlobUrl(specifier: "react" | "react-dom" | "react-dom/client" | "react/jsx-runtime" | "sdk-ui"): string {
   if (shimBlobUrls[specifier]) return shimBlobUrls[specifier];
 
   let source: string;
@@ -243,6 +244,7 @@ function getShimBlobUrl(specifier: "react" | "react-dom" | "react/jsx-runtime" |
       `;
       break;
     case "react-dom":
+    case "react-dom/client":
       source = `
         const RD = globalThis.__paperclipPluginBridge__?.reactDom;
         export default RD;
@@ -294,6 +296,8 @@ function rewriteBareSpecifiers(source: string): string {
     "'@paperclipai/plugin-sdk/ui/components'": `'${getShimBlobUrl("sdk-ui")}'`,
     '"react/jsx-runtime"': `"${getShimBlobUrl("react/jsx-runtime")}"`,
     "'react/jsx-runtime'": `'${getShimBlobUrl("react/jsx-runtime")}'`,
+    '"react-dom/client"': `"${getShimBlobUrl("react-dom/client")}"`,
+    "'react-dom/client'": `'${getShimBlobUrl("react-dom/client")}'`,
     '"react-dom"': `"${getShimBlobUrl("react-dom")}"`,
     "'react-dom'": `'${getShimBlobUrl("react-dom")}'`,
     '"react"': `"${getShimBlobUrl("react")}"`,
@@ -678,14 +682,15 @@ type PluginSlotMountProps = {
  */
 function slotContextToHostContext(
   pluginSlotContext: PluginSlotContext,
+  userId: string | null,
 ): PluginHostContext {
   return {
     companyId: pluginSlotContext.companyId ?? null,
     companyPrefix: pluginSlotContext.companyPrefix ?? null,
-    projectId: null, // Not available in slot context yet — callers can extend later
+    projectId: pluginSlotContext.projectId ?? (pluginSlotContext.entityType === "project" ? pluginSlotContext.entityId ?? null : null),
     entityId: pluginSlotContext.entityId ?? null,
     entityType: pluginSlotContext.entityType ?? null,
-    userId: null, // Requires auth context — populated by the host wrapper layer
+    userId,
     renderEnvironment: null,
   };
 }
@@ -705,22 +710,19 @@ function PluginBridgeScope({
   context: PluginSlotContext;
   children: ReactNode;
 }) {
-  // Set the bridge context before children render (synchronous).
-  // We use a layout-time ref to ensure it's set before any hook runs.
-  const hostContext = useMemo(() => slotContextToHostContext(context), [context]);
+  const { data: session } = useQuery({
+    queryKey: queryKeys.auth.session,
+    queryFn: () => authApi.getSession(),
+  });
+  const userId = session?.user?.id ?? session?.session?.userId ?? null;
+  const hostContext = useMemo(() => slotContextToHostContext(context, userId), [context, userId]);
+  const value = useMemo(() => ({ pluginId, hostContext }), [pluginId, hostContext]);
 
-  // Set context on each render so hooks capture the correct values.
-  setActiveBridgeContext(pluginId, hostContext);
-
-  // Clean up the context after the render pass. Using useEffect ensures
-  // cleanup happens after the component tree has been committed.
-  useEffect(() => {
-    return () => {
-      clearActiveBridgeContext();
-    };
-  }, []);
-
-  return <>{children}</>;
+  return (
+    <PluginBridgeContext.Provider value={value}>
+      {children}
+    </PluginBridgeContext.Provider>
+  );
 }
 
 export function PluginSlotMount({

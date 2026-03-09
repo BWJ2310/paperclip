@@ -260,6 +260,7 @@ export const PLUGIN_API_VERSION = 1 as const;
 export const PLUGIN_STATUSES = [
   "installed",
   "ready",
+  "disabled",
   "error",
   "upgrade_pending",
   "uninstalled",

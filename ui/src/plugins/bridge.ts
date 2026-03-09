@@ -25,7 +25,7 @@
  * @see PLUGIN_SPEC.md §19.7 — Error Propagation Through The Bridge
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useRef, useState, useEffect } from "react";
 import type {
   PluginBridgeErrorCode,
   PluginLauncherBounds,
@@ -112,60 +112,37 @@ export interface PluginRenderEnvironmentContext {
 }
 
 // ---------------------------------------------------------------------------
-// Bridge context — stores the active pluginId for hook resolution
+// Bridge context — React context for plugin identity and host scope
 // ---------------------------------------------------------------------------
 
-/**
- * Thread-local (module-level) context for the currently rendering plugin.
- *
- * The slot mount sets this before rendering a plugin component and clears it
- * after. The hooks read it to know which plugin's bridge to call.
- *
- * This is simpler than a React context because plugin modules are externalized
- * and can't access the host's React context tree directly.
- */
-let activePluginId: string | null = null;
-let activeHostContext: PluginHostContext = {
-  companyId: null,
-  companyPrefix: null,
-  projectId: null,
-  entityId: null,
-  entityType: null,
-  userId: null,
-  renderEnvironment: null,
+export type PluginBridgeContextValue = {
+  pluginId: string;
+  hostContext: PluginHostContext;
 };
 
 /**
- * Set the active plugin context before rendering a plugin component.
+ * React context that carries the active plugin identity and host scope.
  *
- * This must be called synchronously before the plugin component's render
- * function executes, and cleared afterward.
+ * The slot/launcher mount wraps plugin components in a Provider so that
+ * bridge hooks (`usePluginData`, `usePluginAction`, `useHostContext`) can
+ * resolve the current plugin without ambient mutable globals.
  *
- * @param pluginId - The UUID of the plugin whose component is about to render
- * @param hostContext - The current host context (company, project, entity, user)
+ * Because plugin bundles share the host's React instance (via the bridge
+ * registry on `globalThis.__paperclipPluginBridge__`), context propagation
+ * works correctly across the host/plugin boundary.
  */
-export function setActiveBridgeContext(
-  pluginId: string,
-  hostContext: PluginHostContext,
-): void {
-  activePluginId = pluginId;
-  activeHostContext = hostContext;
-}
+export const PluginBridgeContext =
+  createContext<PluginBridgeContextValue | null>(null);
 
-/**
- * Clear the active plugin context after rendering completes.
- */
-export function clearActiveBridgeContext(): void {
-  activePluginId = null;
-  activeHostContext = {
-    companyId: null,
-    companyPrefix: null,
-    projectId: null,
-    entityId: null,
-    entityType: null,
-    userId: null,
-    renderEnvironment: null,
-  };
+function usePluginBridgeContext(): PluginBridgeContextValue {
+  const ctx = useContext(PluginBridgeContext);
+  if (!ctx) {
+    throw new Error(
+      "Plugin bridge hook called outside of a <PluginBridgeContext.Provider>. " +
+        "Ensure the plugin component is rendered within a PluginBridgeScope.",
+    );
+  }
+  return ctx;
 }
 
 // ---------------------------------------------------------------------------
@@ -232,27 +209,6 @@ function serializeRenderEnvironment(
   };
 }
 
-type CapturedBridgeScope = {
-  pluginId: string | null;
-  companyId: string | null;
-  renderEnvironment: PluginLauncherRenderContextSnapshot | null;
-};
-
-function captureBridgeScope(
-  scopeRef: { current: CapturedBridgeScope },
-): CapturedBridgeScope {
-  if (!scopeRef.current.pluginId && activePluginId) {
-    scopeRef.current.pluginId = activePluginId;
-  }
-
-  if (activePluginId && activePluginId === scopeRef.current.pluginId) {
-    scopeRef.current.companyId = activeHostContext.companyId;
-    scopeRef.current.renderEnvironment = serializeRenderEnvironment(activeHostContext.renderEnvironment);
-  }
-
-  return scopeRef.current;
-}
-
 function serializeRenderEnvironmentSnapshot(
   snapshot: PluginLauncherRenderContextSnapshot | null,
 ): string {
@@ -272,15 +228,9 @@ export function usePluginData<T = unknown>(
   key: string,
   params?: Record<string, unknown>,
 ): PluginDataResult<T> {
-  const scopeRef = useRef<CapturedBridgeScope>({
-    pluginId: activePluginId,
-    companyId: activeHostContext.companyId,
-    renderEnvironment: serializeRenderEnvironment(activeHostContext.renderEnvironment),
-  });
-  const scope = captureBridgeScope(scopeRef);
-  const pluginId = scope.pluginId;
-  const companyId = scope.companyId;
-  const renderEnvironmentSnapshot = scope.renderEnvironment;
+  const { pluginId, hostContext } = usePluginBridgeContext();
+  const companyId = hostContext.companyId;
+  const renderEnvironmentSnapshot = serializeRenderEnvironment(hostContext.renderEnvironment);
   const renderEnvironmentKey = serializeRenderEnvironmentSnapshot(renderEnvironmentSnapshot);
 
   const [data, setData] = useState<T | null>(null);
@@ -292,15 +242,6 @@ export function usePluginData<T = unknown>(
   const paramsKey = serializeParams(params);
 
   useEffect(() => {
-    if (!pluginId) {
-      setError({
-        code: "UNKNOWN",
-        message: "usePluginData called outside of a plugin component context",
-      });
-      setLoading(false);
-      return;
-    }
-
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let retryCount = 0;
@@ -376,27 +317,15 @@ export type PluginActionFn = (params?: Record<string, unknown>) => Promise<unkno
  * On failure, the function throws a `PluginBridgeError`.
  */
 export function usePluginAction(key: string): PluginActionFn {
-  const scopeRef = useRef<CapturedBridgeScope>({
-    pluginId: activePluginId,
-    companyId: activeHostContext.companyId,
-    renderEnvironment: serializeRenderEnvironment(activeHostContext.renderEnvironment),
-  });
-  captureBridgeScope(scopeRef);
+  const bridgeContext = usePluginBridgeContext();
+  const contextRef = useRef(bridgeContext);
+  contextRef.current = bridgeContext;
 
   return useCallback(
     async (params?: Record<string, unknown>): Promise<unknown> => {
-      const {
-        pluginId,
-        companyId,
-        renderEnvironment,
-      } = scopeRef.current;
-      if (!pluginId) {
-        const err: PluginBridgeError = {
-          code: "UNKNOWN",
-          message: "usePluginAction called outside of a plugin component context",
-        };
-        throw err;
-      }
+      const { pluginId, hostContext } = contextRef.current;
+      const companyId = hostContext.companyId;
+      const renderEnvironment = serializeRenderEnvironment(hostContext.renderEnvironment);
 
       try {
         const response = await pluginsApi.bridgePerformAction(
@@ -422,39 +351,10 @@ export function usePluginAction(key: string): PluginActionFn {
 /**
  * Concrete implementation of `useHostContext()`.
  *
- * Returns the current host context (company, project, entity, user) that
- * was set by the slot mount via `setActiveBridgeContext()`.
+ * Returns the current host context (company, project, entity, user)
+ * from the enclosing `PluginBridgeContext.Provider`.
  */
 export function useHostContext(): PluginHostContext {
-  const pluginIdRef = useRef(activePluginId);
-  if (!pluginIdRef.current && activePluginId) {
-    pluginIdRef.current = activePluginId;
-  }
-
-  const hostContextRef = useRef(activeHostContext);
-  if (activePluginId && activePluginId === pluginIdRef.current) {
-    hostContextRef.current = activeHostContext;
-  }
-
-  return hostContextRef.current;
-}
-
-// ---------------------------------------------------------------------------
-// Test helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Reset all bridge state. Only use in tests.
- * @internal
- */
-export function _resetBridgeState(): void {
-  activePluginId = null;
-  activeHostContext = {
-    companyId: null,
-    companyPrefix: null,
-    projectId: null,
-    entityId: null,
-    entityType: null,
-    userId: null,
-  };
+  const { hostContext } = usePluginBridgeContext();
+  return hostContext;
 }

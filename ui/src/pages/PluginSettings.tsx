@@ -127,18 +127,13 @@ export function PluginSettings() {
     return <div className="p-4 text-sm text-destructive">Plugin not found.</div>;
   }
 
-  // When disabled by operator, backend uses status "error" + lastError "disabled_by_operator"
-  const isDisabledByOperator =
-    plugin.status === "error" && plugin.lastError?.startsWith("disabled_by_operator");
-  const displayStatus = isDisabledByOperator ? "disabled" : plugin.status;
+  const displayStatus = plugin.status;
   const statusVariant =
     plugin.status === "ready"
       ? "default"
-      : isDisabledByOperator
-        ? "secondary"
-        : plugin.status === "error"
-          ? "destructive"
-          : "secondary";
+      : plugin.status === "error"
+        ? "destructive"
+        : "secondary";
 
   return (
     <div className="space-y-6 max-w-5xl">
