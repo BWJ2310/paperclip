@@ -120,7 +120,9 @@ export interface PaperclipPluginManifestV1 {
   author: string;
   /** One or more categories classifying this plugin. */
   categories: PluginCategory[];
-  /** Minimum Paperclip host version required (semver). */
+  /** Minimum host version required (semver lower bound). Preferred field for new manifests. */
+  minimumHostVersion?: string;
+  /** Legacy alias for `minimumHostVersion`. Kept for backwards compatibility. If both are provided they must match. */
   minimumPaperclipVersion?: string;
   /** Capabilities this plugin requires from the host. Enforced at runtime. */
   capabilities: PluginCapability[];
@@ -139,9 +141,17 @@ export interface PaperclipPluginManifestV1 {
   webhooks?: PluginWebhookDeclaration[];
   /** Agent tools this plugin contributes. Requires `agent.tools.register` capability. */
   tools?: PluginToolDeclaration[];
-  /** UI extension slots this plugin fills. Requires `entrypoints.ui`. */
+  /**
+   * Legacy top-level launcher declarations.
+   * Prefer `ui.launchers` for new manifests.
+   */
+  launchers?: PluginLauncherDeclaration[];
+  /** UI bundle declarations. Requires `entrypoints.ui` when populated. */
   ui?: {
-    slots: PluginUiSlotDeclaration[];
+    /** UI extension slots this plugin fills. */
+    slots?: PluginUiSlotDeclaration[];
+    /** Declarative launcher metadata for host-mounted plugin entry points. */
+    launchers?: PluginLauncherDeclaration[];
   };
 }
 

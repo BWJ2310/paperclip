@@ -148,7 +148,7 @@ function ActorIdentity({ evt, agentMap }: { evt: ActivityEvent; agentMap: Map<st
 
 export function IssueDetail() {
   const { issueId } = useParams<{ issueId: string }>();
-  const { selectedCompanyId } = useCompany();
+  const { selectedCompanyId, companies } = useCompany();
   const { openPanel, closePanel, panelVisible, setPanelVisible } = usePanel();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
@@ -313,6 +313,10 @@ export function IssueDetail() {
   }, [agents, currentUserId]);
 
   const slotCompanyId = issue?.companyId ?? null;
+  const slotCompanyPrefix = useMemo(
+    () => (slotCompanyId ? companies.find((c) => c.id === slotCompanyId)?.issuePrefix ?? null : null),
+    [companies, slotCompanyId],
+  );
 
   const { slots: taskDetailSlots, errorMessage: taskDetailSlotsError } = usePluginSlots({
     slotTypes: ["taskDetailView", "detailTab"],
@@ -326,6 +330,28 @@ export function IssueDetail() {
     companyId: slotCompanyId,
     enabled: !!slotCompanyId,
   });
+  const { slots: commentAnnotationSlots, errorMessage: commentAnnotationSlotsError } = usePluginSlots({
+    slotTypes: ["commentAnnotation"],
+    entityType: "comment",
+    companyId: slotCompanyId,
+    enabled: !!slotCompanyId,
+  });
+  const { slots: commentContextMenuSlots, errorMessage: commentContextMenuSlotsError } = usePluginSlots({
+    slotTypes: ["commentContextMenuItem"],
+    entityType: "comment",
+    companyId: slotCompanyId,
+    enabled: !!slotCompanyId,
+  });
+  const {
+    launchers: commentContextMenuLaunchers,
+    contributionsByPluginId: commentLauncherContributions,
+    errorMessage: commentContextLauncherError,
+  } = usePluginLaunchers({
+    placementZones: ["commentContextMenuItem"],
+    entityType: "comment",
+    companyId: slotCompanyId,
+    enabled: !!slotCompanyId,
+  });
   const {
     launchers: issueContextLaunchers,
     contributionsByPluginId: issueLauncherContributions,
@@ -336,7 +362,7 @@ export function IssueDetail() {
     companyId: slotCompanyId,
     enabled: !!slotCompanyId,
   });
-  const pluginSlotError = taskDetailSlotsError ?? contextMenuSlotsError ?? contextLauncherError;
+  const pluginSlotError = taskDetailSlotsError ?? contextMenuSlotsError ?? commentAnnotationSlotsError ?? commentContextMenuSlotsError ?? contextLauncherError ?? commentContextLauncherError;
 
   const currentAssigneeValue = useMemo(() => {
     if (issue?.assigneeAgentId) return `agent:${issue.assigneeAgentId}`;
@@ -894,6 +920,14 @@ export function IssueDetail() {
               await uploadAttachment.mutateAsync(file);
             }}
             liveRunSlot={<LiveRunWidget issueId={issueId!} companyId={issue.companyId} />}
+            commentAnnotationSlots={commentAnnotationSlots}
+            commentContextMenuSlots={commentContextMenuSlots}
+            commentContextMenuLaunchers={commentContextMenuLaunchers}
+            commentLauncherContributions={commentLauncherContributions}
+            issueId={issue.id}
+            companyId={issue.companyId}
+            projectId={issue.projectId ?? undefined}
+            companyPrefix={slotCompanyPrefix ?? undefined}
           />
         </TabsContent>
 

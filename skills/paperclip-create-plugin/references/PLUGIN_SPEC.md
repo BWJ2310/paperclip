@@ -25,16 +25,15 @@ The following spec sections are implemented on `feature/plugins`:
 | §17 Scheduled Jobs | Done | `server/src/services/plugin-job-scheduler.ts`, `cron.ts`, `plugin-job-store.ts` |
 | §18 Webhooks | Done | `server/src/routes/plugins.ts` (webhook ingestion route) |
 | §19 UI Extension Model | Done | `ui/src/plugins/slots.tsx`, `bridge.ts`, `bridge-init.ts` |
-| §19.8 Plugin Settings UI | Done | `ui/src/components/JsonSchemaForm.tsx`, `ui/src/pages/PluginSettings.tsx` |
+| §19.8 Real-Time Streaming | Done | `packages/plugins/sdk/src/worker-rpc-host.ts` (ctx.streams), `server/src/services/plugin-stream-bus.ts`, `server/src/routes/plugins.ts` (SSE endpoint), `packages/plugins/sdk/src/ui/hooks.ts` (usePluginStream) |
+| §19.9 Plugin Settings UI | Done | `ui/src/components/JsonSchemaForm.tsx`, `ui/src/pages/PluginSettings.tsx` |
 | §21 Persistence | Done | `packages/db/src/schema/plugins.ts` and related tables |
 | §22 Secrets | Done | `server/src/services/plugin-secrets-handler.ts` |
 | §24 Operator UX | Done | `ui/src/pages/PluginManager.tsx`, `PluginSettings.tsx` |
 
-Not yet implemented:
-- §20 Local Tooling (workspace plugins) — deferred
-- §25.4.5 Frontend Cache Invalidation — cache headers implemented, but no WebSocket push for live invalidation
-- §26 Plugin Observability — structured logging implemented, but no dedicated metrics/tracing export
-- §29 Compatibility / Versioning — single API version (v1) supported; migration tooling deferred
+Partially implemented:
+- §20 Local Tooling — workspace metadata (`ctx.projects.listWorkspaces`, `getPrimaryWorkspace`, `getWorkspaceForIssue`) and dev watcher are implemented; `devUiUrl` proxy is not yet wired
+- §29 Compatibility / Versioning — single API version (v1) supported; multi-version loading and migration tooling deferred
 
 ## 1. Scope
 
@@ -70,8 +69,8 @@ This spec does not cover:
 Paperclip plugin design is based on the following assumptions:
 
 1. Paperclip is single-tenant and self-hosted.
-2. Plugin installation is global to the instance.
-3. "Companies" remain core Paperclip business objects, but they are not plugin trust boundaries.
+2. Plugin installation is global to the instance, but plugin availability and company-specific settings are scoped per company.
+3. "Companies" remain core Paperclip business objects. They are not plugin code-execution trust boundaries, but they are enablement and configuration boundaries for company-context plugin surfaces.
 4. Board governance, approval gates, budget hard-stops, and core task invariants remain owned by Paperclip core.
 5. Projects already have a real workspace model via `project_workspaces`, and local/runtime plugins should build on that instead of inventing a separate workspace abstraction.
 
@@ -80,18 +79,19 @@ Paperclip plugin design is based on the following assumptions:
 The plugin system must:
 
 1. Let operators install global instance-wide plugins.
-2. Let plugins add major capabilities without editing Paperclip core.
-3. Keep core governance and auditing intact.
-4. Support both local/runtime plugins and external SaaS connectors.
-5. Support future plugin categories such as:
+2. Let operators enable or disable an installed plugin independently for each company.
+3. Let plugins add major capabilities without editing Paperclip core.
+4. Keep core governance and auditing intact.
+5. Support both local/runtime plugins and external SaaS connectors.
+6. Support future plugin categories such as:
    - new agent adapters
    - revenue tracking
    - knowledge base
    - issue tracker sync
    - metrics/dashboards
    - file/project tooling
-6. Use simple, explicit, typed contracts.
-7. Keep failures isolated so one plugin does not crash the entire instance.
+7. Use simple, explicit, typed contracts.
+8. Keep failures isolated so one plugin does not crash the entire instance.
 
 ## 4. Non-Goals
 
@@ -216,14 +216,29 @@ Plugins that need local tooling (file browsing, git, terminals, process tracking
 
 Plugin installation is global and operator-driven.
 
-There is no per-company install table and no per-company enable/disable switch.
+There is no per-company install table.
+
+However, availability is company-scoped:
+
+- a plugin is installed once per instance
+- each company independently enables or disables that installed plugin
+- company-specific plugin settings are stored separately from instance-wide plugin config
+- company-context UI, tools, and actions must respect company availability
+
+The host models company availability with default-on behavior plus explicit overrides:
+
+- if no `plugin_company_settings` row exists for `(company_id, plugin_id)`, the plugin is available to that company by default
+- if a row exists with `enabled = true`, the plugin remains available and the row stores company-specific settings
+- if a row exists with `enabled = false`, the plugin is disabled for that company without uninstalling it globally
 
 If a plugin needs business-object-specific mappings, those are stored as plugin configuration or plugin state.
 
 Examples:
 
 - one global Linear plugin install
-- mappings from company A to Linear team X and company B to Linear team Y
+- company A enables it with mapping to Linear team X
+- company B enables it with mapping to Linear team Y
+- company C leaves it disabled and sees no Linear plugin UI or tools
 - one global git plugin install
 - per-project workspace state stored under `project_workspace`
 
@@ -296,7 +311,7 @@ Suggested `package.json` keys:
 
 ```json
 {
-  "name": "@paperclip/plugin-linear",
+  "name": "@acme/plugin-linear",
   "version": "0.1.0",
   "paperclipPlugin": {
     "manifest": "./dist/manifest.js",
@@ -305,6 +320,32 @@ Suggested `package.json` keys:
   }
 }
 ```
+
+### 10.0.1 Launcher Entry Points
+
+Paperclip uses two package-level entry points today:
+
+- `paperclipPlugin.manifest` is the install/discovery entry point. The loader imports this file first so it can validate the manifest before the plugin is persisted or started.
+- `paperclipPlugin.worker` is the runtime launcher entry point. The host starts one worker process per installed plugin and executes this file inside the plugin worker runtime. The worker file must call `runWorker(plugin, import.meta.url)` so that when run as the process entrypoint it starts the JSON-RPC host and keeps the process alive; see §14.1 and the SDK docs.
+
+`paperclipPlugin.ui` and `manifest.entrypoints.ui` are UI bundle roots, not executable launchers. The current host serves `entrypoints.ui/index.js` as the plugin UI entry module and resolves named exports from that module using `ui.slots[].exportName`.
+
+Practical implications:
+
+- A plugin has exactly one worker launcher.
+- A plugin may have zero or one UI bundle root.
+- Multiple UI surfaces (tabs, sidebar items, settings pages, toolbar buttons) are multiplexed through the same UI bundle root rather than separate launcher files.
+- Operators reach plugin UI through host-owned routes and controls, not plugin-owned frontend routers.
+
+Launcher discovery is normalized through `GET /api/plugins/ui-contributions`. The
+response contains:
+
+- `slots` from `manifest.ui.slots`
+- `launchers` from both `manifest.ui.launchers` and the legacy top-level `manifest.launchers`
+- a company-filtered view when the caller supplies `?companyId=<uuid>`
+
+Launcher-backed bridge calls also carry `renderEnvironment` metadata so a worker
+can tell whether it was invoked from a page, modal, drawer, or popover host shell.
 
 ## 10.1 Manifest Shape
 
@@ -320,6 +361,9 @@ export interface PaperclipPluginManifestV1 {
   /** Author name (max 200 chars). May include email: "Jane Doe <jane@example.com>". */
   author: string;
   categories: Array<"connector" | "workspace" | "automation" | "ui">;
+  /** Minimum host version required (semver lower bound). Preferred field for new manifests. */
+  minimumHostVersion?: string;
+  /** Legacy alias for `minimumHostVersion`. Kept for backwards compatibility. If both are provided they must match. */
   minimumPaperclipVersion?: string;
   capabilities: string[];
   entrypoints: {
@@ -335,16 +379,34 @@ export interface PaperclipPluginManifestV1 {
     description: string;
     parametersSchema: JsonSchema;
   }>;
+  /** Legacy top-level launcher declarations. Prefer `ui.launchers` for new manifests. */
+  launchers?: PluginLauncherDeclaration[];
   ui?: {
     slots: Array<{
-      type: "page" | "detailTab" | "dashboardWidget" | "sidebar" | "settingsPage";
+      type:
+        | "page"
+        | "detailTab"
+        | "taskDetailView"
+        | "dashboardWidget"
+        | "sidebar"
+        | "sidebarPanel"
+        | "projectSidebarItem"
+        | "toolbarButton"
+        | "contextMenuItem"
+        | "commentAnnotation"
+        | "commentContextMenuItem"
+        | "settingsPage";
       id: string;
       displayName: string;
       /** Which export name in the UI bundle provides this component */
       exportName: string;
-      /** For detailTab: which entity types this tab appears on */
-      entityTypes?: Array<"project" | "issue" | "agent" | "goal" | "run">;
+      /** For detailTab, taskDetailView, contextMenuItem, projectSidebarItem, commentAnnotation, commentContextMenuItem: which entity types this slot targets */
+      entityTypes?: Array<"project" | "issue" | "agent" | "goal" | "run" | "comment">;
+      /** Optional ordering hint within a slot surface. Lower numbers appear first. */
+      order?: number;
     }>;
+    /** Declarative launcher metadata for host-mounted plugin entry points. */
+    launchers?: PluginLauncherDeclaration[];
   };
 }
 ```
@@ -359,13 +421,16 @@ Rules:
 - `author` is required; max 200 characters; may include email in angle brackets (e.g. `"Jane Doe <jane@example.com>"`)
 - `displayName` must be 1–100 characters
 - `description` must be 1–500 characters
-- `minimumPaperclipVersion`, when provided, must be a valid semver string without a leading `v`
+- `minimumHostVersion` (or the legacy alias `minimumPaperclipVersion`), when provided, must be a valid semver string without a leading `v`. If both fields are present they must be identical.
 - `capabilities` must be static and install-time visible
 - config schema must be JSON Schema compatible
 - `entrypoints.ui` points to the directory containing the built UI bundle
 - `entrypoints.ui` is required when `ui.slots` is declared
+- the current host expects `entrypoints.ui/index.js` to be the importable ESM entry module for all declared UI slots
 - `ui.slots` declares which extension slots the plugin fills, so the host knows what to mount without loading the bundle eagerly; each slot references an `exportName` from the UI bundle
-- declared features (tools, jobs, webhooks, UI slots) must be accompanied by the corresponding capability declaration
+- `ui.launchers` declares launcher metadata for host-mounted entry points (buttons, links, actions). The legacy top-level `launchers` field is also accepted.
+- declared features (tools, jobs, webhooks, UI slots, launchers) must be accompanied by the corresponding capability declaration
+- install must fail if `apiVersion` is unsupported or if `minimumHostVersion` / `minimumPaperclipVersion` is greater than the running Paperclip host version
 
 ## 11. Agent Tools
 
@@ -396,7 +461,7 @@ The worker executes the tool logic and returns a typed result. The host enforces
 
 ### 11.3 Tool Availability
 
-By default, plugin tools are available to all agents. The operator may restrict tool availability per agent or per project through plugin configuration.
+Plugin tools are only available inside companies where the plugin is enabled. Within an enabled company, the operator may further restrict tool availability per agent or per project through plugin configuration.
 
 Plugin tools appear in the agent's tool list alongside core tools but are visually distinguished in the UI as plugin-contributed.
 
@@ -495,6 +560,14 @@ Optional methods:
 - `getData(input)`
 - `performAction(input)`
 - `executeTool(input)`
+
+Worker-to-host notifications (fire-and-forget, no `id`):
+
+- `streams.open` — worker opened a stream channel
+- `streams.emit` — worker pushed an event to a stream channel
+- `streams.close` — worker closed a stream channel
+
+See §19.8 for the full streaming specification.
 
 ### 13.1 `initialize`
 
@@ -622,13 +695,16 @@ Required SDK clients:
 - `ctx.activity`
 - `ctx.state`
 - `ctx.entities`
+- `ctx.companies`
 - `ctx.projects`
 - `ctx.issues`
 - `ctx.agents`
 - `ctx.goals`
 - `ctx.data`
 - `ctx.actions`
+- `ctx.streams`
 - `ctx.tools`
+- `ctx.metrics`
 - `ctx.logger`
 
 `ctx.data` and `ctx.actions` register handlers that the plugin's own UI calls through the host bridge. `ctx.data.register(key, handler)` backs `usePluginData(key)` on the frontend. `ctx.actions.register(key, handler)` backs `usePluginAction(key)`.
@@ -666,14 +742,49 @@ export interface PluginContext {
     upsert(input: PluginEntityUpsert): Promise<void>;
     list(input: PluginEntityQuery): Promise<PluginEntityRecord[]>;
   };
+  companies: {
+    list(): Promise<Company[]>;
+    get(companyId: string): Promise<Company | null>;
+  };
+  agents: {
+    list(companyId?: string, opts?: { status?: string }): Promise<Agent[]>;
+    get(agentId: string, companyId: string): Promise<Agent | null>;
+    pause(agentId: string, companyId: string): Promise<Agent>;
+    resume(agentId: string, companyId: string): Promise<Agent>;
+    invoke(agentId: string, companyId: string, opts: { prompt: string; reason?: string }): Promise<{ runId: string }>;
+    sessions: {
+      create(agentId: string, companyId: string, opts?: { taskKey?: string; reason?: string }): Promise<AgentSession>;
+      list(agentId: string, companyId: string): Promise<AgentSession[]>;
+      sendMessage(sessionId: string, companyId: string, opts: {
+        prompt: string;
+        reason?: string;
+        onEvent?: (event: AgentSessionEvent) => void;
+      }): Promise<{ runId: string }>;
+      close(sessionId: string, companyId: string): Promise<void>;
+    };
+  };
+  goals: {
+    list(companyId?: string, opts?: { level?: string }): Promise<Goal[]>;
+    get(goalId: string, companyId: string): Promise<Goal | null>;
+    create(input: GoalCreateInput): Promise<Goal>;
+    update(goalId: string, patch: Partial<Goal>, companyId: string): Promise<Goal>;
+  };
   data: {
     register(key: string, handler: (params: Record<string, unknown>) => Promise<unknown>): void;
   };
   actions: {
     register(key: string, handler: (params: Record<string, unknown>) => Promise<unknown>): void;
   };
+  streams: {
+    open(channel: string, companyId: string): void;
+    emit(channel: string, event: unknown): void;
+    close(channel: string): void;
+  };
   tools: {
     register(name: string, input: PluginToolDeclaration, fn: (params: unknown, runCtx: ToolRunContext) => Promise<ToolResult>): void;
+  };
+  metrics: {
+    write(name: string, value: number, tags?: Record<string, string>): void;
   };
   logger: {
     info(message: string, meta?: Record<string, unknown>): void;
@@ -709,6 +820,8 @@ The host enforces capabilities in the SDK layer and refuses calls outside the gr
 - `issue.comments.read`
 - `agents.read`
 - `goals.read`
+- `goals.create`
+- `goals.update`
 - `activity.read`
 - `costs.read`
 
@@ -721,6 +834,16 @@ The host enforces capabilities in the SDK layer and refuses calls outside the gr
 - `assets.read`
 - `activity.log.write`
 - `metrics.write`
+
+### Agent Control
+
+- `agents.pause`
+- `agents.resume`
+- `agents.invoke`
+- `agent.sessions.create`
+- `agent.sessions.list`
+- `agent.sessions.send`
+- `agent.sessions.close`
 
 ### Plugin State
 
@@ -742,12 +865,13 @@ The host enforces capabilities in the SDK layer and refuses calls outside the gr
 
 ### UI
 
-- `instance.settings.register`
-- `ui.sidebar.register`
-- `ui.page.register`
-- `ui.detailTab.register`
-- `ui.dashboardWidget.register`
-- `ui.action.register`
+- `instance.settings.register` — settings page slot
+- `ui.sidebar.register` — sidebar, sidebarPanel, and projectSidebarItem slots
+- `ui.page.register` — page slot
+- `ui.detailTab.register` — detailTab and taskDetailView slots
+- `ui.dashboardWidget.register` — dashboardWidget slot
+- `ui.commentAnnotation.register` — commentAnnotation slot
+- `ui.action.register` — toolbarButton, contextMenuItem, and commentContextMenuItem slots
 
 ## 15.2 Forbidden Capabilities
 
@@ -766,6 +890,55 @@ If a plugin upgrade adds capabilities:
 1. the host must mark the plugin `upgrade_pending`
 2. the operator must explicitly approve the new capability set
 3. the new version does not become `ready` until approval completes
+
+## 15.4 Agent Operations & Sessions
+
+Plugins with the appropriate capabilities can control agents and hold conversational sessions with them.
+
+### Agent Control Operations
+
+| Capability | SDK Method | Description |
+|---|---|---|
+| `agents.read` | `ctx.agents.list()`, `ctx.agents.get()` | List/read agent metadata |
+| `agents.pause` | `ctx.agents.pause()` | Pause an active agent |
+| `agents.resume` | `ctx.agents.resume()` | Resume a paused agent |
+| `agents.invoke` | `ctx.agents.invoke()` | Fire-and-forget one-shot invocation |
+
+### Agent Session Lifecycle
+
+Sessions enable two-way conversational interaction with agents. A session maps to an `AgentTaskSession` row with a plugin-scoped task key for isolation.
+
+| Capability | SDK Method | Description |
+|---|---|---|
+| `agent.sessions.create` | `ctx.agents.sessions.create()` | Create a new session (does not send a prompt) |
+| `agent.sessions.list` | `ctx.agents.sessions.list()` | List active sessions for an agent |
+| `agent.sessions.send` | `ctx.agents.sessions.sendMessage()` | Send a message and receive streaming events |
+| `agent.sessions.close` | `ctx.agents.sessions.close()` | Close a session and release resources |
+
+**Session flow:**
+
+1. `sessions.create(agentId, companyId)` — creates the session. The agent's system prompt is inherent to the agent itself (stored in `adapterConfig`), not sent by the plugin.
+2. `sessions.sendMessage(sessionId, companyId, { prompt, onEvent })` — sends a user message. The host triggers a heartbeat run with the prompt in the payload. Streaming events are delivered to the `onEvent` callback via JSON-RPC notifications.
+3. Subsequent `sendMessage` calls reuse the same session, preserving conversation history through the adapter's session state.
+4. `sessions.close(sessionId, companyId)` — cleans up the task session row.
+
+**Streaming events** are delivered as `AgentSessionEvent` objects:
+
+```ts
+interface AgentSessionEvent {
+  sessionId: string;
+  runId: string;
+  seq: number;
+  eventType: "chunk" | "status" | "done" | "error";
+  stream: "stdout" | "stderr" | "system" | null;
+  message: string | null;
+  payload: Record<string, unknown> | null;
+}
+```
+
+The host subscribes to the company's live event stream, filters for the session's run, and forwards events as `agents.sessions.event` JSON-RPC notifications to the plugin worker. The `onEvent` callback in the SDK dispatches these to the plugin code.
+
+**Session isolation:** Each plugin's sessions are scoped by a task key prefix `plugin:<pluginKey>:session:<uuid>`. The host uses `wakeSource: "automation"` and `wakeTriggerDetail: "system"` to prevent the adapter from resetting session state between messages.
 
 ## 16. Event System
 
@@ -885,7 +1058,7 @@ A plugin's `dist/ui/` directory contains a built React bundle. The host serves t
 
 **The host provides, the plugin renders:**
 
-1. The host defines **extension slots** — designated mount points in the UI where plugin components can appear (pages, tabs, widgets, sidebar entries, action bars).
+1. The host defines **extension slots** — designated mount points in the UI where plugin components can appear (pages, tabs, widgets, sidebar entries, sidebar link under each project (project sidebar item), action bars).
 2. The plugin's UI bundle exports named components for each slot it wants to fill.
 3. The host mounts the plugin component into the slot, passing it a **host bridge** object.
 4. The plugin component uses the bridge to fetch data from its own worker (via `getData`), call actions (via `performAction`), read host context (current company, project, entity), and use shared host UI primitives (design tokens, common components).
@@ -940,7 +1113,7 @@ export function DashboardWidget({ context }: PluginWidgetProps) {
 
 The SDK includes a `ui` subpath export that plugin frontends import. This subpath provides:
 
-- **Bridge hooks**: `usePluginData(key, params)`, `usePluginAction(key)`, `useHostContext()`
+- **Bridge hooks**: `usePluginData(key, params)`, `usePluginAction(key)`, `usePluginStream(channel, options)`, `useHostContext()`
 - **Design tokens**: colors, spacing, typography, shadows matching the host theme
 - **Shared components**: `MetricCard`, `StatusBadge`, `DataTable`, `LogView`, `ActionBar`, `Spinner`, etc.
 - **Type definitions**: `PluginPageProps`, `PluginWidgetProps`, `PluginDetailTabProps`
@@ -972,6 +1145,36 @@ When the host renders an extension slot, it dynamically imports the plugin's UI 
 
 In development, the host may support a `devUiUrl` override in plugin config that points to a local dev server (e.g. Vite) so plugin authors can use hot-reload during development without rebuilding.
 
+### 19.0.4 Current UI Support Matrix
+
+The manifest schema recognizes more slot types than the host currently mounts. Authors should treat the following matrix as the V1 contract for this branch.
+
+| Slot Type | Current Host Support | Current Mount Point | Typical Launcher / Navigation Path | Required Capability |
+|---|---|---|---|---|
+| `settingsPage` | Supported | Instance plugin detail page | `/settings/plugins/:pluginId` | `instance.settings.register` |
+| `sidebar` | Supported | Main sidebar navigation area | Always-visible host sidebar | `ui.sidebar.register` |
+| `sidebarPanel` | Supported | Main sidebar panel area | Always-visible host sidebar | `ui.sidebar.register` |
+| `projectSidebarItem` | Supported | Under each project row in the sidebar | Click-through to project route or plugin tab | `ui.sidebar.register` |
+| `toolbarButton` | Supported | Breadcrumb/header action area | Current page header | `ui.action.register` |
+| `detailTab` | Supported | Project detail and issue detail | Host tab bar or `?tab=plugin:<pluginKey>:<slotId>` | `ui.detailTab.register` |
+| `taskDetailView` | Supported | Project detail and issue detail plugin tab surfaces | Host tab bar or `?tab=plugin:<pluginKey>:<slotId>` | `ui.detailTab.register` |
+| `contextMenuItem` | Supported | Issue detail "More" menu | Issue actions popover | `ui.action.register` |
+| `page` | Supported | Company-context page at `/:companyPrefix/plugins/:pluginId` | `/:companyPrefix/plugins/:pluginId` | `ui.page.register` |
+| `dashboardWidget` | Supported | Dashboard (below chart cards) | Dashboard page | `ui.dashboardWidget.register` |
+| `commentAnnotation` | Supported | Below a comment in issue detail | Inline in comment thread | `ui.commentAnnotation.register` |
+| `commentContextMenuItem` | Supported | Comment "More" menu | Comment actions popover | `ui.action.register` |
+
+Entity-type support is narrower than the manifest union:
+
+- `project`: supported for `detailTab`, `taskDetailView`, and `projectSidebarItem`
+- `issue`: supported for `detailTab`, `taskDetailView`, and `contextMenuItem`
+- `agent`: supported for `detailTab` and `taskDetailView` (Agent detail page; plugin tabs via `?tab=plugin:<pluginKey>:<slotId>`)
+- `goal`: supported for `detailTab` and `taskDetailView` (Goal detail page; plugin tabs via `?tab=plugin:<pluginKey>:<slotId>`)
+- `comment`: supported for `commentAnnotation` and `commentContextMenuItem`
+- `run`: accepted in manifest types for forward compatibility, but not mounted by the current UI
+
+When a slot type is "declared in schema, not mounted", install may still succeed, but the operator should expect no visible frontend surface until the host adds a matching mount point.
+
 ## 19.1 Global Operator Routes
 
 - `/settings/plugins`
@@ -983,7 +1186,7 @@ These routes are instance-level.
 
 - `/:companyPrefix/plugins/:pluginId`
 
-These routes exist because the board UI is organized around companies even though plugin installation is global.
+When a plugin declares a `page` slot and is enabled for that company, the host mounts the plugin's page component at this route. These routes exist because the board UI is organized around companies even though plugin installation is global.
 
 ## 19.3 Detail Tabs
 
@@ -999,9 +1202,17 @@ Recommended route pattern:
 
 - `/:companyPrefix/<entity>/:id?tab=<plugin-tab-id>`
 
+Launcher conventions in the current UI:
+
+- Project tabs launch from `/projects/:projectRef?tab=plugin:<pluginKey>:<slotId>`
+- Issue tabs launch from the issue detail tab strip; URL synchronization may vary by page
+- Agent tabs launch from `/agents/:agentId?tab=plugin:<pluginKey>:<slotId>`
+- Goal tabs launch from `/goals/:goalId?tab=plugin:<pluginKey>:<slotId>`
+- `projectSidebarItem` should usually deep-link to a corresponding `detailTab` or `taskDetailView`, not try to create a separate standalone page flow
+
 ## 19.4 Dashboard Widgets
 
-Plugins may add cards or sections to the dashboard.
+Plugins may add cards or sections to the dashboard. The host mounts a dashboard widget outlet on the Dashboard page (below the chart cards); each plugin that declares a `dashboardWidget` slot appears there with card-style layout.
 
 ## 19.5 Sidebar Entries
 
@@ -1009,6 +1220,31 @@ Plugins may add sidebar links to:
 
 - global plugin settings
 - company-context plugin pages
+
+Plugins may also add sidebar links **under each project** via the `projectSidebarItem` slot type; see §19.5.1.
+
+### 19.5.1 Project sidebar items
+
+The `projectSidebarItem` slot type lets a plugin add a menu link under each project in the sidebar Projects list. The host renders one instance per project and passes that project’s id (and company context) in the slot context.
+
+- **Mount point:** Under each project row in the sidebar Projects list.
+- **Context:** The slot is project-entity-scoped. The host passes `entityType: "project"` and `entityId: <project id>` in the context when rendering. The plugin component receives the same bridge and host context as other slots; `context.entityId` is the current project id, `context.entityType` is `"project"`.
+- **Manifest:** In `ui.slots`, use `type: "projectSidebarItem"`. `entityTypes` is **required** and must include `"project"` (only project is meaningful for this slot). The plugin must declare the `ui.sidebar.register` capability.
+- **Recommended behaviour:** The component should render a single link (or compact row) to a plugin page or project tab (e.g. `/:companyPrefix/projects/:projectRef` or `?tab=<plugin-tab-id>`).
+
+### 19.5.2 Modal And Drawer Behavior
+
+V1 does not define a dedicated modal, dialog, or drawer slot type. Plugins are launched from existing host surfaces such as tabs, sidebar items, toolbar buttons, settings pages, and context menus.
+
+Current behavior expectations:
+
+- Plugin components render inline inside the host surface that mounted them.
+- A plugin may open its own modal or drawer from within that surface, but the host does not manage plugin modal lifecycle or routing.
+- Plugin UI must not assume it owns the page-level overlay stack. It may be rendered inside host-managed containers such as tabs, popovers, or pages that themselves can appear in sheets/drawers on mobile.
+- Plugin interactions must not rely on dismissing or mutating the host's parent dialog state except through explicit bridge actions exposed by the host.
+- If a plugin opens overlays, it should ensure keyboard escape handling, focus trapping, and portal/z-index behavior do not interfere with the host shell.
+
+For operator UX, plugins should prefer deep-linkable pages or tabs for primary workflows and reserve plugin-owned modals for short, local interactions such as confirmations, pickers, and compact editors.
 
 ## 19.6 Shared Components In `@paperclipai/plugin-sdk/ui`
 
@@ -1066,7 +1302,96 @@ Error codes:
 
 The `@paperclipai/plugin-sdk/ui` subpath should also export an `ErrorBoundary` component that plugin authors can use to catch rendering errors without crashing the host page.
 
-## 19.8 Plugin Settings UI
+## 19.8 Real-Time Streaming
+
+Plugins can push real-time events from the worker process to the UI using server-sent events (SSE). This enables use cases like streaming LLM tokens, live sync progress, and push-based notifications without polling.
+
+### 19.8.1 Worker-Side API (`ctx.streams`)
+
+The plugin context exposes a `streams` client:
+
+```ts
+interface PluginStreamsClient {
+  /** Open a named stream channel scoped to a company. */
+  open(channel: string, companyId: string): void;
+  /** Push an event to the channel. companyId is resolved from the prior open(). */
+  emit(channel: string, event: unknown): void;
+  /** Close the channel and clear the company mapping. */
+  close(channel: string): void;
+}
+```
+
+Stream operations send fire-and-forget JSON-RPC notifications (no `id` field) to the host via stdout. The worker maintains a per-channel → companyId mapping so that `emit()` and `close()` do not require `companyId` each time.
+
+### 19.8.2 Worker-to-Host Stream Notifications
+
+Three notification methods are defined:
+
+| Notification | Params | Description |
+|-------------|--------|-------------|
+| `streams.open` | `{ channel, companyId }` | Worker opened a new stream channel |
+| `streams.emit` | `{ channel, companyId, event }` | Worker pushed an event to a channel |
+| `streams.close` | `{ channel, companyId }` | Worker closed a stream channel |
+
+These are defined in the protocol as `WorkerToHostNotifications`:
+
+```ts
+interface WorkerToHostNotifications {
+  "streams.emit": { channel: string; companyId: string; event: unknown };
+  "streams.open": { channel: string; companyId: string };
+  "streams.close": { channel: string; companyId: string };
+}
+```
+
+### 19.8.3 Host-Side SSE Bridge
+
+The host exposes an SSE endpoint for UI clients:
+
+```
+GET /api/plugins/:pluginId/bridge/stream/:channel?companyId=<companyId>
+```
+
+**Behavior:**
+
+1. Validates that the plugin exists and the user has access to the specified company
+2. Sets SSE response headers (`Content-Type: text/event-stream`, `Cache-Control: no-cache`)
+3. Subscribes to the in-memory `PluginStreamBus` keyed by `pluginId:channel:companyId`
+4. Writes each event as `data: <JSON>\n\n` (with optional `event:` field for non-message types)
+5. Unsubscribes when the client disconnects
+
+The `PluginStreamBus` is an in-memory pub/sub bus that fans out worker notifications to all connected SSE clients for a given key.
+
+### 19.8.4 UI-Side Hook (`usePluginStream`)
+
+The SDK provides a React hook that opens an EventSource to the SSE endpoint:
+
+```ts
+function usePluginStream<T>(
+  channel: string,
+  options?: { companyId?: string },
+): PluginStreamResult<T>;
+
+interface PluginStreamResult<T> {
+  events: T[];
+  lastEvent: T | null;
+  connecting: boolean;
+  connected: boolean;
+  error: Error | null;
+  close(): void;
+}
+```
+
+The hook accumulates events in arrival order. Call `close()` to terminate the SSE connection.
+
+### 19.8.5 Typical Flow
+
+1. UI calls `usePluginAction("chat")({ prompt, companyId })` to trigger the worker
+2. Worker calls `ctx.streams.open("chat-stream", companyId)` then emits tokens via `ctx.streams.emit("chat-stream", { text })`
+3. Host receives `streams.emit` notifications, publishes to `PluginStreamBus`
+4. UI's `usePluginStream("chat-stream", { companyId })` receives events via SSE in real time
+5. Worker calls `ctx.streams.close("chat-stream")` when done
+
+## 19.9 Plugin Settings UI
 
 Each plugin that declares an `instanceConfigSchema` in its manifest gets an auto-generated settings form at `/settings/plugins/:pluginId`. The host renders the form from the JSON Schema.
 
@@ -1116,11 +1441,12 @@ Examples:
 - `id` uuid pk
 - `plugin_key` text unique not null
 - `package_name` text not null
+- `package_path` text null — resolved package path for local-path installs; used to find the worker entrypoint
 - `version` text not null
 - `api_version` int not null
-- `categories` text[] not null
+- `categories` jsonb not null (default `'[]'`)
 - `manifest_json` jsonb not null
-- `status` enum: `installed | ready | error | upgrade_pending`
+- `status` enum: `installed | ready | disabled | error | upgrade_pending | uninstalled`
 - `install_order` int null
 - `installed_at` timestamptz not null
 - `updated_at` timestamptz not null
@@ -1139,6 +1465,28 @@ Indexes:
 - `created_at` timestamptz not null
 - `updated_at` timestamptz not null
 - `last_error` text null
+
+### `plugin_company_settings`
+
+- `id` uuid pk
+- `company_id` uuid fk `companies.id` not null
+- `plugin_id` uuid fk `plugins.id` not null
+- `enabled` boolean not null default true
+- `settings_json` jsonb not null
+- `created_at` timestamptz not null
+- `updated_at` timestamptz not null
+- `last_error` text null
+
+Constraints:
+
+- unique `(company_id, plugin_id)`
+
+Semantics:
+
+- stores company-scoped plugin settings and availability
+- absence of the row means the plugin is enabled for that company by default
+- a row with `enabled = true` stores company settings while keeping the plugin enabled
+- a row with `enabled = false` explicitly disables the plugin for that company while preserving any company-scoped settings
 
 ### `plugin_state`
 
@@ -1167,70 +1515,70 @@ Examples:
 
 - `id` uuid pk
 - `plugin_id` uuid fk `plugins.id` not null
-- `scope_kind` enum nullable
-- `scope_id` uuid/text null
 - `job_key` text not null
-- `schedule` text null
-- `status` enum: `idle | queued | running | error`
+- `schedule` text not null
+- `status` enum: `active | paused | error` (default `active`)
+- `last_run_at` timestamptz null
 - `next_run_at` timestamptz null
-- `last_started_at` timestamptz null
-- `last_finished_at` timestamptz null
-- `last_succeeded_at` timestamptz null
-- `last_error` text null
+- `created_at` timestamptz not null
+- `updated_at` timestamptz not null
 
 Constraints:
 
-- unique `(plugin_id, scope_kind, scope_id, job_key)`
+- unique `(plugin_id, job_key)`
 
 ### `plugin_job_runs`
 
 - `id` uuid pk
-- `plugin_job_id` uuid fk `plugin_jobs.id` not null
+- `job_id` uuid fk `plugin_jobs.id` not null
 - `plugin_id` uuid fk `plugins.id` not null
-- `status` enum: `queued | running | succeeded | failed | cancelled`
-- `trigger` enum: `schedule | manual | retry`
+- `trigger` text not null — `schedule | manual | retry`
+- `status` text not null (default `pending`) — `pending | running | succeeded | failed | cancelled`
+- `duration_ms` int null
+- `error` text null
+- `logs` jsonb not null (default `'[]'`)
 - `started_at` timestamptz null
 - `finished_at` timestamptz null
-- `error` text null
-- `details_json` jsonb null
+- `created_at` timestamptz not null
 
 Indexes:
 
-- `(plugin_id, started_at desc)`
-- `(plugin_job_id, started_at desc)`
+- `(job_id)`
+- `(plugin_id)`
+- `(status)`
 
 ### `plugin_webhook_deliveries`
 
 - `id` uuid pk
 - `plugin_id` uuid fk `plugins.id` not null
-- `scope_kind` enum nullable
-- `scope_id` uuid/text null
-- `endpoint_key` text not null
-- `status` enum: `received | processed | failed | ignored`
-- `request_id` text null
-- `headers_json` jsonb null
-- `body_json` jsonb null
-- `received_at` timestamptz not null
-- `handled_at` timestamptz null
-- `response_code` int null
+- `webhook_key` text not null
+- `external_id` text null
+- `status` text not null (default `pending`)
+- `duration_ms` int null
 - `error` text null
+- `payload` jsonb not null
+- `headers` jsonb not null (default `'{}'`)
+- `started_at` timestamptz null
+- `finished_at` timestamptz null
+- `created_at` timestamptz not null
 
 Indexes:
 
-- `(plugin_id, received_at desc)`
-- `(plugin_id, endpoint_key, received_at desc)`
+- `(plugin_id)`
+- `(status)`
+- `(webhook_key)`
 
 ### `plugin_entities` (optional but recommended)
 
 - `id` uuid pk
 - `plugin_id` uuid fk `plugins.id` not null
 - `entity_type` text not null
-- `scope_kind` enum not null
-- `scope_id` uuid/text null
+- `scope_kind` text not null
+- `scope_id` text null
 - `external_id` text null
 - `title` text null
 - `status` text null
-- `data_json` jsonb not null
+- `data` jsonb not null (default `'{}'`)
 - `created_at` timestamptz not null
 - `updated_at` timestamptz not null
 
@@ -1245,6 +1593,22 @@ Use cases:
 - imported GitHub issues
 - plugin-owned process records
 - plugin-owned external metric bindings
+
+### `plugin_logs`
+
+- `id` uuid pk (default `gen_random_uuid()`)
+- `plugin_id` uuid fk `plugins.id` not null
+- `level` text not null (default `'info'`) — `info | warn | error | debug`
+- `message` text not null
+- `meta` jsonb null
+- `created_at` timestamptz not null (default `now()`)
+
+Indexes:
+
+- `(plugin_id, created_at)`
+- `(level)`
+
+Captures structured log output from plugin workers. Surfaced in the plugin health dashboard and the operator logs view at `/settings/plugins/:pluginId`.
 
 ## 21.4 Activity Log Changes
 
@@ -1308,7 +1672,35 @@ Global plugin settings page must show:
 - current errors
 - install/upgrade/remove actions
 
-## 24.2 Plugin Settings Page
+This page manages instance-wide lifecycle only:
+
+- install
+- uninstall
+- upgrade
+- global worker/runtime health
+- instance-wide config from `instanceConfigSchema`
+
+It does not control whether a plugin is available inside a specific company.
+
+## 24.2 Company Settings
+
+Company settings must show the installed plugin list for the currently selected company with:
+
+- enabled/disabled state for each installed plugin
+- company-scoped settings when the plugin is enabled for that company
+- company-scoped validation or availability errors
+
+Route:
+
+- `/company/settings`
+
+Behavior:
+
+- enabling a plugin for the selected company creates or updates `plugin_company_settings`
+- disabling a plugin for the selected company persists `plugin_company_settings.enabled = false`
+- company-scoped plugin UI surfaces and tool discovery use this availability state
+
+## 24.3 Plugin Settings Page
 
 Each plugin may expose:
 
@@ -1322,13 +1714,14 @@ Route:
 
 - `/settings/plugins/:pluginId`
 
-## 24.3 Company-Context Plugin Page
+## 24.4 Company-Context Plugin Page
 
 Each plugin may expose a company-context main page:
 
 - `/:companyPrefix/plugins/:pluginId`
 
 This page is where board users do most day-to-day work.
+The route must only be reachable when the plugin is enabled for that company.
 
 ## 25. Uninstall And Data Lifecycle
 
@@ -1338,10 +1731,10 @@ When a plugin is uninstalled, the host must handle plugin-owned data explicitly.
 
 1. The host sends `shutdown()` to the worker and follows the graceful shutdown policy.
 2. The host marks the plugin status `uninstalled` in the `plugins` table (soft delete).
-3. Plugin-owned data (`plugin_state`, `plugin_entities`, `plugin_jobs`, `plugin_job_runs`, `plugin_webhook_deliveries`, `plugin_config`) is retained for a configurable grace period (default: 30 days).
+3. Plugin-owned data (`plugin_state`, `plugin_entities`, `plugin_jobs`, `plugin_job_runs`, `plugin_webhook_deliveries`, `plugin_config`, `plugin_company_settings`) is retained for a configurable grace period (default: 30 days).
 4. During the grace period, the operator can reinstall the same plugin and recover its state.
 5. After the grace period, the host purges all plugin-owned data for the uninstalled plugin.
-6. The operator may force-purge immediately via CLI: `pnpm paperclipai plugin purge <plugin-id>`.
+6. The operator may force-purge immediately via CLI: `pnpm paperclipai plugin uninstall <plugin-id> --purge`.
 
 ### 25.2 Upgrade Data Considerations
 
@@ -1464,9 +1857,9 @@ These events can be consumed by other plugins (e.g. a notification plugin) or su
 
 ## 27. Plugin Development And Testing
 
-### 27.1 `@paperclipai/plugin-test-harness`
+### 27.1 `@paperclipai/plugin-sdk/testing`
 
-The host should publish a test harness package that plugin authors use for local development and testing.
+The SDK ships a test harness that plugin authors use for local development and testing.
 
 The test harness provides:
 
@@ -1475,13 +1868,14 @@ The test harness provides:
 - ability to trigger job runs and verify side effects
 - ability to simulate `getData` and `performAction` calls as if coming from the UI bridge
 - ability to simulate `executeTool` calls as if coming from an agent run
+- ability to simulate agent session events via `simulateSessionEvent()`
 - in-memory state and entity stores for assertions
 - configurable capability sets for testing capability denial paths
 
 Example usage:
 
 ```ts
-import { createTestHarness } from "@paperclipai/plugin-test-harness";
+import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
 import manifest from "../dist/manifest.js";
 import { register } from "../dist/worker.js";
 
@@ -1544,6 +1938,13 @@ This spec directly supports the following plugin types:
 4. Plugin upgrades are explicit operator actions.
 5. Capability expansion requires explicit operator approval.
 
+Current branch behavior:
+
+- Only `apiVersion: 1` is accepted.
+- Manifest validation enforces `apiVersion` at parse time.
+- The loader rejects plugins whose `minimumPaperclipVersion` is newer than the running host version.
+- UI bundles are only served while the plugin is in `ready` status, so failed version gates also prevent incompatible UI from mounting.
+
 ### 29.2 SDK Versioning
 
 The host publishes a single SDK package for plugin authors:
@@ -1552,7 +1953,7 @@ The host publishes a single SDK package for plugin authors:
 
 The package uses subpath exports to separate worker and UI concerns:
 
-- `@paperclipai/plugin-sdk` — worker-side SDK (context, events, state, tools, logger, `definePlugin`, `z`)
+- `@paperclipai/plugin-sdk` — worker-side SDK (context, events, state, tools, logger, `definePlugin`, `runWorker`, `z`)
 - `@paperclipai/plugin-sdk/ui` — frontend SDK (bridge hooks, shared components, design tokens)
 
 A single package simplifies dependency management for plugin authors — one dependency, one version, one changelog. The subpath exports keep bundle separation clean: worker code imports from the root, UI code imports from `/ui`. Build tools tree-shake accordingly so the worker bundle does not include React components and the UI bundle does not include worker-only code.
@@ -1561,19 +1962,26 @@ Versioning rules:
 
 1. **Semver**: The SDK follows strict semantic versioning. Major version bumps indicate breaking changes to either the worker or UI surface; minor versions add new features backwards-compatibly; patch versions are bug fixes only.
 2. **Tied to API version**: Each major SDK version corresponds to exactly one plugin `apiVersion`. When `@paperclipai/plugin-sdk@2.x` ships, it targets `apiVersion: 2`. Plugins built with SDK 1.x continue to declare `apiVersion: 1`.
-3. **Host multi-version support**: The host must support at least the current and one previous `apiVersion` simultaneously. This means plugins built against the previous SDK major version continue to work without modification. The host maintains separate IPC protocol handlers for each supported API version.
-4. **Minimum SDK version in manifest**: Plugins declare `sdkVersion` in the manifest as a semver range (e.g. `">=1.4.0 <2.0.0"`). The host validates this at install time and warns if the plugin's declared range is outside the host's supported SDK versions.
-5. **Deprecation timeline**: When a new `apiVersion` ships, the previous version enters a deprecation period of at least 6 months. During this period:
+3. **Current implementation**: this branch does not yet support multi-version loading. The host currently accepts only `apiVersion: 1`, and manifest-level `sdkVersion` negotiation is deferred.
+4. **Future multi-version support**: when a later host release adds `apiVersion: 2+`, the host should support at least the current and one previous `apiVersion` simultaneously. This means plugins built against the previous SDK major version continue to work without modification. The host maintains separate IPC protocol handlers for each supported API version.
+5. **Future SDK range declaration**: once implemented, plugins will declare `sdkVersion` in the manifest as a semver range (e.g. `">=1.4.0 <2.0.0"`). The host will validate this at install time and warn if the plugin's declared range is outside the host's supported SDK versions.
+6. **Deprecation timeline**: When a new `apiVersion` ships, the previous version enters a deprecation period of at least 6 months. During this period:
    - The host continues to load plugins targeting the deprecated version.
    - The host logs a deprecation warning at plugin startup.
    - The plugin settings page shows a banner indicating the plugin should be upgraded.
    - After the deprecation period ends, the host may drop support for the old version in a future release.
-6. **SDK changelog and migration guides**: Each major SDK release must include a migration guide documenting every breaking change, the new API surface, and a step-by-step upgrade path for plugin authors.
-7. **UI surface stability**: Breaking changes to shared UI components (removing a component, changing required props) or design tokens require a major version bump just like worker API changes. The single-package model means both surfaces are versioned together, avoiding drift between worker and UI compatibility.
+7. **SDK changelog and migration guides**: Each major SDK release must include a migration guide documenting every breaking change, the new API surface, and a step-by-step upgrade path for plugin authors.
+8. **UI surface stability**: Breaking changes to shared UI components (removing a component, changing required props) or design tokens require a major version bump just like worker API changes. The single-package model means both surfaces are versioned together, avoiding drift between worker and UI compatibility.
 
 ### 29.3 Version Compatibility Matrix
 
-The host should publish a compatibility matrix:
+Target-state host docs should publish a compatibility matrix. For the current branch, the effective matrix is:
+
+| Host Version | Supported API Versions | Additional Gating |
+|---|---|---|
+| current `feature/plugins` branch | `1` | Rejects unsupported `apiVersion`; rejects `minimumPaperclipVersion` above host version |
+
+Future releases should expand this to:
 
 | Host Version | Supported API Versions | SDK Range |
 |---|---|---|
@@ -1581,7 +1989,7 @@ The host should publish a compatibility matrix:
 | 2.0 | 1, 2 | 1.x, 2.x |
 | 3.0 | 2, 3 | 2.x, 3.x |
 
-This matrix is published in the host docs and queryable via `GET /api/plugins/compatibility`.
+Publishing this matrix via host docs is required. A queryable `GET /api/plugins/compatibility` endpoint is desirable but not yet implemented on this branch.
 
 ### 29.4 Plugin Author Workflow
 
@@ -1589,7 +1997,7 @@ When a new SDK version is released:
 
 1. Plugin author updates `@paperclipai/plugin-sdk` dependency.
 2. Plugin author follows the migration guide to update code.
-3. Plugin author updates `apiVersion` and `sdkVersion` in the manifest.
+3. Plugin author updates `apiVersion` in the manifest and, once supported by the host, adds or updates `sdkVersion`.
 4. Plugin author publishes a new plugin version.
 5. Operators upgrade the plugin on their instances. The old version continues to work until explicitly upgraded.
 

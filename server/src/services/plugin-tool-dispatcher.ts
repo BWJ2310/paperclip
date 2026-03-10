@@ -266,7 +266,7 @@ export function createPluginToolDispatcher(
       return;
     }
 
-    registry.registerPlugin(plugin.pluginKey, manifest);
+    registry.registerPlugin(plugin.pluginKey, manifest, plugin.id);
   }
 
   /**
@@ -278,7 +278,7 @@ export function createPluginToolDispatcher(
       displayName: tool.displayName,
       description: tool.description,
       parametersSchema: tool.parametersSchema,
-      pluginId: tool.pluginId,
+      pluginId: tool.pluginDbId,
     };
   }
 
@@ -330,7 +330,7 @@ export function createPluginToolDispatcher(
         for (const plugin of readyPlugins) {
           const manifest = plugin.manifestJson;
           if (manifest?.tools && manifest.tools.length > 0) {
-            registry.registerPlugin(plugin.pluginKey, manifest);
+            registry.registerPlugin(plugin.pluginKey, manifest, plugin.id);
             totalTools += manifest.tools.length;
           }
         }

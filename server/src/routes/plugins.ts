@@ -677,7 +677,7 @@ export function pluginRoutes(
       return;
     }
 
-    if (!await enforceCompanyPluginAvailability(runContext.companyId, registeredTool.pluginId, res)) {
+    if (!await enforceCompanyPluginAvailability(runContext.companyId, registeredTool.pluginDbId, res)) {
       return;
     }
 
@@ -1346,7 +1346,14 @@ export function pluginRoutes(
       res.status(404).json({ error: "Plugin not found" });
       return;
     }
-    res.json(plugin);
+
+    // Enrich with worker capabilities when available
+    const worker = bridgeDeps?.workerManager.getWorker(plugin.id);
+    const supportsConfigTest = worker
+      ? worker.supportedMethods.includes("validateConfig")
+      : false;
+
+    res.json({ ...plugin, supportsConfigTest });
   });
 
   /**
@@ -1756,12 +1763,12 @@ export function pluginRoutes(
    *
    * Only works when the plugin's worker implements `onValidateConfig`.
    * If the worker does not implement the method, returns
-   * `{ valid: false, message: "..." }` with HTTP 200.
+   * `{ valid: false, supported: false, message: "..." }` with HTTP 200.
    *
    * Request body:
    * - `configJson`: Configuration values to validate
    *
-   * Response: `{ valid: boolean; message?: string }`
+   * Response: `{ valid: boolean; message?: string; supported?: boolean }`
    * Errors:
    * - 400 if request validation fails
    * - 404 if plugin not found
@@ -1838,7 +1845,8 @@ export function pluginRoutes(
       ) {
         res.json({
           valid: false,
-          message: "This plugin does not support connection testing.",
+          supported: false,
+          message: "This plugin does not support configuration testing.",
         });
         return;
       }

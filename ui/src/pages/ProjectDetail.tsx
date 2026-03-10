@@ -43,6 +43,13 @@ function isPluginTab(value: string): boolean {
   return value.startsWith("plugin:");
 }
 
+function buildPluginTabSearch(search: string, tab: string): string {
+  const params = new URLSearchParams(search);
+  params.set("tab", tab);
+  const nextSearch = params.toString();
+  return nextSearch ? `?${nextSearch}` : "";
+}
+
 /* ── Overview tab content ── */
 
 function OverviewContent({
@@ -231,6 +238,10 @@ export function ProjectDetail() {
     if (pathTab) return pathTab;
     return "list";
   }, [tabParam, pathTab]);
+  const pluginTabSearch = useMemo(
+    () => (isPluginTab(activeTab) ? buildPluginTabSearch(location.search, activeTab) : ""),
+    [activeTab, location.search],
+  );
 
   const { data: project, isLoading, error } = useQuery({
     queryKey: [...queryKeys.projects.detail(routeProjectRef), lookupCompanyId ?? null],
@@ -304,7 +315,12 @@ export function ProjectDetail() {
     if (!project) return;
     if (routeProjectRef === canonicalProjectRef && !isPluginTab(activeTab)) return;
     if (isPluginTab(activeTab)) {
-      navigate(`/projects/${canonicalProjectRef}?tab=${encodeURIComponent(activeTab)}`, { replace: true });
+      const isCanonicalPluginLocation =
+        routeProjectRef === canonicalProjectRef
+        && pathTab === null
+        && location.search === pluginTabSearch;
+      if (isCanonicalPluginLocation) return;
+      navigate(`/projects/${canonicalProjectRef}${pluginTabSearch}`, { replace: true });
       return;
     }
     if (activeTab === "overview") {
@@ -324,7 +340,7 @@ export function ProjectDetail() {
       return;
     }
     navigate(`/projects/${canonicalProjectRef}/issues`, { replace: true });
-  }, [project, routeProjectRef, canonicalProjectRef, activeTab, filter, navigate]);
+  }, [project, routeProjectRef, canonicalProjectRef, activeTab, filter, navigate, pathTab, location.search, pluginTabSearch]);
 
   useEffect(() => {
     closePanel();
@@ -391,7 +407,7 @@ export function ProjectDetail() {
     } else if (tab === "list") {
       navigate(`/projects/${canonicalProjectRef}/issues`);
     } else if (isPluginTab(tab)) {
-      navigate(`/projects/${canonicalProjectRef}?tab=${encodeURIComponent(tab)}`);
+      navigate(`/projects/${canonicalProjectRef}${buildPluginTabSearch(location.search, tab)}`);
     }
   };
 

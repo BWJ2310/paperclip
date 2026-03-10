@@ -300,12 +300,21 @@ export const PLUGIN_CAPABILITIES = [
   "issue.comments.read",
   "agents.read",
   "goals.read",
+  "goals.create",
+  "goals.update",
   "activity.read",
   "costs.read",
   // Data Write
   "issues.create",
   "issues.update",
   "issue.comments.create",
+  "agents.pause",
+  "agents.resume",
+  "agents.invoke",
+  "agent.sessions.create",
+  "agent.sessions.list",
+  "agent.sessions.send",
+  "agent.sessions.close",
   "assets.write",
   "assets.read",
   "activity.log.write",
@@ -328,6 +337,7 @@ export const PLUGIN_CAPABILITIES = [
   "ui.page.register",
   "ui.detailTab.register",
   "ui.dashboardWidget.register",
+  "ui.commentAnnotation.register",
   "ui.action.register",
 ] as const;
 export type PluginCapability = (typeof PLUGIN_CAPABILITIES)[number];
@@ -345,14 +355,17 @@ export const PLUGIN_UI_SLOT_TYPES = [
   "dashboardWidget",
   "sidebar",
   "sidebarPanel",
+  "projectSidebarItem",
   "toolbarButton",
   "contextMenuItem",
+  "commentAnnotation",
+  "commentContextMenuItem",
   "settingsPage",
 ] as const;
 export type PluginUiSlotType = (typeof PLUGIN_UI_SLOT_TYPES)[number];
 
 /**
- * Entity types that a `detailTab` UI slot can attach to.
+ * Entity types that context-sensitive UI slots can attach to.
  *
  * @see PLUGIN_SPEC.md §19.3 — Detail Tabs
  */
@@ -362,6 +375,7 @@ export const PLUGIN_UI_SLOT_ENTITY_TYPES = [
   "agent",
   "goal",
   "run",
+  "comment",
 ] as const;
 export type PluginUiSlotEntityType = (typeof PLUGIN_UI_SLOT_ENTITY_TYPES)[number];
 

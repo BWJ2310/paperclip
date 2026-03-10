@@ -787,10 +787,12 @@ export function pluginLoader(
       );
 
       try {
-        // Use execFile (not exec) to avoid shell injection from package name/version
+        // Use execFile (not exec) to avoid shell injection from package name/version.
+        // --ignore-scripts prevents preinstall/install/postinstall hooks from
+        // executing arbitrary code on the host before manifest validation.
         await execFileAsync(
           "npm",
-          ["install", spec, "--prefix", targetInstallDir, "--save"],
+          ["install", spec, "--prefix", targetInstallDir, "--save", "--ignore-scripts"],
           { timeout: 120_000 }, // 2 minute timeout for npm install
         );
       } catch (err) {

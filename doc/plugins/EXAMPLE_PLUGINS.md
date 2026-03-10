@@ -19,9 +19,13 @@ Path: `packages/plugins/examples/plugin-hello-world-example`
 2. `@paperclipai/plugin-file-browser-example`
 Path: `packages/plugins/examples/plugin-file-browser-example`
 
-- Demonstrates a workspace-aware file browser: a project sidebar link ("Files") and a project detail tab with a workspace selector, expandable file tree, and a CodeMirror-based editor with syntax highlighting and save support.
-- API notes: registers two UI slots (`projectSidebarItem`, `detailTab`); the worker exposes `getData` handlers (`workspaces`, `fileList`, `fileContent`) and a `performAction` handler (`writeFile`) for reading/writing files on disk. Includes path-traversal security checks.
-- Required capabilities: `ui.sidebar.register`, `ui.detailTab.register`, `projects.read`, `project.workspaces.read`.
+- Demonstrates a workspace-aware file browser: a project sidebar link ("Files"), a project detail tab with a workspace selector, expandable file tree, and a CodeMirror-based editor with syntax highlighting and save support — plus per-comment file link annotations and a context menu action to open referenced files.
+- API notes: registers four UI slots (`projectSidebarItem`, `detailTab`, `commentAnnotation`, `commentContextMenuItem`); the worker exposes `getData` handlers (`workspaces`, `fileList`, `fileContent`, `comment-file-links`, `plugin-config`) and a `performAction` handler (`writeFile`). Includes path-traversal security checks.
+- **Comment file detection:** The worker extracts file-path-like tokens from comment bodies using regex. Only tokens with a recognisable file extension (e.g. `.ts`, `.md`, `.json`) are matched; bare URL route segments (`/projects/...`, `/settings`) are ignored. Paths may be relative (`src/utils.ts`), dot-prefixed (`./lib/core.ts`), or bare filenames (`README.md`).
+- **Deep-link navigation:** Clicking a detected file link in the comment annotation or context menu navigates to the project Files tab with the file pre-selected via a `?file=` query parameter. The `FilesTab` component listens for `popstate` events so the file selection updates on subsequent in-page navigations.
+- **Conditional ⋮ menu:** The per-comment "more" menu button only appears when at least one plugin slot renders visible content (comments without file references show no menu).
+- An `instanceConfigSchema` setting (`commentAnnotationMode`) lets operators choose which comment extensions are active: `"annotation"`, `"contextMenu"`, `"both"` (default), or `"none"`.
+- Required capabilities: `ui.sidebar.register`, `ui.detailTab.register`, `ui.commentAnnotation.register`, `ui.action.register`, `projects.read`, `project.workspaces.read`, `issue.comments.read`, `plugin.state.read`.
 
 ## Local Install (Dev)
 

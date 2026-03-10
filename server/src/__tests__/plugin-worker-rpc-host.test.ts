@@ -228,7 +228,7 @@ describe("startWorkerRpcHost", () => {
 
       const response = await stdio.initialize();
 
-      expect(response.result).toEqual({ ok: true });
+      expect(response.result).toMatchObject({ ok: true });
       expect(setupFn).toHaveBeenCalledOnce();
     });
 
@@ -263,7 +263,7 @@ describe("startWorkerRpcHost", () => {
 
       // First initialize succeeds
       const res1 = await stdio.initialize();
-      expect(res1.result).toEqual({ ok: true });
+      expect(res1.result).toMatchObject({ ok: true });
 
       // Second initialize fails
       const res2 = await stdio.request(2, "initialize", makeInitializeParams());
@@ -1372,7 +1372,7 @@ describe("runWorker", () => {
     expect(host!.running).toBe(true);
 
     const response = await stdio.initialize();
-    expect(response.result).toEqual({ ok: true });
+    expect(response.result).toMatchObject({ ok: true });
     expect(setupFn).toHaveBeenCalledOnce();
   });
 
@@ -1387,7 +1387,7 @@ describe("runWorker", () => {
     const response = await stdio.initialize({
       manifest: makeManifest({ id: "runWorker.test" }),
     });
-    expect(response.result).toEqual({ ok: true });
+    expect(response.result).toMatchObject({ ok: true });
   });
 });
 

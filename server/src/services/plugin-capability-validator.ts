@@ -108,6 +108,8 @@ const UI_SLOT_CAPABILITIES: Record<PluginUiSlotType, PluginCapability> = {
   dashboardWidget: "ui.dashboardWidget.register",
   toolbarButton: "ui.action.register",
   contextMenuItem: "ui.action.register",
+  commentAnnotation: "ui.commentAnnotation.register",
+  commentContextMenuItem: "ui.action.register",
   settingsPage: "instance.settings.register",
 };
 
@@ -128,6 +130,8 @@ const LAUNCHER_PLACEMENT_CAPABILITIES: Record<
   projectSidebarItem: "ui.sidebar.register",
   toolbarButton: "ui.action.register",
   contextMenuItem: "ui.action.register",
+  commentAnnotation: "ui.commentAnnotation.register",
+  commentContextMenuItem: "ui.action.register",
   settingsPage: "instance.settings.register",
 };
 

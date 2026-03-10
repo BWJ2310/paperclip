@@ -193,13 +193,15 @@ The same set of values is used as **slot types** (where a component mounts) and 
 | `dashboardWidget` | Global | — |
 | `detailTab` | Entity | `project`, `issue`, `agent`, `goal`, `run` |
 | `taskDetailView` | Entity | (task/issue context) |
+| `commentAnnotation` | Entity | `comment` |
+| `commentContextMenuItem` | Entity | `comment` |
 | `projectSidebarItem` | Entity | `project` |
 | `toolbarButton` | Entity | varies by host surface |
 | `contextMenuItem` | Entity | varies by host surface |
 
 **Scope** describes whether the slot requires an entity to render. **Global** slots render without a specific entity but still receive the active `companyId` through `PluginHostContext` — use it to scope data fetches to the current company. **Entity** slots additionally require `entityId` and `entityType` (e.g. a detail tab on a specific issue).
 
-**Entity types** (for `entityTypes` on slots): `project` \| `issue` \| `agent` \| `goal` \| `run`. Full list: import `PLUGIN_UI_SLOT_TYPES` and `PLUGIN_UI_SLOT_ENTITY_TYPES` from `@paperclipai/plugin-sdk`.
+**Entity types** (for `entityTypes` on slots): `project` \| `issue` \| `agent` \| `goal` \| `run` \| `comment`. Full list: import `PLUGIN_UI_SLOT_TYPES` and `PLUGIN_UI_SLOT_ENTITY_TYPES` from `@paperclipai/plugin-sdk`.
 
 ### Slot component descriptions
 
@@ -242,6 +244,14 @@ A button rendered in the toolbar of a host surface (e.g. project detail, issue d
 #### `contextMenuItem`
 
 An entry added to a right-click or overflow context menu on a host surface. Use this for secondary actions that apply to the entity under the cursor (e.g. "Copy to Linear", "Re-run analysis"). Receives `context.companyId` set to the active company; entity context varies by host surface. Requires the `ui.action.register` capability.
+
+#### `commentAnnotation`
+
+A per-comment annotation region rendered below each individual comment in the issue detail timeline. Use this to augment comments with parsed file links, sentiment badges, inline actions, or any per-comment metadata. Receives `PluginCommentAnnotationProps` with `context.entityId` set to the comment UUID, `context.entityType` set to `"comment"`, `context.parentEntityId` set to the parent issue UUID, `context.projectId` set to the issue's project (if any), and `context.companyPrefix` set to the active company slug. Requires the `ui.commentAnnotation.register` capability.
+
+#### `commentContextMenuItem`
+
+A per-comment context menu item rendered in the "more" dropdown menu (⋮) on each comment in the issue detail timeline. Use this to add per-comment actions such as "Create sub-issue from comment", "Translate", "Flag for review", or custom plugin actions. Receives `PluginCommentContextMenuItemProps` with `context.entityId` set to the comment UUID, `context.entityType` set to `"comment"`, `context.parentEntityId` set to the parent issue UUID, `context.projectId` set to the issue's project (if any), and `context.companyPrefix` set to the active company slug. Plugins can open drawers, modals, or popovers scoped to that comment. The ⋮ menu button only appears on comments where at least one plugin renders visible content. Requires the `ui.action.register` capability.
 
 ### Launcher actions and render options
 
@@ -302,6 +312,7 @@ Declare in `manifest.capabilities`. Grouped by scope:
 | | `ui.page.register` |
 | | `ui.detailTab.register` |
 | | `ui.dashboardWidget.register` |
+| | `ui.commentAnnotation.register` |
 | | `ui.action.register` |
 
 Full list in code: import `PLUGIN_CAPABILITIES` from `@paperclipai/plugin-sdk`.
@@ -547,6 +558,8 @@ Each slot type receives a typed props object with `context: PluginHostContext`. 
 | `settingsPage` | `PluginSettingsPageProps` | — |
 | `dashboardWidget` | `PluginWidgetProps` | — |
 | `detailTab` | `PluginDetailTabProps` | `entityId: string`, `entityType: string` |
+| `commentAnnotation` | `PluginCommentAnnotationProps` | `entityId: string`, `entityType: "comment"`, `parentEntityId: string`, `projectId`, `companyPrefix` |
+| `commentContextMenuItem` | `PluginCommentContextMenuItemProps` | `entityId: string`, `entityType: "comment"`, `parentEntityId: string`, `projectId`, `companyPrefix` |
 | `projectSidebarItem` | `PluginProjectSidebarItemProps` | `entityId: string`, `entityType: "project"` |
 
 Example detail tab with entity context:

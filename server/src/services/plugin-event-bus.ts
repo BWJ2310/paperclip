@@ -94,19 +94,18 @@ function passesFilter(event: PluginEvent, filter: EventFilter | null): boolean {
   if (filter.projectId !== undefined) {
     const projectId = event.entityType === "project"
       ? event.entityId
-      : payload?.projectId;
+      : (typeof payload?.projectId === "string" ? payload.projectId : undefined);
     if (projectId !== filter.projectId) return false;
   }
 
   if (filter.companyId !== undefined) {
-    const companyId = payload?.companyId;
-    if (companyId !== filter.companyId) return false;
+    if (event.companyId !== filter.companyId) return false;
   }
 
   if (filter.agentId !== undefined) {
     const agentId = event.entityType === "agent"
       ? event.entityId
-      : payload?.agentId;
+      : (typeof payload?.agentId === "string" ? payload.agentId : undefined);
     if (agentId !== filter.agentId) return false;
   }
 

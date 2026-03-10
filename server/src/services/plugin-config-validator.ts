@@ -9,9 +9,8 @@
  */
 
 import Ajv, { type ErrorObject } from "ajv";
+import addFormats from "ajv-formats";
 import type { JsonSchema } from "@paperclipai/shared";
-
-const ajv = new (Ajv as unknown as typeof Ajv.default)({ allErrors: true });
 
 export interface ConfigValidationResult {
   valid: boolean;
@@ -29,6 +28,12 @@ export function validateInstanceConfig(
   configJson: Record<string, unknown>,
   schema: JsonSchema,
 ): ConfigValidationResult {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const AjvCtor = (Ajv as any).default ?? Ajv;
+  const ajv = new AjvCtor({ allErrors: true });
+  // ajv-formats v3 default export is a FormatsPlugin object; call it as a plugin.
+  const applyFormats = (addFormats as any).default ?? addFormats;
+  applyFormats(ajv);
   const validate = ajv.compile(schema);
   const valid = validate(configJson);
 

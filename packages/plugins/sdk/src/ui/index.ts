@@ -82,6 +82,8 @@ export type {
   PluginDetailTabProps,
   PluginSidebarProps,
   PluginProjectSidebarItemProps,
+  PluginCommentAnnotationProps,
+  PluginCommentContextMenuItemProps,
   PluginSettingsPageProps,
 } from "./types.js";
 

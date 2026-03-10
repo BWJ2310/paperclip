@@ -120,7 +120,7 @@ export const pluginUiSlotDeclarationSchema = z.object({
   order: z.number().int().optional(),
 }).superRefine((value, ctx) => {
   // context-sensitive slots require explicit entity targeting.
-  const entityScopedTypes = ["detailTab", "taskDetailView", "contextMenuItem", "projectSidebarItem"];
+  const entityScopedTypes = ["detailTab", "taskDetailView", "contextMenuItem", "commentAnnotation", "commentContextMenuItem", "projectSidebarItem"];
   if (
     entityScopedTypes.includes(value.type)
     && (!value.entityTypes || value.entityTypes.length === 0)
@@ -139,6 +139,22 @@ export const pluginUiSlotDeclarationSchema = z.object({
       path: ["entityTypes"],
     });
   }
+  // commentAnnotation only makes sense for entityType "comment".
+  if (value.type === "commentAnnotation" && value.entityTypes && !value.entityTypes.includes("comment")) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "commentAnnotation slots require entityTypes to include \"comment\"",
+      path: ["entityTypes"],
+    });
+  }
+  // commentContextMenuItem only makes sense for entityType "comment".
+  if (value.type === "commentContextMenuItem" && value.entityTypes && !value.entityTypes.includes("comment")) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "commentContextMenuItem slots require entityTypes to include \"comment\"",
+      path: ["entityTypes"],
+    });
+  }
 });
 
 export type PluginUiSlotDeclarationInput = z.infer<typeof pluginUiSlotDeclarationSchema>;
@@ -147,6 +163,8 @@ const entityScopedLauncherPlacementZones = [
   "detailTab",
   "taskDetailView",
   "contextMenuItem",
+  "commentAnnotation",
+  "commentContextMenuItem",
   "projectSidebarItem",
 ] as const;
 

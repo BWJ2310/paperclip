@@ -51,6 +51,8 @@ export type PluginSlotContext = {
   projectId?: string | null;
   entityId?: string | null;
   entityType?: PluginUiSlotEntityType | null;
+  /** Parent entity ID for nested slots (e.g. comment annotations within an issue). */
+  parentEntityId?: string | null;
   projectRef?: string | null;
 };
 
@@ -100,7 +102,7 @@ function buildRegistryKey(pluginKey: string, exportName: string): string {
 }
 
 function requiresEntityType(slotType: PluginUiSlotType): boolean {
-  return slotType === "detailTab" || slotType === "taskDetailView" || slotType === "contextMenuItem" || slotType === "projectSidebarItem";
+  return slotType === "detailTab" || slotType === "taskDetailView" || slotType === "contextMenuItem" || slotType === "commentAnnotation" || slotType === "commentContextMenuItem" || slotType === "projectSidebarItem";
 }
 
 function getErrorMessage(error: unknown): string {
@@ -690,6 +692,7 @@ function slotContextToHostContext(
     projectId: pluginSlotContext.projectId ?? (pluginSlotContext.entityType === "project" ? pluginSlotContext.entityId ?? null : null),
     entityId: pluginSlotContext.entityId ?? null,
     entityType: pluginSlotContext.entityType ?? null,
+    parentEntityId: pluginSlotContext.parentEntityId ?? null,
     userId,
     renderEnvironment: null,
   };

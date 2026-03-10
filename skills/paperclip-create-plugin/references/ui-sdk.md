@@ -111,6 +111,8 @@ interface PluginHostContext {
   projectId: string | null;
   entityId: string | null;
   entityType: string | null;
+  /** Parent entity ID for nested slots (e.g. issue ID for comment slots). */
+  parentEntityId?: string | null;
   userId: string | null;
 }
 ```

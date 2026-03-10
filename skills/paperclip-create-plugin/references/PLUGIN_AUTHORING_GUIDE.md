@@ -24,6 +24,8 @@ For in-repo first-party reference implementations, see [EXAMPLE_PLUGINS.md](./EX
    - [Secrets and Config](#secrets-and-config)
    - [Plugin State](#plugin-state)
    - [Agent Tools](#agent-tools)
+   - [Agent Invocation](#agent-invocation)
+   - [Agent Sessions (Two-Way Chat)](#agent-sessions-two-way-chat)
    - [Data and Action Handlers](#data-and-action-handlers)
    - [Lifecycle Hooks](#lifecycle-hooks)
 6. [UI Components](#ui-components)
@@ -48,6 +50,11 @@ For fastest onboarding, start from the official scaffold:
 npx @paperclipai/create-paperclip-plugin my-plugin
 ```
 
+**Note for AI Agents:**
+If you are an AI agent working in this repository, you can use the `paperclip-create-plugin` skill to help you scaffold, implement, and test new plugins. This skill provides detailed workflows, quality bars, and comprehensive reference documentation for the Plugin SDK.
+
+Activate it with: `activate_skill(name: "paperclip-create-plugin")`
+
 The scaffold includes:
 
 - typed manifest + worker entrypoint
@@ -64,6 +71,7 @@ Plugins can:
 - **Run scheduled jobs**
 - **Receive webhooks** from external services
 - **Read and write plugin-scoped state** (per-instance, per-company, per-project, etc.)
+- **Invoke agents** (one-shot or conversational sessions with streaming)
 - **Emit plugin-to-plugin events**
 
 Plugins **cannot**:
@@ -158,7 +166,7 @@ To make a plugin installable by any Paperclip instance:
 npm publish
 ```
 
-The manifest module must export the manifest object as its **default** (or sole) export. The compiled output must be **CommonJS** (not ESM) because the sandbox loader uses `require()`.
+The manifest module must export the manifest object as its default export. The current in-repo examples and scaffold ship `type: "module"` packages and point `package.json#paperclipPlugin` at compiled `dist/manifest.js`, `dist/worker.js`, and optional `dist/ui/`.
 
 ### Local Development Install
 
@@ -180,30 +188,34 @@ A typical plugin package looks like this:
 
 ```
 acme-linear-sync/
-├── paperclip-plugin.json   # Manifest (required)
 ├── package.json
 ├── tsconfig.json
 ├── src/
+│   ├── manifest.ts         # Manifest module — default export is the plugin manifest
 │   ├── worker.ts           # Worker entrypoint — default export is a PaperclipPlugin
 │   └── ui/
 │       └── index.tsx       # UI entrypoint — named exports are React components
 └── dist/                   # Compiled output (committed or built by CI)
+    ├── manifest.js
     ├── worker.js
     └── ui/
         └── index.js
 ```
 
-**`package.json`** — the current sandbox worker loader expects CommonJS output:
+**`package.json`** — current in-repo examples use an ESM package plus an explicit `paperclipPlugin` map:
 
 ```json
 {
-  "name": "@acme/linear-sync",
+  "name": "@acme/plugin-linear-sync",
   "version": "1.0.0",
-  "type": "commonjs",
-  "main": "dist/worker.js",
+  "type": "module",
   "exports": {
-    ".": "./dist/worker.js",
-    "./ui": "./dist/ui/index.js"
+    ".": "./src/index.ts"
+  },
+  "paperclipPlugin": {
+    "manifest": "./dist/manifest.js",
+    "worker": "./dist/worker.js",
+    "ui": "./dist/ui/"
   },
   "dependencies": {
     "@paperclipai/plugin-sdk": "^1.0.0"
@@ -214,13 +226,13 @@ acme-linear-sync/
 }
 ```
 
-If you author in TypeScript/ESM, compile the worker entrypoint to CommonJS in `dist/worker.js` for runtime loading.
+Paperclip discovers the plugin through `package.json#paperclipPlugin.manifest`, validates the exported manifest, and then launches the worker from `paperclipPlugin.worker`.
 
 ---
 
 ## The Manifest
 
-The manifest (`paperclip-plugin.json`) is the authoritative declaration of what your plugin does. The host validates it at install time.
+The manifest module (commonly `src/manifest.ts`, compiled to `dist/manifest.js`) is the authoritative declaration of what your plugin does. The host validates it at install time.
 
 ```json
 {
@@ -312,13 +324,14 @@ The manifest (`paperclip-plugin.json`) is the authoritative declaration of what 
 | `categories` | ✅ | At least one of: `"connector"`, `"workspace"`, `"automation"`, `"ui"`. |
 | `capabilities` | ✅ | List of capabilities the plugin requires. Enforced at runtime. |
 | `entrypoints.worker` | ✅ | Path to compiled worker JS file. |
-| `entrypoints.ui` | When UI slots declared | Path to compiled UI bundle directory. |
+| `entrypoints.ui` | When `ui.slots` or `ui.launchers` declared | Path to compiled UI bundle directory. |
 | `instanceConfigSchema` | No | JSON Schema for operator-editable configuration. |
 | `jobs` | No | Scheduled job declarations. Requires `jobs.schedule` capability. |
 | `webhooks` | No | Webhook endpoint declarations. Requires `webhooks.receive` capability. |
 | `tools` | No | Agent tool declarations. Requires `agent.tools.register` capability. |
 | `uiSlots` | No | UI extension slot declarations. |
-| `minimumPaperclipVersion` | No | Minimum Paperclip host version required (semver). |
+| `minimumHostVersion` | No | Minimum Paperclip host version required (semver). Preferred field. |
+| `minimumPaperclipVersion` | No | Legacy alias for `minimumHostVersion`. If both are provided they must match. |
 
 ---
 
@@ -330,14 +343,17 @@ The `setup()` method is the entry point for all worker registration. It is calle
 
 ```ts
 // src/worker.ts
-import { definePlugin } from "@paperclipai/plugin-sdk";
+import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
 
-export default definePlugin({
+const plugin = definePlugin({
   async setup(ctx) {
     // Register everything here
     ctx.logger.info("Plugin starting");
   },
 });
+
+export default plugin;
+runWorker(plugin, import.meta.url);
 ```
 
 **Important:** `setup()` must resolve before the host considers the worker ready. Avoid long-running async work inside `setup()`. Register handlers and return — the handlers themselves run asynchronously later.
@@ -611,6 +627,177 @@ ctx.tools.register(
 
 Requires the `agent.tools.register` capability.
 
+### Agent Invocation
+
+Plugins can invoke agents on demand using `ctx.agents.invoke()`. This is a fire-and-forget call — it triggers a single agent run and returns immediately.
+
+```ts
+const result = await ctx.agents.invoke(agentId, companyId, {
+  reason: "Automated triage for new issue",
+  payload: { issueId: "iss_123" },
+});
+// result: { runId: string }
+```
+
+Requires the `agents.invoke` capability.
+
+### Agent Sessions (Two-Way Chat)
+
+Plugins can hold conversational sessions with agents, enabling multi-turn chat UIs. A session maintains conversational continuity across multiple messages — the agent remembers previous exchanges within the session.
+
+**Capabilities required:** `agent.sessions.create`, `agent.sessions.list`, `agent.sessions.send`, `agent.sessions.close`
+
+#### Creating a session
+
+```ts
+const session = await ctx.agents.sessions.create(agentId, companyId, {
+  taskKey: "support-chat-42",  // optional — plugin-scoped identifier
+  reason: "User opened support chat",
+});
+// session: { sessionId, agentId, companyId, status: "active", createdAt }
+```
+
+#### Sending messages with streaming
+
+`sendMessage` triggers an agent run and streams response events via the `onEvent` callback:
+
+```ts
+const result = await ctx.agents.sessions.sendMessage(sessionId, companyId, {
+  prompt: "What is the status of issue ISS-42?",
+  reason: "User asked about issue status",
+  onEvent: (event) => {
+    // event: AgentSessionEvent
+    switch (event.eventType) {
+      case "chunk":
+        // Append to the streaming response
+        process.stdout.write(event.message ?? "");
+        break;
+      case "status":
+        // Agent status update (e.g. "thinking", "tool_use")
+        break;
+      case "done":
+        // Stream complete
+        break;
+      case "error":
+        // Something went wrong
+        ctx.logger.error("Session error", { message: event.message });
+        break;
+    }
+  },
+});
+// result: { runId }
+```
+
+**`AgentSessionEvent` fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sessionId` | string | The session this event belongs to |
+| `runId` | string | The agent run that produced this event |
+| `seq` | number | Monotonically increasing sequence number |
+| `eventType` | `"chunk" \| "status" \| "done" \| "error"` | Event classification |
+| `stream` | `"stdout" \| "stderr" \| "system" \| null` | Which output stream |
+| `message` | `string \| null` | Text content of the event |
+| `payload` | `Record<string, unknown> \| null` | Structured event data |
+
+#### Listing active sessions
+
+```ts
+const sessions = await ctx.agents.sessions.list(agentId, companyId);
+// sessions: AgentSession[]
+```
+
+#### Closing a session
+
+```ts
+await ctx.agents.sessions.close(sessionId, companyId);
+```
+
+After closing, sending to the session will throw. Close sessions when the conversation is complete to release resources.
+
+#### Full chat flow example
+
+```ts
+import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
+
+const plugin = definePlugin({
+  async setup(ctx) {
+    ctx.actions.register("start-chat", async ({ agentId, companyId }) => {
+      // Create a session
+      const session = await ctx.agents.sessions.create(
+        agentId as string,
+        companyId as string,
+      );
+
+      // Send the first message
+      const chunks: string[] = [];
+      await ctx.agents.sessions.sendMessage(session.sessionId, companyId as string, {
+        prompt: "Hello! Can you help me with issue triage?",
+        onEvent: (event) => {
+          if (event.eventType === "chunk" && event.message) {
+            chunks.push(event.message);
+          }
+        },
+      });
+
+      return { sessionId: session.sessionId, response: chunks.join("") };
+    });
+
+    ctx.actions.register("send-message", async ({ sessionId, companyId, prompt }) => {
+      const chunks: string[] = [];
+      await ctx.agents.sessions.sendMessage(sessionId as string, companyId as string, {
+        prompt: prompt as string,
+        onEvent: (event) => {
+          if (event.eventType === "chunk" && event.message) {
+            chunks.push(event.message);
+          }
+        },
+      });
+      return { response: chunks.join("") };
+    });
+
+    ctx.actions.register("end-chat", async ({ sessionId, companyId }) => {
+      await ctx.agents.sessions.close(sessionId as string, companyId as string);
+      return { closed: true };
+    });
+  },
+});
+
+export default plugin;
+runWorker(plugin, import.meta.url);
+```
+
+#### Testing sessions
+
+The test harness provides full session mock support:
+
+```ts
+import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
+
+const harness = createTestHarness({ manifest });
+await plugin.definition.setup(harness.ctx);
+
+// Create and use a session
+const session = await harness.ctx.agents.sessions.create("agent-1", "company-1");
+const result = await harness.ctx.agents.sessions.sendMessage(
+  session.sessionId, "company-1", { prompt: "Hello" },
+);
+
+// Simulate streaming events from the agent
+harness.simulateSessionEvent(session.sessionId, {
+  sessionId: session.sessionId,
+  runId: result.runId,
+  seq: 1,
+  eventType: "chunk",
+  stream: "stdout",
+  message: "Hello! How can I help?",
+  payload: null,
+});
+
+// Clean up
+await harness.ctx.agents.sessions.close(session.sessionId, "company-1");
+```
+
 ### Data and Action Handlers
 
 Register handlers that your UI components call via the bridge:
@@ -634,17 +821,19 @@ ctx.data.register("sync-health", async ({ companyId }) => {
 ctx.actions.register("resync", async ({ companyId }) => {
   ctx.logger.info("Manual resync triggered", { companyId });
   // Queue a sync job or trigger a sync immediately
-  await ctx.events.emit("manual-resync", { companyId });
+  await ctx.events.emit("manual-resync", companyId, { triggered: true });
   return { triggered: true };
 });
 ```
 
 ### Lifecycle Hooks
 
-All lifecycle hooks are optional. Implement only the ones you need.
+All lifecycle hooks are optional. Implement only the ones you need. Your worker file must call `runWorker(plugin, import.meta.url)` at the end so the process stays alive when run as the entrypoint.
 
 ```ts
-export default definePlugin({
+import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
+
+const plugin = definePlugin({
   async setup(ctx) { /* ... */ },
 
   // Called on a regular interval to report plugin health.
@@ -678,6 +867,24 @@ export default definePlugin({
     if (!config.apiKeyRef) {
       return { ok: false, errors: ["apiKeyRef is required"] };
     }
+    return { ok: true };
+  },
+});
+
+export default plugin;
+runWorker(plugin, import.meta.url);
+```
+
+(If you need more lifecycle hooks, add them to the same `definePlugin({ ... })` and keep a single `runWorker(plugin, import.meta.url)` at the end.)
+
+```ts
+// Alternative: minimal lifecycle example (same file — import runWorker at top)
+const plugin = definePlugin({
+  async setup(ctx) { /* ... */ },
+  async onValidateConfig(config) {
+    if (!config.apiKeyRef) {
+      return { ok: false, errors: ["apiKeyRef is required"] };
+    }
     try {
       const apiKey = await resolveSecret(config.apiKeyRef as string);
       await testApiKey(apiKey);
@@ -696,6 +903,9 @@ export default definePlugin({
     }
   },
 });
+
+export default plugin;
+runWorker(plugin, import.meta.url);
 ```
 
 ---
@@ -705,6 +915,32 @@ export default definePlugin({
 Plugin UI bundles are React ES modules that render inside host extension slots.
 The host discovers these contributions through `GET /api/plugins/ui-contributions`.
 UI-only examples such as `@paperclipai/plugin-hello-world-example` use this existing API surface and do not define custom plugin HTTP routes.
+The response includes both `slots` and declarative `launchers` for each ready plugin.
+In V1, plugins are launched from supported host surfaces such as project sidebar items, toolbar buttons, detail tabs, settings pages, and issue context menus. There is no dedicated host-managed modal slot.
+
+Example discovery payload:
+
+```json
+[
+  {
+    "pluginId": "plg_123",
+    "pluginKey": "paperclip.claude-usage",
+    "displayName": "Claude Usage",
+    "version": "1.0.0",
+    "uiEntryFile": "index.js",
+    "slots": [],
+    "launchers": [
+      {
+        "id": "claude-usage-toolbar",
+        "displayName": "Claude Usage",
+        "placementZone": "toolbarButton",
+        "action": { "type": "openModal", "target": "ClaudeUsageView" },
+        "render": { "environment": "hostOverlay", "bounds": "wide" }
+      }
+    ]
+  }
+]
+```
 
 ### Component Slots
 
@@ -712,13 +948,366 @@ Each UI slot type has a corresponding prop interface:
 
 | Slot type | Interface | Description |
 |-----------|-----------|-------------|
-| `page` | `PluginPageProps` | Full page at `/plugins/:pluginId`. |
+| `page` | `PluginPageProps` | Full company-context page at `/:companyPrefix/plugins/:pluginId`. |
 | `dashboardWidget` | `PluginWidgetProps` | Dashboard card or section. |
 | `detailTab` | `PluginDetailTabProps` | Additional tab on a project/issue/agent/goal/run detail page. |
 | `sidebar` | `PluginSidebarProps` | Sidebar link or section. |
 | `settingsPage` | `PluginSettingsPageProps` | Custom settings page for the plugin. |
+| `commentAnnotation` | `PluginCommentAnnotationProps` | Per-comment annotation below each comment in the issue timeline. |
+| `commentContextMenuItem` | `PluginCommentContextMenuItemProps` | Per-comment context menu item in the comment "more" dropdown. |
+| `projectSidebarItem` | `PluginProjectSidebarItemProps` | Project-scoped launcher rendered under each project row in the sidebar. |
 
-Declare which export name maps to each slot in the manifest `uiSlots` array.
+The current UI also mounts `taskDetailView`, `toolbarButton`, `contextMenuItem`, and `sidebarPanel` slots. Those surfaces currently receive the same `context` shape available through `useHostContext()`, so plugin components can author against the hook even when there is not a dedicated exported prop alias yet.
+
+#### Comment annotations
+
+The `commentAnnotation` slot renders a plugin-owned region **below each individual comment** in the issue detail timeline. Use this to parse comment bodies and surface extracted data (file links, mentions, sentiment) inline without modifying the host-rendered markdown.
+
+The component receives `PluginCommentAnnotationProps`:
+
+- `context.entityId` — the comment UUID
+- `context.entityType` — always `"comment"`
+- `context.parentEntityId` — the parent issue UUID
+- `context.companyId` — the active company
+- `context.companyPrefix` — the active company slug (e.g. `"ACME"`)
+- `context.projectId` — the issue's project UUID (if any)
+
+> **Important:** Plugins declaring `commentAnnotation` slots must also include `issue.comments.read` in their capabilities to access comment bodies. The host validates this dependency at installation time.
+
+Declare the slot with `entityTypes: ["comment"]` and capability `ui.commentAnnotation.register`:
+
+```ts
+const manifest: PaperclipPluginManifestV1 = {
+  // ...
+  capabilities: ["ui.commentAnnotation.register", "issue.comments.read"],
+  entrypoints: {
+    worker: "./dist/worker.js",
+    ui: "./dist/ui",
+  },
+  ui: {
+    slots: [
+      {
+        type: "commentAnnotation",
+        id: "file-links",
+        displayName: "File Links",
+        exportName: "FileLinksAnnotation",
+        entityTypes: ["comment"],
+      },
+    ],
+  },
+};
+```
+
+Minimal React component:
+
+```tsx
+import type { PluginCommentAnnotationProps } from "@paperclipai/plugin-sdk/ui";
+import { usePluginData } from "@paperclipai/plugin-sdk/ui";
+
+export function FileLinksAnnotation({ context }: PluginCommentAnnotationProps) {
+  const { data } = usePluginData<{ links: string[] }>("comment-file-links", {
+    commentId: context.entityId,
+    issueId: context.parentEntityId,
+    companyId: context.companyId,
+  });
+
+  if (!data?.links?.length) return null;
+
+  return (
+    <div className="flex flex-wrap gap-1">
+      {data.links.map((link) => (
+        <a key={link} href={link} className="text-xs text-primary hover:underline">
+          {link}
+        </a>
+      ))}
+    </div>
+  );
+}
+```
+
+Declare which export name maps to each slot in the manifest `ui.slots` array.
+
+#### Comment context menu items
+
+The `commentContextMenuItem` slot renders a plugin-owned item in the **"more" (⋮) dropdown menu** on each comment in the issue detail timeline. Use this to add per-comment actions like "Create sub-issue from comment", "Translate", "Flag for review", or any custom plugin action. Plugins can open drawers, modals, or popovers scoped to that comment.
+
+The component receives `PluginCommentContextMenuItemProps`:
+
+- `context.entityId` — the comment UUID
+- `context.entityType` — always `"comment"`
+- `context.parentEntityId` — the parent issue UUID
+- `context.companyId` — the active company
+- `context.companyPrefix` — the active company slug (e.g. `"ACME"`)
+- `context.projectId` — the issue's project UUID (if any)
+
+The ⋮ menu button only appears on comments where at least one registered plugin renders visible content.
+
+Declare the slot with `entityTypes: ["comment"]` and capability `ui.action.register`:
+
+```ts
+const manifest: PaperclipPluginManifestV1 = {
+  // ...
+  capabilities: ["ui.action.register", "issue.comments.read"],
+  entrypoints: {
+    worker: "./dist/worker.js",
+    ui: "./dist/ui",
+  },
+  ui: {
+    slots: [
+      {
+        type: "commentContextMenuItem",
+        id: "translate-comment",
+        displayName: "Translate Comment",
+        exportName: "TranslateCommentAction",
+        entityTypes: ["comment"],
+      },
+    ],
+  },
+};
+```
+
+Minimal React component:
+
+```tsx
+import type { PluginCommentContextMenuItemProps } from "@paperclipai/plugin-sdk/ui";
+import { usePluginAction } from "@paperclipai/plugin-sdk/ui";
+
+export function TranslateCommentAction({ context }: PluginCommentContextMenuItemProps) {
+  const translate = usePluginAction("translate-comment");
+
+  return (
+    <button
+      className="w-full text-left px-2 py-1 text-xs hover:bg-accent rounded"
+      onClick={() =>
+        translate({
+          commentId: context.entityId,
+          issueId: context.parentEntityId,
+        })
+      }
+    >
+      Translate Comment
+    </button>
+  );
+}
+```
+
+### Declarative Launchers
+
+For host-owned entry points that should open a route, overlay, drawer, popover, or worker action without inventing a new slot component shape, declare `ui.launchers` in the manifest. The host exposes these through the same `GET /api/plugins/ui-contributions` discovery response.
+
+```ts
+const manifest: PaperclipPluginManifestV1 = {
+  // ...
+  capabilities: ["ui.sidebar.register", "ui.detailTab.register"],
+  entrypoints: {
+    worker: "./dist/worker.js",
+    ui: "./dist/ui",
+  },
+  ui: {
+    launchers: [
+      {
+        id: "files-sidebar-launcher",
+        displayName: "Files",
+        placementZone: "projectSidebarItem",
+        entityTypes: ["project"],
+        action: {
+          type: "deepLink",
+          target: "plugin:acme.file-tools:files-tab",
+        },
+      },
+    ],
+  },
+};
+```
+
+Use `ui.slots` when you are declaring a concrete React mount point. Use `ui.launchers` when you want the host to render the entry point and drive the navigation or container behavior declaratively.
+
+When launcher-backed UI calls `usePluginData()` or `usePluginAction()`, the host
+forwards a `renderEnvironment` snapshot through the bridge. Worker handlers can
+use that snapshot to adapt behavior for modal, drawer, popover, or page
+presentation without reverse-engineering route state.
+
+### Launcher Example: Project Sidebar Item -> Project Tab
+
+For V1, the most reliable launcher pattern is a small host-mounted surface that deep-links into a richer tab or page. A `projectSidebarItem` is the canonical example because it gives operators a predictable entry point per project.
+
+Manifest:
+
+```ts
+import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
+
+const manifest: PaperclipPluginManifestV1 = {
+  id: "acme.file-tools",
+  apiVersion: 1,
+  version: "1.0.0",
+  displayName: "File Tools",
+  description: "Adds a per-project launcher and tab for file operations.",
+  author: "Acme <plugins@acme.test>",
+  categories: ["workspace", "ui"],
+  capabilities: ["ui.sidebar.register", "ui.detailTab.register", "projects.read"],
+  entrypoints: {
+    worker: "./dist/worker.js",
+    ui: "./dist/ui",
+  },
+  ui: {
+    slots: [
+      {
+        type: "projectSidebarItem",
+        id: "files-link",
+        displayName: "Files",
+        exportName: "FilesLauncher",
+        entityTypes: ["project"],
+        order: 10,
+      },
+      {
+        type: "detailTab",
+        id: "files-tab",
+        displayName: "Files",
+        exportName: "FilesTab",
+        entityTypes: ["project"],
+        order: 10,
+      },
+    ],
+  },
+};
+
+export default manifest;
+```
+
+UI launcher component:
+
+```tsx
+import type { PluginProjectSidebarItemProps } from "@paperclipai/plugin-sdk/ui";
+
+const PLUGIN_KEY = "acme.file-tools";
+const TAB_ID = "files-tab";
+
+export function FilesLauncher({ context }: PluginProjectSidebarItemProps) {
+  const prefix = context.companyPrefix ? `/${context.companyPrefix}` : "";
+  const href = `${prefix}/projects/${context.entityId}?tab=${encodeURIComponent(
+    `plugin:${PLUGIN_KEY}:${TAB_ID}`,
+  )}`;
+
+  return (
+    <a
+      href={href}
+      className="block px-3 py-1 text-[12px] text-muted-foreground hover:text-foreground"
+    >
+      Files
+    </a>
+  );
+}
+```
+
+This pattern matches the current host behavior:
+
+- the launcher stays compact and low-risk
+- the primary workflow lives in a deep-linkable detail tab
+- the operator can bookmark or share the resulting URL
+
+### Modal Example: Plugin-Owned Overlay From A Supported Surface
+
+Paperclip does not provide a `modal` slot type. If your plugin needs a modal, open it from a supported launcher surface such as a toolbar button, settings page, or detail tab, and keep the interaction short-lived.
+
+Example toolbar launcher that opens a plugin-owned modal:
+
+```tsx
+import { useState } from "react";
+import { ErrorBoundary, Spinner, useHostContext, usePluginAction } from "@paperclipai/plugin-sdk/ui";
+
+export function SyncToolbarButton() {
+  const context = useHostContext();
+  const triggerSync = usePluginAction("sync-project");
+  const [open, setOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  async function handleConfirm() {
+    if (!context.projectId) return;
+    setIsSubmitting(true);
+    setErrorMessage(null);
+
+    try {
+      await triggerSync({ projectId: context.projectId });
+      setOpen(false);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Sync failed";
+      setErrorMessage(message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  return (
+    <ErrorBoundary>
+      <button type="button" className="rounded border px-2 py-1 text-sm" onClick={() => setOpen(true)}>
+        Sync
+      </button>
+
+      {open ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="acme-sync-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => !isSubmitting && setOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-lg bg-background p-4 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 id="acme-sync-title" className="text-base font-semibold">
+              Sync this project?
+            </h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              This queues a plugin worker action for project <code>{context.projectId}</code>.
+            </p>
+            {errorMessage ? <p className="mt-2 text-sm text-destructive">{errorMessage}</p> : null}
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" className="rounded border px-3 py-1.5 text-sm" onClick={() => setOpen(false)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded bg-primary px-3 py-1.5 text-sm text-primary-foreground"
+                onClick={() => void handleConfirm()}
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? <Spinner size="sm" /> : "Run sync"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </ErrorBoundary>
+  );
+}
+```
+
+Manifest entry for that launcher:
+
+```json
+{
+  "capabilities": ["ui.action.register"],
+  "ui": {
+    "slots": [
+      {
+        "type": "toolbarButton",
+        "id": "sync-toolbar-button",
+        "displayName": "Sync",
+        "exportName": "SyncToolbarButton"
+      }
+    ]
+  }
+}
+```
+
+Modal authoring rules for V1:
+
+- prefer tabs or settings pages for primary workflows; use modals for confirmation, pickers, and compact editors
+- manage modal open/close state entirely inside your component
+- use `useHostContext()` to derive company, project, and entity scope instead of reading host internals
+- implement escape handling, backdrop click behavior, and focus management so the overlay does not fight the host shell
 
 ### Bridge Hooks
 
@@ -815,7 +1404,7 @@ Sandbox/runtime enforcement rules:
 - Host API calls are checked per operation against your manifest capabilities.
 - Bare imports in the worker require explicit host allow-listing and binding.
 - Relative imports must stay inside the plugin root directory.
-- ESM worker syntax is rejected by the current sandbox loader; ship CommonJS worker output.
+- The worker entrypoint must match the package contract exposed through `package.json#paperclipPlugin` and be directly executable by the host worker runtime.
 
 | Capability | Required for |
 |-----------|--------------|
@@ -826,6 +1415,8 @@ Sandbox/runtime enforcement rules:
 | `issue.comments.read` | Reading issue comments |
 | `agents.read` | Reading agent data |
 | `goals.read` | Reading goal data |
+| `goals.create` | Creating goals |
+| `goals.update` | Updating goals |
 | `activity.read` | Reading activity log |
 | `costs.read` | Reading cost data |
 | `issues.create` | Creating issues |
@@ -844,12 +1435,18 @@ Sandbox/runtime enforcement rules:
 | `http.outbound` | `ctx.http.fetch()` |
 | `secrets.read-ref` | `ctx.secrets.resolve()` |
 | `agent.tools.register` | `ctx.tools.register()` |
+| `agents.invoke` | `ctx.agents.invoke()` |
+| `agent.sessions.create` | `ctx.agents.sessions.create()` |
+| `agent.sessions.list` | `ctx.agents.sessions.list()` |
+| `agent.sessions.send` | `ctx.agents.sessions.sendMessage()` |
+| `agent.sessions.close` | `ctx.agents.sessions.close()` |
 | `instance.settings.register` | Registering instance settings pages |
 | `ui.sidebar.register` | Sidebar slot |
 | `ui.page.register` | Page slot |
 | `ui.detailTab.register` | Detail tab slot |
 | `ui.dashboardWidget.register` | Dashboard widget slot |
-| `ui.action.register` | UI action contributions |
+| `ui.commentAnnotation.register` | Comment annotation slot |
+| `ui.action.register` | UI action contributions (incl. `commentContextMenuItem`) |
 
 ---
 
@@ -923,7 +1520,7 @@ describe("MyPlugin", () => {
 
 ```ts
 import { pluginManifestV1Schema } from "@paperclipai/shared";
-import manifest from "../paperclip-plugin.json";
+import manifest from "../src/manifest.js";
 
 it("manifest is valid", () => {
   const result = pluginManifestV1Schema.safeParse(manifest);
@@ -987,7 +1584,7 @@ A plugin can emit events that other plugins subscribe to:
 
 ```ts
 // Emitter plugin (acme.linear-sync)
-await ctx.events.emit("sync-complete", { syncedCount: 42 });
+await ctx.events.emit("sync-complete", companyId, { syncedCount: 42 });
 // Full event type becomes: "plugin.acme.linear-sync.sync-complete"
 
 // Subscriber plugin
@@ -1013,7 +1610,7 @@ async function withTracking<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-export default definePlugin({
+const plugin = definePlugin({
   async setup(ctx) {
     ctx.events.on("issue.created", async (event) => {
       await withTracking(() => syncIssue(ctx, event.entityId!));
@@ -1028,6 +1625,9 @@ export default definePlugin({
     }
   },
 });
+
+export default plugin;
+runWorker(plugin, import.meta.url);
 ```
 
 ---
@@ -1062,7 +1662,7 @@ Plugin upgrades do not automatically migrate your `plugin_state` or `plugin_enti
 ```ts
 const CURRENT_STATE_VERSION = 2;
 
-export default definePlugin({
+const plugin = definePlugin({
   async setup(ctx) {
     const version = await ctx.state.get({ scopeKind: "instance", stateKey: "schema-version" });
 
@@ -1072,4 +1672,7 @@ export default definePlugin({
     }
   }
 });
+
+export default plugin;
+runWorker(plugin, import.meta.url);
 ```

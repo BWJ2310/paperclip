@@ -361,6 +361,9 @@ export interface PaperclipPluginManifestV1 {
   /** Author name (max 200 chars). May include email: "Jane Doe <jane@example.com>". */
   author: string;
   categories: Array<"connector" | "workspace" | "automation" | "ui">;
+  /** Minimum host version required (semver lower bound). Preferred field for new manifests. */
+  minimumHostVersion?: string;
+  /** Legacy alias for `minimumHostVersion`. Kept for backwards compatibility. If both are provided they must match. */
   minimumPaperclipVersion?: string;
   capabilities: string[];
   entrypoints: {
@@ -376,6 +379,8 @@ export interface PaperclipPluginManifestV1 {
     description: string;
     parametersSchema: JsonSchema;
   }>;
+  /** Legacy top-level launcher declarations. Prefer `ui.launchers` for new manifests. */
+  launchers?: PluginLauncherDeclaration[];
   ui?: {
     slots: Array<{
       type:
@@ -388,14 +393,20 @@ export interface PaperclipPluginManifestV1 {
         | "projectSidebarItem"
         | "toolbarButton"
         | "contextMenuItem"
+        | "commentAnnotation"
+        | "commentContextMenuItem"
         | "settingsPage";
       id: string;
       displayName: string;
       /** Which export name in the UI bundle provides this component */
       exportName: string;
-      /** For detailTab, taskDetailView, contextMenuItem, projectSidebarItem: which entity types this slot targets (required for these types; projectSidebarItem must include "project") */
-      entityTypes?: Array<"project" | "issue" | "agent" | "goal" | "run">;
+      /** For detailTab, taskDetailView, contextMenuItem, projectSidebarItem, commentAnnotation, commentContextMenuItem: which entity types this slot targets */
+      entityTypes?: Array<"project" | "issue" | "agent" | "goal" | "run" | "comment">;
+      /** Optional ordering hint within a slot surface. Lower numbers appear first. */
+      order?: number;
     }>;
+    /** Declarative launcher metadata for host-mounted plugin entry points. */
+    launchers?: PluginLauncherDeclaration[];
   };
 }
 ```
@@ -410,15 +421,16 @@ Rules:
 - `author` is required; max 200 characters; may include email in angle brackets (e.g. `"Jane Doe <jane@example.com>"`)
 - `displayName` must be 1–100 characters
 - `description` must be 1–500 characters
-- `minimumPaperclipVersion`, when provided, must be a valid semver string without a leading `v`
+- `minimumHostVersion` (or the legacy alias `minimumPaperclipVersion`), when provided, must be a valid semver string without a leading `v`. If both fields are present they must be identical.
 - `capabilities` must be static and install-time visible
 - config schema must be JSON Schema compatible
 - `entrypoints.ui` points to the directory containing the built UI bundle
 - `entrypoints.ui` is required when `ui.slots` is declared
 - the current host expects `entrypoints.ui/index.js` to be the importable ESM entry module for all declared UI slots
 - `ui.slots` declares which extension slots the plugin fills, so the host knows what to mount without loading the bundle eagerly; each slot references an `exportName` from the UI bundle
-- declared features (tools, jobs, webhooks, UI slots) must be accompanied by the corresponding capability declaration
-- install must fail if `apiVersion` is unsupported or if `minimumPaperclipVersion` is greater than the running Paperclip host version
+- `ui.launchers` declares launcher metadata for host-mounted entry points (buttons, links, actions). The legacy top-level `launchers` field is also accepted.
+- declared features (tools, jobs, webhooks, UI slots, launchers) must be accompanied by the corresponding capability declaration
+- install must fail if `apiVersion` is unsupported or if `minimumHostVersion` / `minimumPaperclipVersion` is greater than the running Paperclip host version
 
 ## 11. Agent Tools
 
@@ -683,13 +695,16 @@ Required SDK clients:
 - `ctx.activity`
 - `ctx.state`
 - `ctx.entities`
+- `ctx.companies`
 - `ctx.projects`
 - `ctx.issues`
 - `ctx.agents`
 - `ctx.goals`
 - `ctx.data`
 - `ctx.actions`
+- `ctx.streams`
 - `ctx.tools`
+- `ctx.metrics`
 - `ctx.logger`
 
 `ctx.data` and `ctx.actions` register handlers that the plugin's own UI calls through the host bridge. `ctx.data.register(key, handler)` backs `usePluginData(key)` on the frontend. `ctx.actions.register(key, handler)` backs `usePluginAction(key)`.
@@ -727,6 +742,10 @@ export interface PluginContext {
     upsert(input: PluginEntityUpsert): Promise<void>;
     list(input: PluginEntityQuery): Promise<PluginEntityRecord[]>;
   };
+  companies: {
+    list(): Promise<Company[]>;
+    get(companyId: string): Promise<Company | null>;
+  };
   agents: {
     list(companyId?: string, opts?: { status?: string }): Promise<Agent[]>;
     get(agentId: string, companyId: string): Promise<Agent | null>;
@@ -763,6 +782,9 @@ export interface PluginContext {
   };
   tools: {
     register(name: string, input: PluginToolDeclaration, fn: (params: unknown, runCtx: ToolRunContext) => Promise<ToolResult>): void;
+  };
+  metrics: {
+    write(name: string, value: number, tags?: Record<string, string>): void;
   };
   logger: {
     info(message: string, meta?: Record<string, unknown>): void;
@@ -843,12 +865,13 @@ The host enforces capabilities in the SDK layer and refuses calls outside the gr
 
 ### UI
 
-- `instance.settings.register`
-- `ui.sidebar.register`
-- `ui.page.register`
-- `ui.detailTab.register`
-- `ui.dashboardWidget.register`
-- `ui.action.register`
+- `instance.settings.register` — settings page slot
+- `ui.sidebar.register` — sidebar, sidebarPanel, and projectSidebarItem slots
+- `ui.page.register` — page slot
+- `ui.detailTab.register` — detailTab and taskDetailView slots
+- `ui.dashboardWidget.register` — dashboardWidget slot
+- `ui.commentAnnotation.register` — commentAnnotation slot
+- `ui.action.register` — toolbarButton, contextMenuItem, and commentContextMenuItem slots
 
 ## 15.2 Forbidden Capabilities
 
@@ -1138,6 +1161,8 @@ The manifest schema recognizes more slot types than the host currently mounts. A
 | `contextMenuItem` | Supported | Issue detail "More" menu | Issue actions popover | `ui.action.register` |
 | `page` | Supported | Company-context page at `/:companyPrefix/plugins/:pluginId` | `/:companyPrefix/plugins/:pluginId` | `ui.page.register` |
 | `dashboardWidget` | Supported | Dashboard (below chart cards) | Dashboard page | `ui.dashboardWidget.register` |
+| `commentAnnotation` | Supported | Below a comment in issue detail | Inline in comment thread | `ui.commentAnnotation.register` |
+| `commentContextMenuItem` | Supported | Comment "More" menu | Comment actions popover | `ui.action.register` |
 
 Entity-type support is narrower than the manifest union:
 
@@ -1145,6 +1170,7 @@ Entity-type support is narrower than the manifest union:
 - `issue`: supported for `detailTab`, `taskDetailView`, and `contextMenuItem`
 - `agent`: supported for `detailTab` and `taskDetailView` (Agent detail page; plugin tabs via `?tab=plugin:<pluginKey>:<slotId>`)
 - `goal`: supported for `detailTab` and `taskDetailView` (Goal detail page; plugin tabs via `?tab=plugin:<pluginKey>:<slotId>`)
+- `comment`: supported for `commentAnnotation` and `commentContextMenuItem`
 - `run`: accepted in manifest types for forward compatibility, but not mounted by the current UI
 
 When a slot type is "declared in schema, not mounted", install may still succeed, but the operator should expect no visible frontend surface until the host adds a matching mount point.
@@ -1415,11 +1441,12 @@ Examples:
 - `id` uuid pk
 - `plugin_key` text unique not null
 - `package_name` text not null
+- `package_path` text null — resolved package path for local-path installs; used to find the worker entrypoint
 - `version` text not null
 - `api_version` int not null
-- `categories` text[] not null
+- `categories` jsonb not null (default `'[]'`)
 - `manifest_json` jsonb not null
-- `status` enum: `installed | ready | error | upgrade_pending`
+- `status` enum: `installed | ready | disabled | error | upgrade_pending | uninstalled`
 - `install_order` int null
 - `installed_at` timestamptz not null
 - `updated_at` timestamptz not null
@@ -1488,70 +1515,70 @@ Examples:
 
 - `id` uuid pk
 - `plugin_id` uuid fk `plugins.id` not null
-- `scope_kind` enum nullable
-- `scope_id` uuid/text null
 - `job_key` text not null
-- `schedule` text null
-- `status` enum: `idle | queued | running | error`
+- `schedule` text not null
+- `status` enum: `active | paused | error` (default `active`)
+- `last_run_at` timestamptz null
 - `next_run_at` timestamptz null
-- `last_started_at` timestamptz null
-- `last_finished_at` timestamptz null
-- `last_succeeded_at` timestamptz null
-- `last_error` text null
+- `created_at` timestamptz not null
+- `updated_at` timestamptz not null
 
 Constraints:
 
-- unique `(plugin_id, scope_kind, scope_id, job_key)`
+- unique `(plugin_id, job_key)`
 
 ### `plugin_job_runs`
 
 - `id` uuid pk
-- `plugin_job_id` uuid fk `plugin_jobs.id` not null
+- `job_id` uuid fk `plugin_jobs.id` not null
 - `plugin_id` uuid fk `plugins.id` not null
-- `status` enum: `queued | running | succeeded | failed | cancelled`
-- `trigger` enum: `schedule | manual | retry`
+- `trigger` text not null — `schedule | manual | retry`
+- `status` text not null (default `pending`) — `pending | running | succeeded | failed | cancelled`
+- `duration_ms` int null
+- `error` text null
+- `logs` jsonb not null (default `'[]'`)
 - `started_at` timestamptz null
 - `finished_at` timestamptz null
-- `error` text null
-- `details_json` jsonb null
+- `created_at` timestamptz not null
 
 Indexes:
 
-- `(plugin_id, started_at desc)`
-- `(plugin_job_id, started_at desc)`
+- `(job_id)`
+- `(plugin_id)`
+- `(status)`
 
 ### `plugin_webhook_deliveries`
 
 - `id` uuid pk
 - `plugin_id` uuid fk `plugins.id` not null
-- `scope_kind` enum nullable
-- `scope_id` uuid/text null
-- `endpoint_key` text not null
-- `status` enum: `received | processed | failed | ignored`
-- `request_id` text null
-- `headers_json` jsonb null
-- `body_json` jsonb null
-- `received_at` timestamptz not null
-- `handled_at` timestamptz null
-- `response_code` int null
+- `webhook_key` text not null
+- `external_id` text null
+- `status` text not null (default `pending`)
+- `duration_ms` int null
 - `error` text null
+- `payload` jsonb not null
+- `headers` jsonb not null (default `'{}'`)
+- `started_at` timestamptz null
+- `finished_at` timestamptz null
+- `created_at` timestamptz not null
 
 Indexes:
 
-- `(plugin_id, received_at desc)`
-- `(plugin_id, endpoint_key, received_at desc)`
+- `(plugin_id)`
+- `(status)`
+- `(webhook_key)`
 
 ### `plugin_entities` (optional but recommended)
 
 - `id` uuid pk
 - `plugin_id` uuid fk `plugins.id` not null
 - `entity_type` text not null
-- `scope_kind` enum not null
-- `scope_id` uuid/text null
+- `scope_kind` text not null
+- `scope_id` text null
 - `external_id` text null
 - `title` text null
 - `status` text null
-- `data_json` jsonb not null
+- `data` jsonb not null (default `'{}'`)
 - `created_at` timestamptz not null
 - `updated_at` timestamptz not null
 
@@ -1566,6 +1593,22 @@ Use cases:
 - imported GitHub issues
 - plugin-owned process records
 - plugin-owned external metric bindings
+
+### `plugin_logs`
+
+- `id` uuid pk (default `gen_random_uuid()`)
+- `plugin_id` uuid fk `plugins.id` not null
+- `level` text not null (default `'info'`) — `info | warn | error | debug`
+- `message` text not null
+- `meta` jsonb null
+- `created_at` timestamptz not null (default `now()`)
+
+Indexes:
+
+- `(plugin_id, created_at)`
+- `(level)`
+
+Captures structured log output from plugin workers. Surfaced in the plugin health dashboard and the operator logs view at `/settings/plugins/:pluginId`.
 
 ## 21.4 Activity Log Changes
 

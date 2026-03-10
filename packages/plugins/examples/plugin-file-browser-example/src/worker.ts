@@ -27,9 +27,67 @@ function resolveWorkspace(workspacePath: string, requestedPath?: string): string
   return resolved;
 }
 
+/**
+ * Regex that matches file-path-like tokens in comment text.
+ * Captures tokens that either start with `.` `/` `~` or contain a `/`
+ * (directory separator), plus bare words that could be filenames with
+ * extensions (e.g. `README.md`).  The file-extension check in
+ * `extractFilePaths` filters out non-file matches.
+ */
+const FILE_PATH_REGEX = /(?:^|[\s(`"'])([^\s,;)}`"'>\]]*\/[^\s,;)}`"'>\]]+|[.\/~][^\s,;)}`"'>\]]+|[a-zA-Z0-9_-]+\.[a-zA-Z0-9]{1,10}(?:\/[^\s,;)}`"'>\]]+)?)/g;
+
+/** Common file extensions to recognise path-like tokens as actual file references. */
+const FILE_EXTENSION_REGEX = /\.[a-zA-Z0-9]{1,10}$/;
+
+/**
+ * Tokens that look like paths but are almost certainly URL route segments
+ * (e.g. `/projects/abc`, `/settings`, `/dashboard`).
+ */
+const URL_ROUTE_PATTERN = /^\/(?:projects|issues|agents|settings|dashboard|plugins|api|auth|admin)\b/i;
+
+function extractFilePaths(body: string): string[] {
+  const paths = new Set<string>();
+  for (const match of body.matchAll(FILE_PATH_REGEX)) {
+    const raw = match[1];
+    // Strip trailing punctuation that isn't part of a path
+    const cleaned = raw.replace(/[.:,;!?)]+$/, "");
+    if (cleaned.length <= 1) continue;
+    // Must have a file extension (e.g. .ts, .json, .md)
+    if (!FILE_EXTENSION_REGEX.test(cleaned)) continue;
+    // Skip things that look like URL routes
+    if (URL_ROUTE_PATTERN.test(cleaned)) continue;
+    paths.add(cleaned);
+  }
+  return [...paths];
+}
+
 const plugin = definePlugin({
   async setup(ctx) {
     ctx.logger.info(`${PLUGIN_NAME} plugin setup`);
+
+    // Expose the current plugin config so UI components can read the
+    // commentAnnotationMode setting and hide themselves when disabled.
+    ctx.data.register("plugin-config", async () => {
+      const config = await ctx.state.get({ scopeKind: "instance", stateKey: "config" }) as Record<string, unknown> | null;
+      return { commentAnnotationMode: config?.commentAnnotationMode ?? "both" };
+    });
+
+    // Fetch a comment by ID and extract file-path-like tokens from its body.
+    ctx.data.register("comment-file-links", async (params: Record<string, unknown>) => {
+      const commentId = typeof params.commentId === "string" ? params.commentId : "";
+      const issueId = typeof params.issueId === "string" ? params.issueId : "";
+      const companyId = typeof params.companyId === "string" ? params.companyId : "";
+      if (!commentId || !issueId || !companyId) return { links: [] };
+      try {
+        const comments = await ctx.issues.listComments(issueId, companyId);
+        const comment = comments.find((c) => c.id === commentId);
+        if (!comment?.body) return { links: [] };
+        return { links: extractFilePaths(comment.body) };
+      } catch (err) {
+        ctx.logger.warn("Failed to fetch comment for file link extraction", { commentId, error: String(err) });
+        return { links: [] };
+      }
+    });
 
     ctx.data.register("workspaces", async (params: Record<string, unknown>) => {
       const projectId = params.projectId as string;
@@ -118,7 +176,10 @@ const plugin = definePlugin({
         const projectId = params.projectId as string;
         const companyId = typeof params.companyId === "string" ? params.companyId : "";
         const workspaceId = params.workspaceId as string;
-        const filePath = params.filePath as string;
+        const filePath = typeof params.filePath === "string" ? params.filePath.trim() : "";
+        if (!filePath) {
+          throw new Error("filePath must be a non-empty string");
+        }
         const content = typeof params.content === "string" ? params.content : null;
         if (!projectId || !companyId || !workspaceId) {
           throw new Error("Missing workspace context");

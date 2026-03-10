@@ -107,6 +107,8 @@ const entityScopedZones = new Set<PluginLauncherPlacementZone>([
   "detailTab",
   "taskDetailView",
   "contextMenuItem",
+  "commentAnnotation",
+  "commentContextMenuItem",
   "projectSidebarItem",
 ]);
 const focusableElementSelector = [
@@ -188,6 +190,7 @@ function launcherTriggerClassName(placementZone: PluginLauncherPlacementZone): s
     case "projectSidebarItem":
       return "justify-start h-auto px-3 py-1 text-[12px] font-normal text-muted-foreground hover:text-foreground";
     case "contextMenuItem":
+    case "commentContextMenuItem":
       return "justify-start h-7 w-full px-2 text-xs font-normal";
     case "sidebar":
     case "sidebarPanel":

@@ -258,7 +258,7 @@ describe("Agent Tool Dispatcher — Integration", () => {
         expect(tool.name).toBe("acme.linear:search-issues");
         expect(tool.displayName).toBe("Search Linear Issues");
         expect(tool.description).toBe("Search issues in Linear");
-        expect(tool.pluginId).toBe("acme.linear");
+        expect(tool.pluginId).toBe("uuid-1");
         expect(tool.parametersSchema).toEqual({
           type: "object",
           properties: { query: { type: "string" }, limit: { type: "number" } },

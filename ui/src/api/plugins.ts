@@ -244,7 +244,7 @@ export const pluginsApi = {
     if (options?.level) params.set("level", options.level);
     if (options?.since) params.set("since", options.since);
     const qs = params.toString();
-    return api.get<Array<{ id: number; pluginId: string; level: string; message: string; meta: Record<string, unknown> | null; createdAt: string }>>(
+    return api.get<Array<{ id: string; pluginId: string; level: string; message: string; meta: Record<string, unknown> | null; createdAt: string }>>(
       `/plugins/${pluginId}/logs${qs ? `?${qs}` : ""}`,
     );
   },

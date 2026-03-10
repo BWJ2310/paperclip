@@ -69,6 +69,7 @@ export interface PluginHostContext {
   projectId: string | null;
   entityId: string | null;
   entityType: string | null;
+  parentEntityId?: string | null;
   userId: string | null;
   renderEnvironment?: PluginRenderEnvironmentContext | null;
 }

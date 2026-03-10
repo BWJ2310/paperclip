@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { EventEmitter } from "node:events";
 import { buildHostServices } from "../services/plugin-host-services.js";
 import { companyService } from "../services/companies.js";
 import { agentService } from "../services/agents.js";
@@ -8,6 +9,36 @@ import { projectService } from "../services/projects.js";
 import { pluginRegistryService } from "../services/plugin-registry.js";
 import type { Db } from "@paperclipai/db";
 import type { PluginEventBus } from "../services/plugin-event-bus.js";
+
+const {
+  dnsLookupMock,
+  httpRequestMock,
+  httpsRequestMock,
+} = vi.hoisted(() => ({
+  dnsLookupMock: vi.fn(),
+  httpRequestMock: vi.fn(),
+  httpsRequestMock: vi.fn(),
+}));
+
+vi.mock("node:dns/promises", () => ({
+  lookup: dnsLookupMock,
+}));
+
+vi.mock("node:http", async () => {
+  const actual = await vi.importActual<typeof import("node:http")>("node:http");
+  return {
+    ...actual,
+    request: httpRequestMock,
+  };
+});
+
+vi.mock("node:https", async () => {
+  const actual = await vi.importActual<typeof import("node:https")>("node:https");
+  return {
+    ...actual,
+    request: httpsRequestMock,
+  };
+});
 
 vi.mock("../services/companies.js");
 vi.mock("../services/issues.js");
@@ -36,8 +67,67 @@ function mockRegistryAvailability(
         return Promise.resolve({ available });
       },
     ),
+    getDisabledCompanyIds: vi.fn().mockImplementation(
+      (companyIds: string[]) => {
+        if (!enabledCompanyIds) return Promise.resolve(new Set<string>());
+        const disabled = new Set(companyIds.filter((id) => !enabledCompanyIds.has(id)));
+        return Promise.resolve(disabled);
+      },
+    ),
     getConfig: vi.fn().mockResolvedValue(null),
   });
+}
+
+function mockNodeRequestSuccess(
+  requestMock: ReturnType<typeof vi.fn>,
+  assertOptions: (options: Record<string, unknown>, body: string) => void,
+  responseInit: {
+    statusCode?: number;
+    statusMessage?: string;
+    headers?: Record<string, string>;
+    body?: string;
+  } = {},
+) {
+  requestMock.mockImplementation(
+    (
+      options: Record<string, unknown>,
+      callback: (response: EventEmitter & {
+        statusCode?: number;
+        statusMessage?: string;
+        headers?: Record<string, string>;
+      }) => void,
+    ) => {
+      const response = new EventEmitter() as EventEmitter & {
+        statusCode?: number;
+        statusMessage?: string;
+        headers?: Record<string, string>;
+      };
+      response.statusCode = responseInit.statusCode ?? 200;
+      response.statusMessage = responseInit.statusMessage ?? "OK";
+      response.headers = responseInit.headers ?? { "content-type": "text/plain" };
+
+      let requestBody = "";
+      const request = new EventEmitter() as EventEmitter & {
+        write(chunk: string): void;
+        end(): void;
+      };
+      request.write = (chunk: string) => {
+        requestBody += chunk;
+      };
+      request.end = () => {
+        assertOptions(options, requestBody);
+        callback(response);
+        setTimeout(() => {
+          if (responseInit.body) {
+            response.emit("data", Buffer.from(responseInit.body));
+          }
+          response.emit("end");
+        }, 0);
+      };
+
+      return request;
+    },
+  );
 }
 
 describe("buildHostServices production implementation", () => {
@@ -54,6 +144,9 @@ describe("buildHostServices production implementation", () => {
       }),
     } as any;
     vi.clearAllMocks();
+    dnsLookupMock.mockReset();
+    httpRequestMock.mockReset();
+    httpsRequestMock.mockReset();
     // Default: plugin is available for all companies
     mockRegistryAvailability();
   });
@@ -110,6 +203,58 @@ describe("buildHostServices production implementation", () => {
       entityId: "i1",
       details: { foo: "bar" }
     });
+  });
+
+  it("uses the resolved IP for HTTPS while preserving the original TLS hostname and Host header", async () => {
+    dnsLookupMock.mockResolvedValue([{ address: "203.0.113.10", family: 4 }]);
+    mockNodeRequestSuccess(
+      httpsRequestMock,
+      (options, body) => {
+        expect(options.host).toBe("203.0.113.10");
+        expect(options.port).toBe(8443);
+        expect(options.path).toBe("/v1/data?q=1");
+        expect(options.method).toBe("POST");
+        expect(options.servername).toBe("api.example.com");
+        expect(options.headers).toMatchObject({
+          host: "api.example.com:8443",
+          "x-test": "1",
+          "content-length": String(Buffer.byteLength("payload")),
+        });
+        expect(body).toBe("payload");
+      },
+      { body: "hello from upstream" },
+    );
+
+    const services = buildHostServices(db, pluginId, pluginKey, eventBus);
+    const result = await services.http.fetch({
+      url: "https://api.example.com:8443/v1/data?q=1",
+      init: {
+        method: "POST",
+        headers: { "x-test": "1" },
+        body: "payload",
+      },
+    });
+
+    expect(result).toEqual({
+      status: 200,
+      statusText: "OK",
+      headers: { "content-type": "text/plain" },
+      body: "hello from upstream",
+    });
+    expect(httpRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks outbound requests when DNS resolves to a private IP", async () => {
+    dnsLookupMock.mockResolvedValue([{ address: "127.0.0.1", family: 4 }]);
+
+    const services = buildHostServices(db, pluginId, pluginKey, eventBus);
+
+    await expect(
+      services.http.fetch({ url: "http://example.test/internal" }),
+    ).rejects.toThrow("All resolved IPs for example.test are in private/reserved ranges");
+
+    expect(httpRequestMock).not.toHaveBeenCalled();
+    expect(httpsRequestMock).not.toHaveBeenCalled();
   });
 
   it("ensures companyId for projects.list", async () => {

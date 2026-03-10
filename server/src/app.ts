@@ -35,10 +35,11 @@ import { pluginJobStore } from "./services/plugin-job-store.js";
 import { createPluginToolDispatcher } from "./services/plugin-tool-dispatcher.js";
 import { pluginLifecycleManager } from "./services/plugin-lifecycle.js";
 import { createPluginJobCoordinator } from "./services/plugin-job-coordinator.js";
-import { buildHostServices } from "./services/plugin-host-services.js";
+import { buildHostServices, flushPluginLogBuffer } from "./services/plugin-host-services.js";
 import { createPluginEventBus } from "./services/plugin-event-bus.js";
 import { subscribeDomainEvents, publishGlobalLiveEvent } from "./services/index.js";
 import { createPluginDevWatcher } from "./services/plugin-dev-watcher.js";
+import { createPluginHostServiceCleanup } from "./services/plugin-host-service-cleanup.js";
 import { pluginRegistryService } from "./services/plugin-registry.js";
 import { createHostClientHandlers } from "@paperclipai/plugin-sdk";
 import type { BetterAuthSessionResult } from "./auth/better-auth.js";
@@ -141,6 +142,11 @@ export async function createApp(
   // ---------------------------------------------------------------------------
   // Plugin runtime services — job scheduler, worker manager, tool dispatcher
   // ---------------------------------------------------------------------------
+  // Track host-services dispose callbacks per plugin so we can clean up
+  // leaked session event subscriptions when workers exit.
+  const hostServicesDisposers = new Map<string, () => void>();
+  let hostServiceCleanup: ReturnType<typeof createPluginHostServiceCleanup> | null = null;
+
   const workerManager = createPluginWorkerManager({
     onWorkerEvent(event) {
       publishGlobalLiveEvent({
@@ -152,6 +158,7 @@ export async function createApp(
           willRestart: event.willRestart ?? null,
         },
       });
+      hostServiceCleanup?.handleWorkerEvent(event);
     },
   });
   const eventBus = createPluginEventBus();
@@ -182,6 +189,7 @@ export async function createApp(
     scheduler,
     jobStore,
   });
+  hostServiceCleanup = createPluginHostServiceCleanup(lifecycle, hostServicesDisposers);
 
   // Create the plugin loader with full runtime services
   const loader = pluginLoader(
@@ -207,6 +215,11 @@ export async function createApp(
           if (handle) handle.notify(method, params);
         };
         const services = buildHostServices(db, pluginId, manifest.id, eventBus, notifyWorker);
+
+        // Clean up leaked session event subscriptions when the worker exits.
+        // The app wires crash, stop, and unload signals to `dispose()`.
+        hostServicesDisposers.set(pluginId, () => services.dispose());
+
         return createHostClientHandlers({
           pluginId,
           capabilities: manifest.capabilities,
@@ -357,6 +370,12 @@ export async function createApp(
     scheduler.stop();
     toolDispatcher.teardown();
     await workerManager.stopAll();
+    hostServiceCleanup?.disposeAll();
+    hostServiceCleanup?.teardown();
+    hostServiceCleanup = null;
+
+    // Flush any remaining buffered plugin log entries before exit
+    await flushPluginLogBuffer();
 
     logger.info("Plugin runtime services stopped");
   }

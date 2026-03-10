@@ -20,6 +20,7 @@ import type {
   PluginLauncherBounds,
   PluginLauncherRenderContextSnapshot,
   PluginLauncherRenderEnvironment,
+  PluginStateScopeKind,
   Company,
   Project,
   Issue,
@@ -224,6 +225,8 @@ export interface InitializeParams {
 export interface InitializeResult {
   /** Whether initialization succeeded. */
   ok: boolean;
+  /** Optional methods the worker has implemented (e.g. "validateConfig", "onEvent"). */
+  supportedMethods?: string[];
 }
 
 /**
@@ -431,7 +434,7 @@ export interface WorkerToHostMethods {
   "entities.upsert": [
     params: {
       entityType: string;
-      scopeKind: string;
+      scopeKind: PluginStateScopeKind;
       scopeId?: string;
       externalId?: string;
       title?: string;
@@ -441,7 +444,7 @@ export interface WorkerToHostMethods {
     result: {
       id: string;
       entityType: string;
-      scopeKind: string;
+      scopeKind: PluginStateScopeKind;
       scopeId: string | null;
       externalId: string | null;
       title: string | null;
@@ -454,7 +457,7 @@ export interface WorkerToHostMethods {
   "entities.list": [
     params: {
       entityType?: string;
-      scopeKind?: string;
+      scopeKind?: PluginStateScopeKind;
       scopeId?: string;
       externalId?: string;
       limit?: number;
@@ -463,7 +466,7 @@ export interface WorkerToHostMethods {
     result: Array<{
       id: string;
       entityType: string;
-      scopeKind: string;
+      scopeKind: PluginStateScopeKind;
       scopeId: string | null;
       externalId: string | null;
       title: string | null;
@@ -631,11 +634,11 @@ export interface WorkerToHostMethods {
   // Agent Sessions
   "agents.sessions.create": [
     params: { agentId: string; companyId: string; taskKey?: string; reason?: string },
-    result: { sessionId: string; agentId: string; companyId: string; status: string; createdAt: string },
+    result: { sessionId: string; agentId: string; companyId: string; status: "active" | "closed"; createdAt: string },
   ];
   "agents.sessions.list": [
     params: { agentId: string; companyId: string },
-    result: Array<{ sessionId: string; agentId: string; companyId: string; status: string; createdAt: string }>,
+    result: Array<{ sessionId: string; agentId: string; companyId: string; status: "active" | "closed"; createdAt: string }>,
   ];
   "agents.sessions.sendMessage": [
     params: { sessionId: string; companyId: string; prompt: string; reason?: string },

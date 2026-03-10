@@ -330,7 +330,8 @@ The manifest module (commonly `src/manifest.ts`, compiled to `dist/manifest.js`)
 | `webhooks` | No | Webhook endpoint declarations. Requires `webhooks.receive` capability. |
 | `tools` | No | Agent tool declarations. Requires `agent.tools.register` capability. |
 | `uiSlots` | No | UI extension slot declarations. |
-| `minimumPaperclipVersion` | No | Minimum Paperclip host version required (semver). |
+| `minimumHostVersion` | No | Minimum Paperclip host version required (semver). Preferred field. |
+| `minimumPaperclipVersion` | No | Legacy alias for `minimumHostVersion`. If both are provided they must match. |
 
 ---
 
@@ -820,7 +821,7 @@ ctx.data.register("sync-health", async ({ companyId }) => {
 ctx.actions.register("resync", async ({ companyId }) => {
   ctx.logger.info("Manual resync triggered", { companyId });
   // Queue a sync job or trigger a sync immediately
-  await ctx.events.emit("manual-resync", { companyId });
+  await ctx.events.emit("manual-resync", companyId, { triggered: true });
   return { triggered: true };
 });
 ```
@@ -952,11 +953,143 @@ Each UI slot type has a corresponding prop interface:
 | `detailTab` | `PluginDetailTabProps` | Additional tab on a project/issue/agent/goal/run detail page. |
 | `sidebar` | `PluginSidebarProps` | Sidebar link or section. |
 | `settingsPage` | `PluginSettingsPageProps` | Custom settings page for the plugin. |
+| `commentAnnotation` | `PluginCommentAnnotationProps` | Per-comment annotation below each comment in the issue timeline. |
+| `commentContextMenuItem` | `PluginCommentContextMenuItemProps` | Per-comment context menu item in the comment "more" dropdown. |
 | `projectSidebarItem` | `PluginProjectSidebarItemProps` | Project-scoped launcher rendered under each project row in the sidebar. |
 
 The current UI also mounts `taskDetailView`, `toolbarButton`, `contextMenuItem`, and `sidebarPanel` slots. Those surfaces currently receive the same `context` shape available through `useHostContext()`, so plugin components can author against the hook even when there is not a dedicated exported prop alias yet.
 
+#### Comment annotations
+
+The `commentAnnotation` slot renders a plugin-owned region **below each individual comment** in the issue detail timeline. Use this to parse comment bodies and surface extracted data (file links, mentions, sentiment) inline without modifying the host-rendered markdown.
+
+The component receives `PluginCommentAnnotationProps`:
+
+- `context.entityId` — the comment UUID
+- `context.entityType` — always `"comment"`
+- `context.parentEntityId` — the parent issue UUID
+- `context.companyId` — the active company
+- `context.companyPrefix` — the active company slug (e.g. `"ACME"`)
+- `context.projectId` — the issue's project UUID (if any)
+
+> **Important:** Plugins declaring `commentAnnotation` slots must also include `issue.comments.read` in their capabilities to access comment bodies. The host validates this dependency at installation time.
+
+Declare the slot with `entityTypes: ["comment"]` and capability `ui.commentAnnotation.register`:
+
+```ts
+const manifest: PaperclipPluginManifestV1 = {
+  // ...
+  capabilities: ["ui.commentAnnotation.register", "issue.comments.read"],
+  entrypoints: {
+    worker: "./dist/worker.js",
+    ui: "./dist/ui",
+  },
+  ui: {
+    slots: [
+      {
+        type: "commentAnnotation",
+        id: "file-links",
+        displayName: "File Links",
+        exportName: "FileLinksAnnotation",
+        entityTypes: ["comment"],
+      },
+    ],
+  },
+};
+```
+
+Minimal React component:
+
+```tsx
+import type { PluginCommentAnnotationProps } from "@paperclipai/plugin-sdk/ui";
+import { usePluginData } from "@paperclipai/plugin-sdk/ui";
+
+export function FileLinksAnnotation({ context }: PluginCommentAnnotationProps) {
+  const { data } = usePluginData<{ links: string[] }>("comment-file-links", {
+    commentId: context.entityId,
+    issueId: context.parentEntityId,
+    companyId: context.companyId,
+  });
+
+  if (!data?.links?.length) return null;
+
+  return (
+    <div className="flex flex-wrap gap-1">
+      {data.links.map((link) => (
+        <a key={link} href={link} className="text-xs text-primary hover:underline">
+          {link}
+        </a>
+      ))}
+    </div>
+  );
+}
+```
+
 Declare which export name maps to each slot in the manifest `ui.slots` array.
+
+#### Comment context menu items
+
+The `commentContextMenuItem` slot renders a plugin-owned item in the **"more" (⋮) dropdown menu** on each comment in the issue detail timeline. Use this to add per-comment actions like "Create sub-issue from comment", "Translate", "Flag for review", or any custom plugin action. Plugins can open drawers, modals, or popovers scoped to that comment.
+
+The component receives `PluginCommentContextMenuItemProps`:
+
+- `context.entityId` — the comment UUID
+- `context.entityType` — always `"comment"`
+- `context.parentEntityId` — the parent issue UUID
+- `context.companyId` — the active company
+- `context.companyPrefix` — the active company slug (e.g. `"ACME"`)
+- `context.projectId` — the issue's project UUID (if any)
+
+The ⋮ menu button only appears on comments where at least one registered plugin renders visible content.
+
+Declare the slot with `entityTypes: ["comment"]` and capability `ui.action.register`:
+
+```ts
+const manifest: PaperclipPluginManifestV1 = {
+  // ...
+  capabilities: ["ui.action.register", "issue.comments.read"],
+  entrypoints: {
+    worker: "./dist/worker.js",
+    ui: "./dist/ui",
+  },
+  ui: {
+    slots: [
+      {
+        type: "commentContextMenuItem",
+        id: "translate-comment",
+        displayName: "Translate Comment",
+        exportName: "TranslateCommentAction",
+        entityTypes: ["comment"],
+      },
+    ],
+  },
+};
+```
+
+Minimal React component:
+
+```tsx
+import type { PluginCommentContextMenuItemProps } from "@paperclipai/plugin-sdk/ui";
+import { usePluginAction } from "@paperclipai/plugin-sdk/ui";
+
+export function TranslateCommentAction({ context }: PluginCommentContextMenuItemProps) {
+  const translate = usePluginAction("translate-comment");
+
+  return (
+    <button
+      className="w-full text-left px-2 py-1 text-xs hover:bg-accent rounded"
+      onClick={() =>
+        translate({
+          commentId: context.entityId,
+          issueId: context.parentEntityId,
+        })
+      }
+    >
+      Translate Comment
+    </button>
+  );
+}
+```
 
 ### Declarative Launchers
 
@@ -1312,7 +1445,8 @@ Sandbox/runtime enforcement rules:
 | `ui.page.register` | Page slot |
 | `ui.detailTab.register` | Detail tab slot |
 | `ui.dashboardWidget.register` | Dashboard widget slot |
-| `ui.action.register` | UI action contributions |
+| `ui.commentAnnotation.register` | Comment annotation slot |
+| `ui.action.register` | UI action contributions (incl. `commentContextMenuItem`) |
 
 ---
 
@@ -1450,7 +1584,7 @@ A plugin can emit events that other plugins subscribe to:
 
 ```ts
 // Emitter plugin (acme.linear-sync)
-await ctx.events.emit("sync-complete", { syncedCount: 42 });
+await ctx.events.emit("sync-complete", companyId, { syncedCount: 42 });
 // Full event type becomes: "plugin.acme.linear-sync.sync-complete"
 
 // Subscriber plugin

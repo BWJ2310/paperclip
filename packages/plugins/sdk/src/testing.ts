@@ -164,14 +164,20 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
       },
     },
     events: {
-      on(name: PluginEventType | `plugin.${string}`, filterOrFn: EventFilter | ((event: PluginEvent) => Promise<void>), maybeFn?: (event: PluginEvent) => Promise<void>) {
+      on(name: PluginEventType | `plugin.${string}`, filterOrFn: EventFilter | ((event: PluginEvent) => Promise<void>), maybeFn?: (event: PluginEvent) => Promise<void>): () => void {
         requireCapability(manifest, capabilitySet, "events.subscribe");
+        let registration: EventRegistration;
         if (typeof filterOrFn === "function") {
-          events.push({ name, fn: filterOrFn });
-          return;
+          registration = { name, fn: filterOrFn };
+        } else {
+          if (!maybeFn) throw new Error("event handler is required");
+          registration = { name, filter: filterOrFn, fn: maybeFn };
         }
-        if (!maybeFn) throw new Error("event handler is required");
-        events.push({ name, filter: filterOrFn, fn: maybeFn });
+        events.push(registration);
+        return () => {
+          const idx = events.indexOf(registration);
+          if (idx !== -1) events.splice(idx, 1);
+        };
       },
       async emit(name, companyId, payload) {
         requireCapability(manifest, capabilitySet, "events.emit");

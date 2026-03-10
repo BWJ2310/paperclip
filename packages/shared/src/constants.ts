@@ -353,6 +353,7 @@ export const PLUGIN_CAPABILITIES = [
   "ui.page.register",
   "ui.detailTab.register",
   "ui.dashboardWidget.register",
+  "ui.commentAnnotation.register",
   "ui.action.register",
 ] as const;
 export type PluginCapability = (typeof PLUGIN_CAPABILITIES)[number];
@@ -373,6 +374,8 @@ export const PLUGIN_UI_SLOT_TYPES = [
   "projectSidebarItem",
   "toolbarButton",
   "contextMenuItem",
+  "commentAnnotation",
+  "commentContextMenuItem",
   "settingsPage",
 ] as const;
 export type PluginUiSlotType = (typeof PLUGIN_UI_SLOT_TYPES)[number];
@@ -393,6 +396,8 @@ export const PLUGIN_LAUNCHER_PLACEMENT_ZONES = [
   "projectSidebarItem",
   "toolbarButton",
   "contextMenuItem",
+  "commentAnnotation",
+  "commentContextMenuItem",
   "settingsPage",
 ] as const;
 export type PluginLauncherPlacementZone = (typeof PLUGIN_LAUNCHER_PLACEMENT_ZONES)[number];
@@ -448,6 +453,7 @@ export const PLUGIN_UI_SLOT_ENTITY_TYPES = [
   "agent",
   "goal",
   "run",
+  "comment",
 ] as const;
 export type PluginUiSlotEntityType = (typeof PLUGIN_UI_SLOT_ENTITY_TYPES)[number];
 

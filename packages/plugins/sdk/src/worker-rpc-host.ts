@@ -63,6 +63,7 @@ import type {
   JsonRpcRequest,
   JsonRpcResponse,
   InitializeParams,
+  InitializeResult,
   ConfigChangedParams,
   ValidateConfigParams,
   OnEventParams,
@@ -257,7 +258,10 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
   const launcherRegistrations = new Map<string, PluginLauncherRegistration>();
   const dataHandlers = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
   const actionHandlers = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
-  const toolHandlers = new Map<string, (params: unknown, runCtx: ToolRunContext) => Promise<ToolResult>>();
+  const toolHandlers = new Map<string, {
+    declaration: Pick<import("@paperclipai/shared").PluginToolDeclaration, "displayName" | "description" | "parametersSchema">;
+    fn: (params: unknown, runCtx: ToolRunContext) => Promise<ToolResult>;
+  }>();
 
   // Agent session event callbacks (populated by sendMessage, cleared by close)
   const sessionEventCallbacks = new Map<string, (event: AgentSessionEvent) => void>();
@@ -374,13 +378,19 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
           name: string,
           filterOrFn: EventFilter | ((event: PluginEvent) => Promise<void>),
           maybeFn?: (event: PluginEvent) => Promise<void>,
-        ): void {
+        ): () => void {
+          let registration: EventRegistration;
           if (typeof filterOrFn === "function") {
-            eventHandlers.push({ name, fn: filterOrFn });
-            return;
+            registration = { name, fn: filterOrFn };
+          } else {
+            if (!maybeFn) throw new Error("Event handler function is required");
+            registration = { name, filter: filterOrFn, fn: maybeFn };
           }
-          if (!maybeFn) throw new Error("Event handler function is required");
-          eventHandlers.push({ name, filter: filterOrFn, fn: maybeFn });
+          eventHandlers.push(registration);
+          return () => {
+            const idx = eventHandlers.indexOf(registration);
+            if (idx !== -1) eventHandlers.splice(idx, 1);
+          };
         },
 
         async emit(name: string, companyId: string, payload: unknown): Promise<void> {
@@ -518,7 +528,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
             title: input.title,
             status: input.status,
             data: input.data,
-          }) as any;
+          });
         },
 
         async list(query) {
@@ -529,7 +539,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
             externalId: query.externalId,
             limit: query.limit,
             offset: query.offset,
-          }) as any;
+          });
         },
       },
 
@@ -539,23 +549,23 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
             companyId: input.companyId,
             limit: input.limit,
             offset: input.offset,
-          }) as any;
+          });
         },
 
         async get(projectId: string, companyId: string) {
-          return callHost("projects.get", { projectId, companyId }) as any;
+          return callHost("projects.get", { projectId, companyId });
         },
 
         async listWorkspaces(projectId: string, companyId: string) {
-          return callHost("projects.listWorkspaces", { projectId, companyId }) as any;
+          return callHost("projects.listWorkspaces", { projectId, companyId });
         },
 
         async getPrimaryWorkspace(projectId: string, companyId: string) {
-          return callHost("projects.getPrimaryWorkspace", { projectId, companyId }) as any;
+          return callHost("projects.getPrimaryWorkspace", { projectId, companyId });
         },
 
         async getWorkspaceForIssue(issueId: string, companyId: string) {
-          return callHost("projects.getWorkspaceForIssue", { issueId, companyId }) as any;
+          return callHost("projects.getWorkspaceForIssue", { issueId, companyId });
         },
       },
 
@@ -564,11 +574,11 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
           return callHost("companies.list", {
             limit: input?.limit,
             offset: input?.offset,
-          }) as any;
+          });
         },
 
         async get(companyId: string) {
-          return callHost("companies.get", { companyId }) as any;
+          return callHost("companies.get", { companyId });
         },
       },
 
@@ -581,11 +591,11 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
             status: input.status,
             limit: input.limit,
             offset: input.offset,
-          }) as any;
+          });
         },
 
         async get(issueId: string, companyId: string) {
-          return callHost("issues.get", { issueId, companyId }) as any;
+          return callHost("issues.get", { issueId, companyId });
         },
 
         async create(input) {
@@ -598,7 +608,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
             description: input.description,
             priority: input.priority,
             assigneeAgentId: input.assigneeAgentId,
-          }) as any;
+          });
         },
 
         async update(issueId: string, patch, companyId: string) {
@@ -606,15 +616,15 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
             issueId,
             patch: patch as Record<string, unknown>,
             companyId,
-          }) as any;
+          });
         },
 
         async listComments(issueId: string, companyId: string) {
-          return callHost("issues.listComments", { issueId, companyId }) as any;
+          return callHost("issues.listComments", { issueId, companyId });
         },
 
         async createComment(issueId: string, body: string, companyId: string) {
-          return callHost("issues.createComment", { issueId, body, companyId }) as any;
+          return callHost("issues.createComment", { issueId, body, companyId });
         },
       },
 
@@ -625,23 +635,23 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
             status: input.status,
             limit: input.limit,
             offset: input.offset,
-          }) as any;
+          });
         },
 
         async get(agentId: string, companyId: string) {
-          return callHost("agents.get", { agentId, companyId }) as any;
+          return callHost("agents.get", { agentId, companyId });
         },
 
         async pause(agentId: string, companyId: string) {
-          return callHost("agents.pause", { agentId, companyId }) as any;
+          return callHost("agents.pause", { agentId, companyId });
         },
 
         async resume(agentId: string, companyId: string) {
-          return callHost("agents.resume", { agentId, companyId }) as any;
+          return callHost("agents.resume", { agentId, companyId });
         },
 
         async invoke(agentId: string, companyId: string, opts: { prompt: string; reason?: string }) {
-          return callHost("agents.invoke", { agentId, companyId, prompt: opts.prompt, reason: opts.reason }) as any;
+          return callHost("agents.invoke", { agentId, companyId, prompt: opts.prompt, reason: opts.reason });
         },
 
         sessions: {
@@ -651,11 +661,11 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
               companyId,
               taskKey: opts?.taskKey,
               reason: opts?.reason,
-            }) as any;
+            });
           },
 
           async list(agentId: string, companyId: string) {
-            return callHost("agents.sessions.list", { agentId, companyId }) as any;
+            return callHost("agents.sessions.list", { agentId, companyId });
           },
 
           async sendMessage(sessionId: string, companyId: string, opts: {
@@ -672,7 +682,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
                 companyId,
                 prompt: opts.prompt,
                 reason: opts.reason,
-              }) as any;
+              });
             } catch (err) {
               sessionEventCallbacks.delete(sessionId);
               throw err;
@@ -694,11 +704,11 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
             status: input.status,
             limit: input.limit,
             offset: input.offset,
-          }) as any;
+          });
         },
 
         async get(goalId: string, companyId: string) {
-          return callHost("goals.get", { goalId, companyId }) as any;
+          return callHost("goals.get", { goalId, companyId });
         },
 
         async create(input) {
@@ -710,7 +720,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
             status: input.status,
             parentId: input.parentId,
             ownerAgentId: input.ownerAgentId,
-          }) as any;
+          });
         },
 
         async update(goalId: string, patch, companyId: string) {
@@ -718,7 +728,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
             goalId,
             patch: patch as Record<string, unknown>,
             companyId,
-          }) as any;
+          });
         },
       },
 
@@ -757,10 +767,10 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
       tools: {
         register(
           name: string,
-          _declaration: any,
+          declaration: Pick<import("@paperclipai/shared").PluginToolDeclaration, "displayName" | "description" | "parametersSchema">,
           fn: (params: unknown, runCtx: ToolRunContext) => Promise<ToolResult>,
         ): void {
-          toolHandlers.set(name, fn);
+          toolHandlers.set(name, { declaration, fn });
         },
       },
 
@@ -868,7 +878,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
   // Host→Worker method handlers
   // -----------------------------------------------------------------------
 
-  async function handleInitialize(params: InitializeParams): Promise<{ ok: boolean }> {
+  async function handleInitialize(params: InitializeParams): Promise<InitializeResult> {
     if (initialized) {
       throw new Error("Worker already initialized");
     }
@@ -880,7 +890,15 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
     await plugin.definition.setup(ctx);
 
     initialized = true;
-    return { ok: true };
+
+    // Report which optional methods this plugin implements
+    const supportedMethods: string[] = [];
+    if (plugin.definition.onValidateConfig) supportedMethods.push("validateConfig");
+    if (plugin.definition.onConfigChanged) supportedMethods.push("configChanged");
+    if (plugin.definition.onHealth) supportedMethods.push("health");
+    if (plugin.definition.onShutdown) supportedMethods.push("shutdown");
+
+    return { ok: true, supportedMethods };
   }
 
   async function handleHealth(): Promise<PluginHealthDiagnostics> {
@@ -1005,11 +1023,11 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
   }
 
   async function handleExecuteTool(params: ExecuteToolParams): Promise<ToolResult> {
-    const handler = toolHandlers.get(params.toolName);
-    if (!handler) {
+    const entry = toolHandlers.get(params.toolName);
+    if (!entry) {
       throw new Error(`No tool handler registered for "${params.toolName}"`);
     }
-    return handler(params.parameters, params.runContext);
+    return entry.fn(params.parameters, params.runContext);
   }
 
   // -----------------------------------------------------------------------
@@ -1020,7 +1038,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
     const payload = event.payload as Record<string, unknown> | undefined;
 
     if (filter.companyId !== undefined) {
-      const companyId = String(payload?.companyId ?? "");
+      const companyId = event.companyId ?? String(payload?.companyId ?? "");
       if (companyId !== filter.companyId) return false;
     }
 

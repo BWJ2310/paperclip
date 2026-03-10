@@ -49,8 +49,14 @@ export const TOOL_NAMESPACE_SEPARATOR = ":";
  * can resolve a namespaced tool name → plugin worker in O(1).
  */
 export interface RegisteredTool {
-  /** The plugin that owns this tool. */
+  /** The plugin key used for namespacing (e.g. `"acme.linear"`). */
   pluginId: string;
+  /**
+   * The plugin's database UUID, used for worker routing and availability
+   * checks. Falls back to `pluginId` when not provided (e.g. in tests
+   * where `id === pluginKey`).
+   */
+  pluginDbId: string;
   /** The tool's bare name (without namespace prefix). */
   name: string;
   /** Fully namespaced identifier: `"<pluginId>:<toolName>"`. */
@@ -103,8 +109,10 @@ export interface PluginToolRegistry {
    *
    * @param pluginId - The plugin's unique identifier (e.g. `"acme.linear"`)
    * @param manifest - The plugin manifest containing the `tools` array
+   * @param pluginDbId - The plugin's database UUID, used for worker routing
+   *   and availability checks. If omitted, `pluginId` is used (backwards-compat).
    */
-  registerPlugin(pluginId: string, manifest: PaperclipPluginManifestV1): void;
+  registerPlugin(pluginId: string, manifest: PaperclipPluginManifestV1, pluginDbId?: string): void;
 
   /**
    * Remove all tool registrations for a plugin.
@@ -246,11 +254,12 @@ export function createPluginToolRegistry(
     };
   }
 
-  function addTool(pluginId: string, decl: PluginToolDeclaration): void {
+  function addTool(pluginId: string, decl: PluginToolDeclaration, pluginDbId: string): void {
     const namespacedName = buildName(pluginId, decl.name);
 
     const entry: RegisteredTool = {
       pluginId,
+      pluginDbId,
       name: decl.name,
       namespacedName,
       displayName: decl.displayName,
@@ -286,7 +295,9 @@ export function createPluginToolRegistry(
   // -----------------------------------------------------------------------
 
   return {
-    registerPlugin(pluginId: string, manifest: PaperclipPluginManifestV1): void {
+    registerPlugin(pluginId: string, manifest: PaperclipPluginManifestV1, pluginDbId?: string): void {
+      const dbId = pluginDbId ?? pluginId;
+
       // Remove any previously registered tools for this plugin (idempotent)
       const previousCount = removePluginTools(pluginId);
       if (previousCount > 0) {
@@ -303,7 +314,7 @@ export function createPluginToolRegistry(
       }
 
       for (const decl of tools) {
-        addTool(pluginId, decl);
+        addTool(pluginId, decl, dbId);
       }
 
       log.info(
@@ -390,8 +401,9 @@ export function createPluginToolRegistry(
         );
       }
 
-      // 4. Verify the plugin worker is running
-      if (!workerManager.isRunning(pluginId)) {
+      // 4. Verify the plugin worker is running (use DB UUID for worker lookup)
+      const dbId = tool.pluginDbId;
+      if (!workerManager.isRunning(dbId)) {
         throw new Error(
           `Cannot execute tool "${namespacedName}" — ` +
           `worker for plugin "${pluginId}" is not running.`,
@@ -400,7 +412,7 @@ export function createPluginToolRegistry(
 
       // 5. Dispatch the executeTool RPC call to the worker
       log.debug(
-        { pluginId, toolName, namespacedName, agentId: runContext.agentId, runId: runContext.runId },
+        { pluginId, pluginDbId: dbId, toolName, namespacedName, agentId: runContext.agentId, runId: runContext.runId },
         "executing tool via plugin worker",
       );
 
@@ -410,7 +422,7 @@ export function createPluginToolRegistry(
         runContext,
       };
 
-      const result = await workerManager.call(pluginId, "executeTool", rpcParams);
+      const result = await workerManager.call(dbId, "executeTool", rpcParams);
 
       log.debug(
         {

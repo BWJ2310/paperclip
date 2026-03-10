@@ -4,7 +4,7 @@ import { Puzzle, ArrowLeft, ShieldAlert, ActivitySquare, CheckCircle, XCircle, L
 import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { Link, useParams } from "@/lib/router";
-import { PluginSlotOutlet, usePluginSlots } from "@/plugins/slots";
+import { PluginSlotMount, usePluginSlots } from "@/plugins/slots";
 import { pluginsApi } from "@/api/plugins";
 import { queryKeys } from "@/lib/queryKeys";
 import { Button } from "@/components/ui/button";
@@ -45,7 +45,7 @@ import {
  * - `GET /api/plugins/:pluginId/dashboard` — aggregated runtime dashboard data (polling).
  * - `GET /api/plugins/:pluginId/config` — current config values.
  * - `POST /api/plugins/:pluginId/config` — save config values.
- * - `POST /api/plugins/:pluginId/config/test` — test connection.
+ * - `POST /api/plugins/:pluginId/config/test` — test configuration.
  *
  * URL params:
  * - `companyPrefix` — the company slug (for breadcrumb links).
@@ -189,15 +189,19 @@ export function PluginSettings() {
             <CardContent>
               {hasCustomSettingsPage ? (
                 /* Plugin declares a custom settingsPage slot — render that */
-                <PluginSlotOutlet
-                  slotTypes={["settingsPage"]}
-                  context={{
-                    companyId: selectedCompanyId,
-                    companyPrefix: companyPrefix ?? null,
-                  }}
-                  className="space-y-3"
-                  missingBehavior="placeholder"
-                />
+                <div className="space-y-3">
+                  {pluginSlots.map((slot) => (
+                    <PluginSlotMount
+                      key={`${slot.pluginKey}:${slot.id}`}
+                      slot={slot}
+                      context={{
+                        companyId: selectedCompanyId,
+                        companyPrefix: companyPrefix ?? null,
+                      }}
+                      missingBehavior="placeholder"
+                    />
+                  ))}
+                </div>
               ) : hasConfigSchema ? (
                 /* Auto-generate form from instanceConfigSchema */
                 <PluginConfigForm
@@ -206,6 +210,7 @@ export function PluginSettings() {
                   initialValues={configData?.configJson}
                   isLoading={configLoading}
                   pluginStatus={plugin.status}
+                  supportsConfigTest={(plugin as unknown as { supportsConfigTest?: boolean }).supportsConfigTest === true}
                 />
               ) : (
                 <p className="text-sm text-muted-foreground">
@@ -479,18 +484,20 @@ interface PluginConfigFormProps {
   schema: JsonSchemaNode;
   initialValues?: Record<string, unknown>;
   isLoading?: boolean;
-  /** Current plugin lifecycle status — "Test Connection" only available when `ready`. */
+  /** Current plugin lifecycle status — "Test Configuration" only available when `ready`. */
   pluginStatus?: string;
+  /** Whether the plugin worker implements `validateConfig`. */
+  supportsConfigTest?: boolean;
 }
 
 /**
- * Inner component that manages form state, validation, save, and "Test Connection"
+ * Inner component that manages form state, validation, save, and "Test Configuration"
  * for the auto-generated plugin config form.
  *
  * Separated from PluginSettings to isolate re-render scope — only the form
  * re-renders on field changes, not the entire page.
  */
-function PluginConfigForm({ pluginId, schema, initialValues, isLoading, pluginStatus }: PluginConfigFormProps) {
+function PluginConfigForm({ pluginId, schema, initialValues, isLoading, pluginStatus, supportsConfigTest }: PluginConfigFormProps) {
   const queryClient = useQueryClient();
 
   // Form values: start with saved values, fall back to schema defaults
@@ -539,19 +546,19 @@ function PluginConfigForm({ pluginId, schema, initialValues, isLoading, pluginSt
     },
   });
 
-  // Test connection mutation
+  // Test configuration mutation
   const testMutation = useMutation({
     mutationFn: (configJson: Record<string, unknown>) =>
       pluginsApi.testConfig(pluginId, configJson),
     onSuccess: (result) => {
       if (result.valid) {
-        setTestResult({ type: "success", text: "Connection test passed." });
+        setTestResult({ type: "success", text: "Configuration test passed." });
       } else {
-        setTestResult({ type: "error", text: result.message || "Connection test failed." });
+        setTestResult({ type: "error", text: result.message || "Configuration test failed." });
       }
     },
     onError: (err: Error) => {
-      setTestResult({ type: "error", text: err.message || "Connection test failed." });
+      setTestResult({ type: "error", text: err.message || "Configuration test failed." });
     },
   });
 
@@ -645,7 +652,7 @@ function PluginConfigForm({ pluginId, schema, initialValues, isLoading, pluginSt
             "Save Configuration"
           )}
         </Button>
-        {pluginStatus === "ready" && (
+        {pluginStatus === "ready" && supportsConfigTest && (
           <Button
             variant="outline"
             onClick={handleTestConnection}
@@ -658,7 +665,7 @@ function PluginConfigForm({ pluginId, schema, initialValues, isLoading, pluginSt
                 Testing...
               </>
             ) : (
-              "Test Connection"
+              "Test Configuration"
             )}
           </Button>
         )}

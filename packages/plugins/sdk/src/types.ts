@@ -333,7 +333,7 @@ export interface PluginEventsClient {
    * @param name - Event type, e.g. `"issue.created"` or `"plugin.@acme/linear.sync-done"`
    * @param fn - Async event handler
    */
-  on(name: PluginEventType | `plugin.${string}`, fn: (event: PluginEvent) => Promise<void>): void;
+  on(name: PluginEventType | `plugin.${string}`, fn: (event: PluginEvent) => Promise<void>): () => void;
 
   /**
    * Subscribe to an event with an optional server-side filter.
@@ -341,8 +341,9 @@ export interface PluginEventsClient {
    * @param name - Event type
    * @param filter - Server-side filter evaluated before dispatching to the worker
    * @param fn - Async event handler
+   * @returns An unsubscribe function that removes the handler
    */
-  on(name: PluginEventType | `plugin.${string}`, filter: EventFilter, fn: (event: PluginEvent) => Promise<void>): void;
+  on(name: PluginEventType | `plugin.${string}`, filter: EventFilter, fn: (event: PluginEvent) => Promise<void>): () => void;
 
   /**
    * Emit a plugin-namespaced event. Other plugins with `events.subscribe` can

@@ -1,8 +1,9 @@
-import { memo, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { Link, useLocation } from "react-router-dom";
 import type { IssueComment, Agent } from "@paperclipai/shared";
+import type { PluginUiContribution } from "@/api/plugins";
 import { Button } from "@/components/ui/button";
-import { Check, Copy, Paperclip } from "lucide-react";
+import { Check, Copy, MoreHorizontal, Paperclip } from "lucide-react";
 import { Identity } from "./Identity";
 import { InlineEntitySelector, type InlineEntityOption } from "./InlineEntitySelector";
 import { MarkdownBody } from "./MarkdownBody";
@@ -10,6 +11,8 @@ import { MarkdownEditor, type MarkdownEditorRef, type MentionOption } from "./Ma
 import { StatusBadge } from "./StatusBadge";
 import { AgentIcon } from "./AgentIconPicker";
 import { formatDateTime } from "../lib/utils";
+import { PluginSlotMount, type ResolvedPluginSlot } from "@/plugins/slots";
+import { PluginLauncherButton, type ResolvedPluginLauncher } from "@/plugins/launchers";
 
 interface CommentWithRunMeta extends IssueComment {
   runId?: string | null;
@@ -44,6 +47,22 @@ interface CommentThreadProps {
   reassignOptions?: InlineEntityOption[];
   currentAssigneeValue?: string;
   mentions?: MentionOption[];
+  /** Plugin annotation slots to render below each comment. */
+  commentAnnotationSlots?: ResolvedPluginSlot[];
+  /** Plugin context menu item slots to render in the per-comment "more" menu. */
+  commentContextMenuSlots?: ResolvedPluginSlot[];
+  /** Plugin context menu launchers to render in the per-comment "more" menu. */
+  commentContextMenuLaunchers?: ResolvedPluginLauncher[];
+  /** Launcher contribution metadata keyed by pluginId, for rendering launcher buttons. */
+  commentLauncherContributions?: Map<string, PluginUiContribution>;
+  /** Parent issue ID, required for comment annotation slot context. */
+  issueId?: string;
+  /** Company ID for annotation slot context. */
+  companyId?: string;
+  /** Project ID for navigation context in plugin slots. */
+  projectId?: string;
+  /** Company prefix for plugin slot navigation context. */
+  companyPrefix?: string;
 }
 
 const CLOSED_STATUSES = new Set(["done", "cancelled"]);
@@ -111,6 +130,179 @@ function CopyMarkdownButton({ text }: { text: string }) {
   );
 }
 
+function CommentMoreMenu({
+  commentId,
+  issueId,
+  companyId,
+  projectId,
+  companyPrefix,
+  contextMenuSlots,
+  contextMenuLaunchers,
+  launcherContributions,
+}: {
+  commentId: string;
+  issueId: string;
+  companyId?: string;
+  projectId?: string;
+  companyPrefix?: string;
+  contextMenuSlots?: ResolvedPluginSlot[];
+  contextMenuLaunchers?: ResolvedPluginLauncher[];
+  launcherContributions?: Map<string, PluginUiContribution>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [hasContent, setHasContent] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+
+  const slotContext = useMemo(() => ({
+    companyId: companyId ?? null,
+    companyPrefix: companyPrefix ?? null,
+    entityId: commentId,
+    entityType: "comment" as const,
+    parentEntityId: issueId,
+    projectId: projectId ?? null,
+  }), [companyId, companyPrefix, commentId, issueId, projectId]);
+
+  const launcherContext = useMemo(() => ({
+    companyId: companyId ?? undefined,
+    entityId: commentId,
+    entityType: "comment" as const,
+  }), [companyId, commentId]);
+
+  const renderItems = useCallback((onActivated?: () => void) => (
+    <>
+      {contextMenuLaunchers?.map((launcher) => {
+        const contribution = launcherContributions?.get(launcher.pluginId);
+        if (!contribution) return null;
+        return (
+          <PluginLauncherButton
+            key={`${launcher.pluginKey}:${launcher.id}:${commentId}`}
+            launcher={launcher}
+            contribution={contribution}
+            context={launcherContext}
+            onActivated={onActivated}
+          />
+        );
+      })}
+      {contextMenuSlots?.map((slot) => (
+        <PluginSlotMount
+          key={`${slot.pluginKey}:${slot.id}:${commentId}`}
+          slot={slot}
+          context={slotContext}
+        />
+      ))}
+    </>
+  ), [contextMenuLaunchers, contextMenuSlots, launcherContributions, commentId, slotContext, launcherContext]);
+
+  const updateMenuPosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = contentRef.current?.offsetWidth ?? 192;
+    const menuHeight = contentRef.current?.offsetHeight ?? 0;
+    const margin = 8;
+    const spaceBelow = window.innerHeight - rect.bottom - margin;
+    const left = Math.max(
+      margin,
+      Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - margin),
+    );
+    const top = menuHeight > 0 && spaceBelow < menuHeight
+      ? Math.max(margin, rect.top - menuHeight - 4)
+      : rect.bottom + 4;
+
+    setMenuPosition({ top, left });
+  }, []);
+
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+
+    const check = () => {
+      const visible = el.childElementCount > 0 || (el.textContent?.trim().length ?? 0) > 0;
+      setHasContent(visible);
+      if (!visible) setOpen(false);
+    };
+
+    const observer = new MutationObserver(check);
+    observer.observe(el, { childList: true, subtree: true, characterData: true });
+    check();
+
+    return () => observer.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    updateMenuPosition();
+  }, [open, updateMenuPosition]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (contentRef.current?.contains(target)) return;
+      if (triggerRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+
+    const handleViewportChange = () => updateMenuPosition();
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
+  }, [open, updateMenuPosition]);
+
+  return (
+    <>
+      {hasContent && (
+        <button
+          ref={triggerRef}
+          type="button"
+          className="text-muted-foreground hover:text-foreground transition-colors"
+          title="Comment actions"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          onClick={() => {
+            if (open) {
+              setOpen(false);
+              return;
+            }
+            setMenuPosition(null);
+            setOpen(true);
+          }}
+        >
+          <MoreHorizontal className="h-3 w-3" />
+        </button>
+      )}
+      <div
+        ref={contentRef}
+        role={open ? "menu" : undefined}
+        style={open ? { ...(menuPosition ?? {}), visibility: menuPosition ? "visible" : "hidden" } : undefined}
+        className={`w-48 rounded-md border bg-popover p-1 text-popover-foreground shadow-md ${open ? "fixed z-50 space-y-0.5" : "hidden"}`}
+      >
+        {renderItems(() => setOpen(false))}
+      </div>
+    </>
+  );
+}
+
 type TimelineItem =
   | { kind: "comment"; id: string; createdAtMs: number; comment: CommentWithRunMeta }
   | { kind: "run"; id: string; createdAtMs: number; run: LinkedRunItem };
@@ -119,11 +311,29 @@ const TimelineList = memo(function TimelineList({
   timeline,
   agentMap,
   highlightCommentId,
+  commentAnnotationSlots,
+  commentContextMenuSlots,
+  commentContextMenuLaunchers,
+  commentLauncherContributions,
+  issueId,
+  companyId,
+  projectId,
+  companyPrefix,
 }: {
   timeline: TimelineItem[];
   agentMap?: Map<string, Agent>;
   highlightCommentId?: string | null;
+  commentAnnotationSlots?: ResolvedPluginSlot[];
+  commentContextMenuSlots?: ResolvedPluginSlot[];
+  commentContextMenuLaunchers?: ResolvedPluginLauncher[];
+  commentLauncherContributions?: Map<string, PluginUiContribution>;
+  issueId?: string;
+  companyId?: string;
+  projectId?: string;
+  companyPrefix?: string;
 }) {
+  const hasContextMenu = (commentContextMenuSlots && commentContextMenuSlots.length > 0)
+    || (commentContextMenuLaunchers && commentContextMenuLaunchers.length > 0);
   if (timeline.length === 0) {
     return <p className="text-sm text-muted-foreground">No comments or runs yet.</p>;
   }
@@ -187,6 +397,18 @@ const TimelineList = memo(function TimelineList({
                   {formatDateTime(comment.createdAt)}
                 </a>
                 <CopyMarkdownButton text={comment.body} />
+                {hasContextMenu && issueId && (
+                  <CommentMoreMenu
+                    commentId={comment.id}
+                    issueId={issueId}
+                    companyId={companyId}
+                    projectId={projectId}
+                    companyPrefix={companyPrefix}
+                    contextMenuSlots={commentContextMenuSlots}
+                    contextMenuLaunchers={commentContextMenuLaunchers}
+                    launcherContributions={commentLauncherContributions}
+                  />
+                )}
               </span>
             </div>
             <MarkdownBody className="text-sm">{comment.body}</MarkdownBody>
@@ -204,6 +426,25 @@ const TimelineList = memo(function TimelineList({
                     run {comment.runId.slice(0, 8)}
                   </span>
                 )}
+              </div>
+            )}
+            {commentAnnotationSlots && commentAnnotationSlots.length > 0 && issueId && (
+              <div className="mt-2 pt-2 border-t border-border/60 space-y-1">
+                {commentAnnotationSlots.map((slot) => (
+                  <PluginSlotMount
+                    key={`${slot.pluginKey}:${slot.id}:${comment.id}`}
+                    slot={slot}
+                    context={{
+                      companyId: companyId ?? null,
+                      companyPrefix: companyPrefix ?? null,
+                      entityId: comment.id,
+                      entityType: "comment",
+                      parentEntityId: issueId,
+                      projectId: projectId ?? null,
+                    }}
+                    missingBehavior="hidden"
+                  />
+                ))}
               </div>
             )}
           </div>
@@ -227,6 +468,14 @@ export function CommentThread({
   reassignOptions = [],
   currentAssigneeValue = "",
   mentions: providedMentions,
+  commentAnnotationSlots,
+  commentContextMenuSlots,
+  commentContextMenuLaunchers,
+  commentLauncherContributions,
+  issueId,
+  companyId,
+  projectId,
+  companyPrefix,
 }: CommentThreadProps) {
   const [body, setBody] = useState("");
   const [reopen, setReopen] = useState(true);
@@ -351,7 +600,7 @@ export function CommentThread({
     <div className="space-y-4">
       <h3 className="text-sm font-semibold">Comments &amp; Runs ({timeline.length})</h3>
 
-      <TimelineList timeline={timeline} agentMap={agentMap} highlightCommentId={highlightCommentId} />
+      <TimelineList timeline={timeline} agentMap={agentMap} highlightCommentId={highlightCommentId} commentAnnotationSlots={commentAnnotationSlots} commentContextMenuSlots={commentContextMenuSlots} commentContextMenuLaunchers={commentContextMenuLaunchers} commentLauncherContributions={commentLauncherContributions} issueId={issueId} companyId={companyId} projectId={projectId} companyPrefix={companyPrefix} />
 
       {liveRunSlot}
 

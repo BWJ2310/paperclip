@@ -80,6 +80,8 @@ describe("0026_plugin_tables.sql — CREATE TABLE statements", () => {
     "plugin_jobs",
     "plugin_job_runs",
     "plugin_webhook_deliveries",
+    "plugin_company_settings",
+    "plugin_logs",
   ] as const;
 
   for (const tableName of expectedTables) {
@@ -89,10 +91,10 @@ describe("0026_plugin_tables.sql — CREATE TABLE statements", () => {
     });
   }
 
-  it("creates exactly 7 tables (no extra, no missing)", async () => {
+  it("creates exactly 9 tables (no extra, no missing)", async () => {
     const content = await readMigrationSql();
     const createTableMatches = content.match(/CREATE TABLE "[^"]+"/g) ?? [];
-    expect(createTableMatches).toHaveLength(7);
+    expect(createTableMatches).toHaveLength(9);
   });
 });
 
@@ -114,6 +116,11 @@ describe("plugins table — column definitions", () => {
   it("has a non-null 'package_name' text column", async () => {
     const content = await readMigrationSql();
     expect(content).toContain('"package_name" text NOT NULL');
+  });
+
+  it("has a nullable 'package_path' text column", async () => {
+    const content = await readMigrationSql();
+    expect(content).toContain('"package_path" text');
   });
 
   it("has an 'api_version' integer column defaulting to 1", async () => {
@@ -195,6 +202,9 @@ describe("0026_plugin_tables.sql — foreign key constraints", () => {
     { constraint: "plugin_job_runs_job_id_plugin_jobs_id_fk", table: "plugin_job_runs", references: "plugin_jobs" },
     { constraint: "plugin_job_runs_plugin_id_plugins_id_fk", table: "plugin_job_runs", references: "plugins" },
     { constraint: "plugin_webhook_deliveries_plugin_id_plugins_id_fk", table: "plugin_webhook_deliveries", references: "plugins" },
+    { constraint: "plugin_company_settings_company_id_companies_id_fk", table: "plugin_company_settings", references: "companies" },
+    { constraint: "plugin_company_settings_plugin_id_plugins_id_fk", table: "plugin_company_settings", references: "plugins" },
+    { constraint: "plugin_logs_plugin_id_plugins_id_fk", table: "plugin_logs", references: "plugins" },
   ];
 
   for (const { constraint, table, references } of expectedForeignKeys) {
@@ -216,6 +226,7 @@ describe("0026_plugin_tables.sql — CREATE UNIQUE INDEX statements", () => {
     { name: "plugin_config_plugin_id_idx", table: "plugin_config", columns: '"plugin_id"' },
     { name: "plugin_entities_external_idx", table: "plugin_entities", columns: '"plugin_id","entity_type","external_id"' },
     { name: "plugin_jobs_unique_idx", table: "plugin_jobs", columns: '"plugin_id","job_key"' },
+    { name: "plugin_company_settings_company_plugin_uq", table: "plugin_company_settings", columns: '"company_id","plugin_id"' },
   ];
 
   for (const { name, table, columns } of expectedUniqueIndexes) {
@@ -245,6 +256,10 @@ describe("0026_plugin_tables.sql — CREATE INDEX statements (non-unique)", () =
     { name: "plugin_webhook_deliveries_status_idx", table: "plugin_webhook_deliveries", columns: '"status"' },
     { name: "plugin_webhook_deliveries_key_idx", table: "plugin_webhook_deliveries", columns: '"webhook_key"' },
     { name: "plugin_state_plugin_scope_idx", table: "plugin_state", columns: '"plugin_id","scope_kind"' },
+    { name: "plugin_company_settings_company_idx", table: "plugin_company_settings", columns: '"company_id"' },
+    { name: "plugin_company_settings_plugin_idx", table: "plugin_company_settings", columns: '"plugin_id"' },
+    { name: "plugin_logs_plugin_time_idx", table: "plugin_logs", columns: '"plugin_id","created_at"' },
+    { name: "plugin_logs_level_idx", table: "plugin_logs", columns: '"level"' },
   ];
 
   for (const { name, table, columns } of expectedIndexes) {
@@ -353,6 +368,11 @@ describe("schema/index.ts — plugin table exports", () => {
     expect(schema.pluginWebhookDeliveries).toBeDefined();
     expect(typeof schema.pluginWebhookDeliveries).toBe("object");
   });
+
+  it("exports 'pluginLogs' table", () => {
+    expect(schema.pluginLogs).toBeDefined();
+    expect(typeof schema.pluginLogs).toBe("object");
+  });
 });
 
 // ===========================================================================
@@ -394,6 +414,10 @@ describe("Drizzle schema objects — table name correctness", () => {
 
   it("pluginWebhookDeliveries table has the SQL name 'plugin_webhook_deliveries'", () => {
     expect(getTableName(schema.pluginWebhookDeliveries)).toBe("plugin_webhook_deliveries");
+  });
+
+  it("pluginLogs table has the SQL name 'plugin_logs'", () => {
+    expect(getTableName(schema.pluginLogs)).toBe("plugin_logs");
   });
 });
 
@@ -437,8 +461,8 @@ describe("splitMigrationStatements — statement parsing", () => {
   it("the plugin migration produces the correct number of statements", async () => {
     const content = await readMigrationSql();
     const statements = splitMigrationStatements(content);
-    // 7 CREATE TABLE + 7 ALTER TABLE ADD CONSTRAINT (FK) + 17 CREATE INDEX (4 unique + 13 regular)
-    // Total = 7 + 7 + 17 = 31
-    expect(statements.length).toBe(31);
+    // 9 CREATE TABLE + 10 ALTER TABLE ADD CONSTRAINT (FK) + 22 CREATE INDEX (5 unique + 17 regular)
+    // Total = 9 + 10 + 22 = 41
+    expect(statements.length).toBe(41);
   });
 });

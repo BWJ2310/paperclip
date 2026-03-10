@@ -91,6 +91,11 @@ export interface PluginHostContext {
   entityId: string | null;
   /** Type of the current entity (e.g. `"issue"`, `"agent"`). */
   entityType: string | null;
+  /**
+   * UUID of the parent entity when rendering nested slots.
+   * For `commentAnnotation` slots this is the issue ID containing the comment.
+   */
+  parentEntityId?: string | null;
   /** UUID of the current authenticated user. */
   userId: string | null;
   /** Runtime metadata for the host container currently rendering this plugin UI. */
@@ -200,6 +205,56 @@ export interface PluginProjectSidebarItemProps {
   context: PluginHostContext & {
     entityId: string;
     entityType: "project";
+  };
+}
+
+/**
+ * Props passed to a plugin comment annotation component.
+ *
+ * A comment annotation is rendered below each individual comment in the
+ * issue detail timeline. The host passes the comment ID as `entityId`
+ * and `"comment"` as `entityType`, plus the parent issue ID as
+ * `parentEntityId` so the plugin can scope data fetches to both.
+ *
+ * Use this slot to augment comments with parsed file links, sentiment
+ * badges, inline actions, or any per-comment metadata.
+ *
+ * @see PLUGIN_SPEC.md §19.6 — Comment Annotations
+ */
+export interface PluginCommentAnnotationProps {
+  /** Host context with comment and parent issue identifiers. */
+  context: PluginHostContext & {
+    /** UUID of the comment being annotated. */
+    entityId: string;
+    /** Always `"comment"` for comment annotation slots. */
+    entityType: "comment";
+    /** UUID of the parent issue containing this comment. */
+    parentEntityId: string;
+  };
+}
+
+/**
+ * Props passed to a plugin comment context menu item component.
+ *
+ * A comment context menu item is rendered in a "more" dropdown menu on
+ * each comment in the issue detail timeline. The host passes the comment
+ * ID as `entityId` and `"comment"` as `entityType`, plus the parent
+ * issue ID as `parentEntityId`.
+ *
+ * Use this slot to add per-comment actions such as "Create sub-issue from
+ * comment", "Translate", "Flag for review", or any custom plugin action.
+ *
+ * @see PLUGIN_SPEC.md §19.7 — Comment Context Menu Items
+ */
+export interface PluginCommentContextMenuItemProps {
+  /** Host context with comment and parent issue identifiers. */
+  context: PluginHostContext & {
+    /** UUID of the comment this menu item acts on. */
+    entityId: string;
+    /** Always `"comment"` for comment context menu item slots. */
+    entityType: "comment";
+    /** UUID of the parent issue containing this comment. */
+    parentEntityId: string;
   };
 }
 

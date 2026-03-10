@@ -12,7 +12,8 @@ function makeEvent(overrides: Partial<PluginEvent> = {}): PluginEvent {
     eventId: "evt-1",
     eventType: "issue.created",
     occurredAt: "2024-01-01T00:00:00.000Z",
-    payload: { title: "Test Issue", projectId: "proj-1", companyId: "comp-1" },
+    companyId: "comp-1",
+    payload: { title: "Test Issue", projectId: "proj-1" },
     ...overrides,
   };
 }
@@ -134,7 +135,7 @@ describe("createPluginEventBus", () => {
       expect(handler).toHaveBeenCalledTimes(1);
     });
 
-    it("delivers event when companyId filter matches payload.companyId", async () => {
+    it("delivers event when companyId filter matches event.companyId", async () => {
       const handler = vi.fn().mockResolvedValue(undefined);
       bus.forPlugin("plugin-a").subscribe(
         "issue.created",
@@ -142,7 +143,7 @@ describe("createPluginEventBus", () => {
         handler,
       );
 
-      await bus.emit(makeEvent({ payload: { companyId: "comp-1" } }));
+      await bus.emit(makeEvent({ companyId: "comp-1" }));
 
       expect(handler).toHaveBeenCalledTimes(1);
     });
@@ -155,7 +156,7 @@ describe("createPluginEventBus", () => {
         handler,
       );
 
-      await bus.emit(makeEvent({ payload: { companyId: "comp-1" } }));
+      await bus.emit(makeEvent({ companyId: "comp-1" }));
 
       expect(handler).not.toHaveBeenCalled();
     });
@@ -203,12 +204,87 @@ describe("createPluginEventBus", () => {
       );
 
       // Both match
-      await bus.emit(makeEvent({ payload: { projectId: "proj-1", companyId: "comp-1" } }));
+      await bus.emit(makeEvent({ companyId: "comp-1", payload: { projectId: "proj-1" } }));
       expect(handler).toHaveBeenCalledTimes(1);
 
       // Only one matches
-      await bus.emit(makeEvent({ payload: { projectId: "proj-1", companyId: "comp-99" } }));
+      await bus.emit(makeEvent({ companyId: "comp-99", payload: { projectId: "proj-1" } }));
       expect(handler).toHaveBeenCalledTimes(1); // still 1 — second call filtered out
+    });
+
+    it("company-scoped subscriber receives events only from their company", async () => {
+      const comp1Handler = vi.fn().mockResolvedValue(undefined);
+      const comp2Handler = vi.fn().mockResolvedValue(undefined);
+      bus.forPlugin("plugin-a").subscribe(
+        "issue.created",
+        { companyId: "comp-1" },
+        comp1Handler,
+      );
+      bus.forPlugin("plugin-b").subscribe(
+        "issue.created",
+        { companyId: "comp-2" },
+        comp2Handler,
+      );
+
+      await bus.emit(makeEvent({ companyId: "comp-1" }));
+
+      expect(comp1Handler).toHaveBeenCalledTimes(1);
+      expect(comp2Handler).not.toHaveBeenCalled();
+    });
+
+    it("multiple subscriptions in same plugin are independently scoped by company", async () => {
+      const comp1Handler = vi.fn().mockResolvedValue(undefined);
+      const comp2Handler = vi.fn().mockResolvedValue(undefined);
+      const scoped = bus.forPlugin("plugin-a");
+
+      scoped.subscribe("issue.created", { companyId: "comp-1" }, comp1Handler);
+      scoped.subscribe("issue.created", { companyId: "comp-2" }, comp2Handler);
+
+      // Emit for comp-1
+      await bus.emit(makeEvent({ companyId: "comp-1" }));
+      expect(comp1Handler).toHaveBeenCalledTimes(1);
+      expect(comp2Handler).not.toHaveBeenCalled();
+
+      // Emit for comp-2
+      await bus.emit(makeEvent({ companyId: "comp-2" }));
+      expect(comp1Handler).toHaveBeenCalledTimes(1); // unchanged
+      expect(comp2Handler).toHaveBeenCalledTimes(1);
+    });
+
+    it("unfiltered subscription receives events from all companies", async () => {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      bus.forPlugin("plugin-a").subscribe("issue.created", handler);
+
+      await bus.emit(makeEvent({ companyId: "comp-1" }));
+      await bus.emit(makeEvent({ companyId: "comp-2" }));
+      await bus.emit(makeEvent({ companyId: "comp-3" }));
+
+      expect(handler).toHaveBeenCalledTimes(3);
+    });
+
+    it("company-scoped filter combined with projectId filter applies both constraints", async () => {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      bus.forPlugin("plugin-a").subscribe(
+        "issue.created",
+        { companyId: "comp-1", projectId: "proj-1" },
+        handler,
+      );
+
+      // Both company and project match
+      await bus.emit(makeEvent({ companyId: "comp-1", payload: { projectId: "proj-1" } }));
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      // Company matches but project does not
+      await bus.emit(makeEvent({ companyId: "comp-1", payload: { projectId: "proj-2" } }));
+      expect(handler).toHaveBeenCalledTimes(1); // still 1, second event filtered
+
+      // Project matches but company does not
+      await bus.emit(makeEvent({ companyId: "comp-2", payload: { projectId: "proj-1" } }));
+      expect(handler).toHaveBeenCalledTimes(1); // still 1, third event filtered
+
+      // Neither matches
+      await bus.emit(makeEvent({ companyId: "comp-2", payload: { projectId: "proj-2" } }));
+      expect(handler).toHaveBeenCalledTimes(1); // still 1, fourth event filtered
     });
 
     it("subscriber without a filter receives all events of the subscribed type", async () => {
@@ -252,6 +328,31 @@ describe("createPluginEventBus", () => {
           payload: { count: 42 },
         }),
       );
+    });
+
+    it("throws when plugin emits with an empty companyId", async () => {
+      const scoped = bus.forPlugin("acme.linear");
+      await expect(scoped.emit("event", "", {})).rejects.toThrow(
+        /must provide a companyId when emitting events/,
+      );
+    });
+
+    it("throws when plugin emits with a whitespace-only companyId", async () => {
+      const scoped = bus.forPlugin("acme.linear");
+      await expect(scoped.emit("event", "   ", {})).rejects.toThrow(
+        /must provide a companyId when emitting events/,
+      );
+    });
+
+    it("plugin-emitted event includes companyId in the event envelope", async () => {
+      const events: PluginEvent[] = [];
+      const scoped = bus.forPlugin("acme.linear");
+      scoped.subscribe("plugin.acme.linear.data-sync", async (ev) => { events.push(ev); });
+
+      await scoped.emit("data-sync", "comp-789", { synced: 100 });
+
+      expect(events).toHaveLength(1);
+      expect(events[0]!.companyId).toBe("comp-789");
     });
 
     it("plugin-emitted event is NOT delivered to core domain subscribers", async () => {

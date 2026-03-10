@@ -99,6 +99,9 @@ vi.mock("@/plugins/slots", () => ({
   PluginSlotOutlet: ({ slotTypes }: { slotTypes: string[] }) => (
     <div data-testid="plugin-slot-outlet" data-slot-types={slotTypes.join(",")} />
   ),
+  PluginSlotMount: ({ slot }: { slot: { pluginKey: string; id: string } }) => (
+    <div data-testid="plugin-slot-mount" data-slot-id={`${slot.pluginKey}:${slot.id}`} />
+  ),
 }));
 
 // ---------------------------------------------------------------------------
@@ -515,9 +518,9 @@ describe("PluginSettings", () => {
     });
   });
 
-  it("renders Test Connection button for ready plugins", async () => {
+  it("renders Test Configuration button for ready plugins", async () => {
     const plugin = makePluginWithConfig({ status: "ready" });
-    (pluginsApi.get as ReturnType<typeof vi.fn>).mockResolvedValue(plugin);
+    (pluginsApi.get as ReturnType<typeof vi.fn>).mockResolvedValue({ ...plugin, supportsConfigTest: true });
     (pluginsApi.health as ReturnType<typeof vi.fn>).mockResolvedValue({
       pluginId: "plug-1",
       status: "ready",
@@ -531,11 +534,11 @@ describe("PluginSettings", () => {
     renderComponent();
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /test connection/i })).toBeTruthy();
+      expect(screen.getByRole("button", { name: /test configuration/i })).toBeTruthy();
     });
   });
 
-  it("does NOT render Test Connection button for non-ready plugins", async () => {
+  it("does NOT render Test Configuration button for non-ready plugins", async () => {
     const plugin = makePluginWithConfig({ status: "error" });
     (pluginsApi.get as ReturnType<typeof vi.fn>).mockResolvedValue(plugin);
     (pluginsApi.health as ReturnType<typeof vi.fn>).mockResolvedValue(null);
@@ -549,7 +552,7 @@ describe("PluginSettings", () => {
       expect(screen.getByRole("button", { name: /save configuration/i })).toBeTruthy();
     });
 
-    expect(screen.queryByRole("button", { name: /test connection/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /test configuration/i })).toBeNull();
   });
 
   // -------------------------------------------------------------------------
@@ -695,11 +698,11 @@ describe("PluginSettings", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Test connection flow
+  // Test configuration flow
   // -------------------------------------------------------------------------
-  it("calls testConfig API when Test Connection is clicked", async () => {
+  it("calls testConfig API when Test Configuration is clicked", async () => {
     const plugin = makePluginWithConfig({ status: "ready" });
-    (pluginsApi.get as ReturnType<typeof vi.fn>).mockResolvedValue(plugin);
+    (pluginsApi.get as ReturnType<typeof vi.fn>).mockResolvedValue({ ...plugin, supportsConfigTest: true });
     (pluginsApi.health as ReturnType<typeof vi.fn>).mockResolvedValue({
       pluginId: "plug-1",
       status: "ready",
@@ -714,10 +717,10 @@ describe("PluginSettings", () => {
     renderComponent();
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /test connection/i })).toBeTruthy();
+      expect(screen.getByRole("button", { name: /test configuration/i })).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /test connection/i }));
+    fireEvent.click(screen.getByRole("button", { name: /test configuration/i }));
 
     await waitFor(() => {
       expect(pluginsApi.testConfig).toHaveBeenCalledWith("plug-1", expect.objectContaining({
@@ -727,9 +730,9 @@ describe("PluginSettings", () => {
     });
   });
 
-  it("shows success message when test connection passes", async () => {
+  it("shows success message when test configuration passes", async () => {
     const plugin = makePluginWithConfig({ status: "ready" });
-    (pluginsApi.get as ReturnType<typeof vi.fn>).mockResolvedValue(plugin);
+    (pluginsApi.get as ReturnType<typeof vi.fn>).mockResolvedValue({ ...plugin, supportsConfigTest: true });
     (pluginsApi.health as ReturnType<typeof vi.fn>).mockResolvedValue({
       pluginId: "plug-1",
       status: "ready",
@@ -744,19 +747,19 @@ describe("PluginSettings", () => {
     renderComponent();
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /test connection/i })).toBeTruthy();
+      expect(screen.getByRole("button", { name: /test configuration/i })).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /test connection/i }));
+    fireEvent.click(screen.getByRole("button", { name: /test configuration/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/connection test passed/i)).toBeTruthy();
+      expect(screen.getByText(/configuration test passed/i)).toBeTruthy();
     });
   });
 
-  it("shows failure message when test connection fails", async () => {
+  it("shows failure message when test configuration fails", async () => {
     const plugin = makePluginWithConfig({ status: "ready" });
-    (pluginsApi.get as ReturnType<typeof vi.fn>).mockResolvedValue(plugin);
+    (pluginsApi.get as ReturnType<typeof vi.fn>).mockResolvedValue({ ...plugin, supportsConfigTest: true });
     (pluginsApi.health as ReturnType<typeof vi.fn>).mockResolvedValue({
       pluginId: "plug-1",
       status: "ready",
@@ -774,19 +777,19 @@ describe("PluginSettings", () => {
     renderComponent();
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /test connection/i })).toBeTruthy();
+      expect(screen.getByRole("button", { name: /test configuration/i })).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /test connection/i }));
+    fireEvent.click(screen.getByRole("button", { name: /test configuration/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/invalid credentials/i)).toBeTruthy();
     });
   });
 
-  it("shows error when test connection API throws", async () => {
+  it("shows error when test configuration API throws", async () => {
     const plugin = makePluginWithConfig({ status: "ready" });
-    (pluginsApi.get as ReturnType<typeof vi.fn>).mockResolvedValue(plugin);
+    (pluginsApi.get as ReturnType<typeof vi.fn>).mockResolvedValue({ ...plugin, supportsConfigTest: true });
     (pluginsApi.health as ReturnType<typeof vi.fn>).mockResolvedValue({
       pluginId: "plug-1",
       status: "ready",
@@ -803,14 +806,36 @@ describe("PluginSettings", () => {
     renderComponent();
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /test connection/i })).toBeTruthy();
+      expect(screen.getByRole("button", { name: /test configuration/i })).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /test connection/i }));
+    fireEvent.click(screen.getByRole("button", { name: /test configuration/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/network error/i)).toBeTruthy();
     });
+  });
+
+  it("hides Test Configuration button when plugin does not support it", async () => {
+    const plugin = makePluginWithConfig({ status: "ready" });
+    (pluginsApi.get as ReturnType<typeof vi.fn>).mockResolvedValue({ ...plugin, supportsConfigTest: false });
+    (pluginsApi.health as ReturnType<typeof vi.fn>).mockResolvedValue({
+      pluginId: "plug-1",
+      status: "ready",
+      healthy: true,
+      checks: [],
+    });
+    (pluginsApi.getConfig as ReturnType<typeof vi.fn>).mockResolvedValue({
+      configJson: { apiKey: "sk-test", baseUrl: "https://api.com", syncInterval: 15 },
+    });
+
+    renderComponent();
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save configuration/i })).toBeTruthy();
+    });
+
+    expect(screen.queryByRole("button", { name: /test configuration/i })).toBeNull();
   });
 
   // -------------------------------------------------------------------------
@@ -827,13 +852,13 @@ describe("PluginSettings", () => {
     });
     // Return a custom settings page slot
     (usePluginSlots as ReturnType<typeof vi.fn>).mockReturnValue({
-      slots: [{ pluginId: "plug-1", type: "settingsPage", displayName: "Custom Settings" }],
+      slots: [{ pluginId: "plug-1", pluginKey: "test-plugin", id: "settings-1", type: "settingsPage", displayName: "Custom Settings", exportName: "Settings", pluginDisplayName: "Test Plugin", pluginVersion: "1.0.0" }],
     });
 
     renderComponent();
 
     await waitFor(() => {
-      expect(screen.getByTestId("plugin-slot-outlet")).toBeTruthy();
+      expect(screen.getByTestId("plugin-slot-mount")).toBeTruthy();
     });
 
     expect(usePluginSlots).toHaveBeenCalledWith({

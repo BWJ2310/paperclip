@@ -307,6 +307,70 @@ describe("pluginUiSlotDeclarationSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts commentAnnotation with entityTypes [\"comment\"]", () => {
+    const result = pluginUiSlotDeclarationSchema.safeParse({
+      type: "commentAnnotation",
+      id: "file-links",
+      displayName: "File Links",
+      exportName: "FileLinks",
+      entityTypes: ["comment"],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects commentAnnotation without entityTypes", () => {
+    const result = pluginUiSlotDeclarationSchema.safeParse({
+      type: "commentAnnotation",
+      id: "file-links",
+      displayName: "File Links",
+      exportName: "FileLinks",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects commentAnnotation when entityTypes does not include comment", () => {
+    const result = pluginUiSlotDeclarationSchema.safeParse({
+      type: "commentAnnotation",
+      id: "file-links",
+      displayName: "File Links",
+      exportName: "FileLinks",
+      entityTypes: ["issue"],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts commentContextMenuItem with entityTypes [\"comment\"]", () => {
+    const result = pluginUiSlotDeclarationSchema.safeParse({
+      type: "commentContextMenuItem",
+      id: "translate-comment",
+      displayName: "Translate Comment",
+      exportName: "TranslateComment",
+      entityTypes: ["comment"],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects commentContextMenuItem without entityTypes", () => {
+    const result = pluginUiSlotDeclarationSchema.safeParse({
+      type: "commentContextMenuItem",
+      id: "translate-comment",
+      displayName: "Translate Comment",
+      exportName: "TranslateComment",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects commentContextMenuItem when entityTypes does not include comment", () => {
+    const result = pluginUiSlotDeclarationSchema.safeParse({
+      type: "commentContextMenuItem",
+      id: "translate-comment",
+      displayName: "Translate Comment",
+      exportName: "TranslateComment",
+      entityTypes: ["issue"],
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects an invalid slot type", () => {
     const result = pluginUiSlotDeclarationSchema.safeParse({
       type: "unknown_slot_type",

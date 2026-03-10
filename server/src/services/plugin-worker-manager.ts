@@ -249,6 +249,9 @@ export interface PluginWorkerHandle {
     listener: (payload: WorkerHandleEvents[K]) => void,
   ): void;
 
+  /** Optional methods the worker reported during initialization. */
+  readonly supportedMethods: string[];
+
   /** Get diagnostic info about the worker. */
   diagnostics(): WorkerDiagnostics;
 }
@@ -356,6 +359,9 @@ export function createPluginWorkerHandle(
   // Pending RPC requests awaiting a response
   const pendingRequests = new Map<string | number, PendingRequest>();
   let nextRequestId = 1;
+
+  // Optional methods reported by the worker during initialization
+  let supportedMethods: string[] = [];
 
   // Crash tracking for exponential backoff
   let consecutiveCrashes = 0;
@@ -584,12 +590,12 @@ export function createPluginWorkerHandle(
     // receive a minimal, controlled environment to prevent leaking host
     // secrets (like DATABASE_URL, internal API keys, etc.).
     const workerEnv: Record<string, string> = {
+      ...options.env,
       PATH: process.env.PATH ?? "",
       NODE_PATH: process.env.NODE_PATH ?? "",
       PAPERCLIP_PLUGIN_ID: pluginId,
       NODE_ENV: process.env.NODE_ENV ?? "production",
       TZ: process.env.TZ ?? "UTC",
-      ...options.env,
     };
 
     const child = fork(options.entrypointPath, [], {
@@ -805,10 +811,11 @@ export function createPluginWorkerHandle(
         "initialize",
         initParams,
         INITIALIZE_TIMEOUT_MS,
-      );
-      if (!result || !(result as { ok?: boolean }).ok) {
+      ) as { ok?: boolean; supportedMethods?: string[] } | undefined;
+      if (!result || !result.ok) {
         throw new Error("Worker initialize returned ok=false");
       }
+      supportedMethods = result.supportedMethods ?? [];
     } catch (err) {
       // Initialize failed — kill the process and propagate
       const msg = err instanceof Error ? err.message : String(err);
@@ -1055,6 +1062,10 @@ export function createPluginWorkerHandle(
 
     get status() {
       return status;
+    },
+
+    get supportedMethods() {
+      return supportedMethods;
     },
 
     async start() {

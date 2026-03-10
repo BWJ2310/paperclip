@@ -1,4 +1,9 @@
 -- Rollback:
+--   DROP INDEX IF EXISTS "plugin_logs_level_idx";
+--   DROP INDEX IF EXISTS "plugin_logs_plugin_time_idx";
+--   DROP INDEX IF EXISTS "plugin_company_settings_company_plugin_uq";
+--   DROP INDEX IF EXISTS "plugin_company_settings_plugin_idx";
+--   DROP INDEX IF EXISTS "plugin_company_settings_company_idx";
 --   DROP INDEX IF EXISTS "plugin_webhook_deliveries_key_idx";
 --   DROP INDEX IF EXISTS "plugin_webhook_deliveries_status_idx";
 --   DROP INDEX IF EXISTS "plugin_webhook_deliveries_plugin_idx";
@@ -16,6 +21,8 @@
 --   DROP INDEX IF EXISTS "plugin_config_plugin_id_idx";
 --   DROP INDEX IF EXISTS "plugins_status_idx";
 --   DROP INDEX IF EXISTS "plugins_plugin_key_idx";
+--   DROP TABLE IF EXISTS "plugin_logs";
+--   DROP TABLE IF EXISTS "plugin_company_settings";
 --   DROP TABLE IF EXISTS "plugin_webhook_deliveries";
 --   DROP TABLE IF EXISTS "plugin_job_runs";
 --   DROP TABLE IF EXISTS "plugin_jobs";
@@ -28,6 +35,7 @@ CREATE TABLE "plugins" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"plugin_key" text NOT NULL,
 	"package_name" text NOT NULL,
+	"package_path" text,
 	"version" text NOT NULL,
 	"api_version" integer DEFAULT 1 NOT NULL,
 	"categories" jsonb DEFAULT '[]'::jsonb NOT NULL,
@@ -65,7 +73,7 @@ CREATE TABLE "plugin_entities" (
 	"plugin_id" uuid NOT NULL,
 	"entity_type" text NOT NULL,
 	"scope_kind" text NOT NULL,
-	"scope_id" uuid,
+	"scope_id" text,
 	"external_id" text,
 	"title" text,
 	"status" text,
@@ -115,6 +123,26 @@ CREATE TABLE "plugin_webhook_deliveries" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "plugin_company_settings" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"company_id" uuid NOT NULL,
+	"plugin_id" uuid NOT NULL,
+	"settings_json" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"last_error" text,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"enabled" boolean DEFAULT true NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "plugin_logs" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"plugin_id" uuid NOT NULL,
+	"level" text NOT NULL DEFAULT 'info',
+	"message" text NOT NULL,
+	"meta" jsonb,
+	"created_at" timestamp with time zone NOT NULL DEFAULT now()
+);
+--> statement-breakpoint
 ALTER TABLE "plugin_config" ADD CONSTRAINT "plugin_config_plugin_id_plugins_id_fk" FOREIGN KEY ("plugin_id") REFERENCES "public"."plugins"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "plugin_state" ADD CONSTRAINT "plugin_state_plugin_id_plugins_id_fk" FOREIGN KEY ("plugin_id") REFERENCES "public"."plugins"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "plugin_entities" ADD CONSTRAINT "plugin_entities_plugin_id_plugins_id_fk" FOREIGN KEY ("plugin_id") REFERENCES "public"."plugins"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -122,6 +150,9 @@ ALTER TABLE "plugin_jobs" ADD CONSTRAINT "plugin_jobs_plugin_id_plugins_id_fk" F
 ALTER TABLE "plugin_job_runs" ADD CONSTRAINT "plugin_job_runs_job_id_plugin_jobs_id_fk" FOREIGN KEY ("job_id") REFERENCES "public"."plugin_jobs"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "plugin_job_runs" ADD CONSTRAINT "plugin_job_runs_plugin_id_plugins_id_fk" FOREIGN KEY ("plugin_id") REFERENCES "public"."plugins"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "plugin_webhook_deliveries" ADD CONSTRAINT "plugin_webhook_deliveries_plugin_id_plugins_id_fk" FOREIGN KEY ("plugin_id") REFERENCES "public"."plugins"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "plugin_company_settings" ADD CONSTRAINT "plugin_company_settings_company_id_companies_id_fk" FOREIGN KEY ("company_id") REFERENCES "public"."companies"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "plugin_company_settings" ADD CONSTRAINT "plugin_company_settings_plugin_id_plugins_id_fk" FOREIGN KEY ("plugin_id") REFERENCES "public"."plugins"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "plugin_logs" ADD CONSTRAINT "plugin_logs_plugin_id_plugins_id_fk" FOREIGN KEY ("plugin_id") REFERENCES "public"."plugins"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "plugins_plugin_key_idx" ON "plugins" USING btree ("plugin_key");--> statement-breakpoint
 CREATE INDEX "plugins_status_idx" ON "plugins" USING btree ("status");--> statement-breakpoint
 CREATE UNIQUE INDEX "plugin_config_plugin_id_idx" ON "plugin_config" USING btree ("plugin_id");--> statement-breakpoint
@@ -138,4 +169,9 @@ CREATE INDEX "plugin_job_runs_plugin_idx" ON "plugin_job_runs" USING btree ("plu
 CREATE INDEX "plugin_job_runs_status_idx" ON "plugin_job_runs" USING btree ("status");--> statement-breakpoint
 CREATE INDEX "plugin_webhook_deliveries_plugin_idx" ON "plugin_webhook_deliveries" USING btree ("plugin_id");--> statement-breakpoint
 CREATE INDEX "plugin_webhook_deliveries_status_idx" ON "plugin_webhook_deliveries" USING btree ("status");--> statement-breakpoint
-CREATE INDEX "plugin_webhook_deliveries_key_idx" ON "plugin_webhook_deliveries" USING btree ("webhook_key");
+CREATE INDEX "plugin_webhook_deliveries_key_idx" ON "plugin_webhook_deliveries" USING btree ("webhook_key");--> statement-breakpoint
+CREATE INDEX "plugin_company_settings_company_idx" ON "plugin_company_settings" USING btree ("company_id");--> statement-breakpoint
+CREATE INDEX "plugin_company_settings_plugin_idx" ON "plugin_company_settings" USING btree ("plugin_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "plugin_company_settings_company_plugin_uq" ON "plugin_company_settings" USING btree ("company_id","plugin_id");--> statement-breakpoint
+CREATE INDEX "plugin_logs_plugin_time_idx" ON "plugin_logs" USING btree ("plugin_id","created_at");--> statement-breakpoint
+CREATE INDEX "plugin_logs_level_idx" ON "plugin_logs" USING btree ("level");

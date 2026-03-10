@@ -1073,6 +1073,8 @@ describe("constants re-exports", () => {
       expect(PLUGIN_UI_SLOT_TYPES).toContain("dashboardWidget");
       expect(PLUGIN_UI_SLOT_TYPES).toContain("sidebar");
       expect(PLUGIN_UI_SLOT_TYPES).toContain("settingsPage");
+      expect(PLUGIN_UI_SLOT_TYPES).toContain("commentAnnotation");
+      expect(PLUGIN_UI_SLOT_TYPES).toContain("commentContextMenuItem");
     });
   });
 
@@ -1083,6 +1085,7 @@ describe("constants re-exports", () => {
       expect(PLUGIN_UI_SLOT_ENTITY_TYPES).toContain("agent");
       expect(PLUGIN_UI_SLOT_ENTITY_TYPES).toContain("goal");
       expect(PLUGIN_UI_SLOT_ENTITY_TYPES).toContain("run");
+      expect(PLUGIN_UI_SLOT_ENTITY_TYPES).toContain("comment");
     });
   });
 

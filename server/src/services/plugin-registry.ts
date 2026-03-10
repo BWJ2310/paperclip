@@ -1,4 +1,4 @@
-import { asc, eq, ne, sql, and } from "drizzle-orm";
+import { asc, eq, ne, sql, and, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   plugins,
@@ -500,6 +500,30 @@ export function pluginRegistryService(db: Db) {
 
       if (filter?.available === undefined) return availability;
       return availability.filter((item) => item.available === filter.available);
+    },
+
+    /**
+     * Batch-check which companies have this plugin explicitly disabled.
+     * Returns a Set of companyIds where `enabled = false`. Companies with
+     * no settings row default to enabled, so they are NOT in the result set.
+     */
+    getDisabledCompanyIds: async (companyIds: string[], pluginId: string): Promise<Set<string>> => {
+      if (companyIds.length === 0) return new Set();
+      const rows = await db
+        .select({
+          companyId: pluginCompanySettings.companyId,
+          enabled: pluginCompanySettings.enabled,
+        })
+        .from(pluginCompanySettings)
+        .where(and(
+          inArray(pluginCompanySettings.companyId, companyIds),
+          eq(pluginCompanySettings.pluginId, pluginId),
+        ));
+      const disabled = new Set<string>();
+      for (const row of rows) {
+        if (!row.enabled) disabled.add(row.companyId);
+      }
+      return disabled;
     },
 
     /** Get the normalized availability record for a single company/plugin pair. */
