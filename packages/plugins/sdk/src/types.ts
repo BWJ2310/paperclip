@@ -666,6 +666,22 @@ export interface PluginProjectsClient {
    * @returns The primary workspace, or `null` if no workspace is configured
    */
   getPrimaryWorkspace(projectId: string, companyId: string): Promise<PluginWorkspace | null>;
+
+  /**
+   * Resolve the primary workspace for an issue by looking up the issue's
+   * project and returning its primary workspace.
+   *
+   * This is a convenience method that combines `issues.get()` and
+   * `getPrimaryWorkspace()` in a single RPC call.
+   *
+   * @param issueId - UUID of the issue
+   * @param companyId - UUID of the company that owns the issue
+   * @returns The primary workspace for the issue's project, or `null` if
+   *   the issue has no project or the project has no workspace
+   *
+   * @see PLUGIN_SPEC.md §20 — Local Tooling
+   */
+  getWorkspaceForIssue(issueId: string, companyId: string): Promise<PluginWorkspace | null>;
 }
 
 /**
@@ -828,19 +844,100 @@ export interface PluginIssuesClient {
 }
 
 /**
- * `ctx.agents` — read agent metadata.
+ * `ctx.agents` — read and manage agents.
  *
- * Requires `agents.read`.
+ * Requires `agents.read` for reads; `agents.pause` / `agents.resume` /
+ * `agents.invoke` for write operations.
  */
 export interface PluginAgentsClient {
   list(input: { companyId: string; status?: Agent["status"]; limit?: number; offset?: number }): Promise<Agent[]>;
   get(agentId: string, companyId: string): Promise<Agent | null>;
+  /** Pause an agent. Throws if agent is terminated or not found. Requires `agents.pause`. */
+  pause(agentId: string, companyId: string): Promise<Agent>;
+  /** Resume a paused agent (sets status to idle). Throws if terminated, pending_approval, or not found. Requires `agents.resume`. */
+  resume(agentId: string, companyId: string): Promise<Agent>;
+  /** Invoke (wake up) an agent with a prompt payload. Throws if paused, terminated, pending_approval, or not found. Requires `agents.invoke`. */
+  invoke(agentId: string, companyId: string, opts: { prompt: string; reason?: string }): Promise<{ runId: string }>;
+  /** Create, message, and close agent chat sessions. Requires `agent.sessions.*` capabilities. */
+  sessions: PluginAgentSessionsClient;
+}
+
+// ---------------------------------------------------------------------------
+// Agent Sessions — two-way chat with agents
+// ---------------------------------------------------------------------------
+
+/**
+ * Represents an active conversational session with an agent.
+ * Maps to an `AgentTaskSession` row on the host.
+ */
+export interface AgentSession {
+  sessionId: string;
+  agentId: string;
+  companyId: string;
+  status: "active" | "closed";
+  createdAt: string;
 }
 
 /**
- * `ctx.goals` — read goal metadata.
+ * A streaming event received during a session's `sendMessage` call.
+ * Delivered via JSON-RPC notifications from host to worker.
+ */
+export interface AgentSessionEvent {
+  sessionId: string;
+  runId: string;
+  seq: number;
+  /** The kind of event: "chunk" for output data, "status" for run state changes, "done" for end-of-stream, "error" for failures. */
+  eventType: "chunk" | "status" | "done" | "error";
+  stream: "stdout" | "stderr" | "system" | null;
+  message: string | null;
+  payload: Record<string, unknown> | null;
+}
+
+/**
+ * Result of sending a message to a session.
+ */
+export interface AgentSessionSendResult {
+  runId: string;
+}
+
+/**
+ * `ctx.agents.sessions` — create, message, and close agent chat sessions.
  *
- * Requires `goals.read`.
+ * Requires `agent.sessions.create` for create, `agent.sessions.list` for list,
+ * `agent.sessions.send` for sendMessage, `agent.sessions.close` for close.
+ */
+export interface PluginAgentSessionsClient {
+  /** Create a new conversational session with an agent. Requires `agent.sessions.create`. */
+  create(agentId: string, companyId: string, opts?: {
+    taskKey?: string;
+    reason?: string;
+  }): Promise<AgentSession>;
+
+  /** List active sessions for an agent owned by this plugin. Requires `agent.sessions.list`. */
+  list(agentId: string, companyId: string): Promise<AgentSession[]>;
+
+  /**
+   * Send a message to a session and receive streaming events via the `onEvent` callback.
+   * Returns immediately with `{ runId }`. Events are delivered asynchronously.
+   * Requires `agent.sessions.send`.
+   */
+  sendMessage(sessionId: string, companyId: string, opts: {
+    prompt: string;
+    reason?: string;
+    onEvent?: (event: AgentSessionEvent) => void;
+  }): Promise<AgentSessionSendResult>;
+
+  /** Close a session, releasing resources. Requires `agent.sessions.close`. */
+  close(sessionId: string, companyId: string): Promise<void>;
+}
+
+/**
+ * `ctx.goals` — read and mutate goals.
+ *
+ * Requires:
+ * - `goals.read` for read operations
+ * - `goals.create` for create
+ * - `goals.update` for update
  */
 export interface PluginGoalsClient {
   list(input: {
@@ -851,6 +948,23 @@ export interface PluginGoalsClient {
     offset?: number;
   }): Promise<Goal[]>;
   get(goalId: string, companyId: string): Promise<Goal | null>;
+  create(input: {
+    companyId: string;
+    title: string;
+    description?: string;
+    level?: Goal["level"];
+    status?: Goal["status"];
+    parentId?: string;
+    ownerAgentId?: string;
+  }): Promise<Goal>;
+  update(
+    goalId: string,
+    patch: Partial<Pick<
+      Goal,
+      "title" | "description" | "level" | "status" | "parentId" | "ownerAgentId"
+    >>,
+    companyId: string,
+  ): Promise<Goal>;
 }
 
 // ---------------------------------------------------------------------------
@@ -927,10 +1041,10 @@ export interface PluginContext {
   /** Read and write issues/comments. Requires issue capabilities. */
   issues: PluginIssuesClient;
 
-  /** Read agent metadata. Requires `agents.read`. */
+  /** Read and manage agents. Requires `agents.read` for reads; `agents.pause` / `agents.resume` / `agents.invoke` for write ops. */
   agents: PluginAgentsClient;
 
-  /** Read goal metadata. Requires `goals.read`. */
+  /** Read and mutate goals. Requires `goals.read` for reads; `goals.create` / `goals.update` for write ops. */
   goals: PluginGoalsClient;
 
   /** Register getData handlers for the plugin's UI components. */

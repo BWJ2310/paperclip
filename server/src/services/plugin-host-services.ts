@@ -1,4 +1,6 @@
 import type { Db } from "@paperclipai/db";
+import { pluginLogs, agentTaskSessions as agentTaskSessionsTable } from "@paperclipai/db";
+import { eq, and, like, desc } from "drizzle-orm";
 import type {
   HostServices,
   Company,
@@ -14,6 +16,9 @@ import { agentService } from "./agents.js";
 import { projectService } from "./projects.js";
 import { issueService } from "./issues.js";
 import { goalService } from "./goals.js";
+import { heartbeatService } from "./heartbeat.js";
+import { subscribeCompanyLiveEvents } from "./live-events.js";
+import { randomUUID } from "node:crypto";
 import { activityService } from "./activity.js";
 import { costService } from "./costs.js";
 import { assetService } from "./assets.js";
@@ -75,12 +80,14 @@ export function buildHostServices(
   pluginId: string,
   pluginKey: string,
   eventBus: PluginEventBus,
+  notifyWorker?: (method: string, params: unknown) => void,
 ): HostServices {
   const registry = pluginRegistryService(db);
   const stateStore = pluginStateStore(db);
   const secretsHandler = createPluginSecretsHandler({ db, pluginId });
   const companies = companyService(db);
   const agents = agentService(db);
+  const heartbeat = heartbeatService(db);
   const projects = projectService(db);
   const issues = issueService(db);
   const goals = goalService(db);
@@ -207,7 +214,20 @@ export function buildHostServices(
 
     metrics: {
       async write(params) {
-        logger.debug({ pluginId, ...params }, "Plugin metric write (no-op)");
+        logger.debug({ pluginId, ...params }, "Plugin metric write");
+
+        // Persist metrics to plugin_logs with level "metric" so they are
+        // queryable alongside regular logs via the same API (§26).
+        db.insert(pluginLogs)
+          .values({
+            pluginId,
+            level: "metric",
+            message: params.name,
+            meta: { value: params.value, tags: params.tags ?? null },
+          })
+          .catch(() => {
+            // Swallow DB write errors to avoid disrupting the plugin.
+          });
       },
     },
 
@@ -225,6 +245,19 @@ export function buildHostServices(
         else if (level === "warn") pluginLogger.warn(logFields, `[plugin] ${message}`);
         else if (level === "debug") pluginLogger.debug(logFields, `[plugin] ${message}`);
         else pluginLogger.info(logFields, `[plugin] ${message}`);
+
+        // Persist to plugin_logs table for queryable log history (§26.1).
+        // Fire-and-forget — logging should never block the worker.
+        db.insert(pluginLogs)
+          .values({
+            pluginId,
+            level: level ?? "info",
+            message: message ?? "",
+            meta: meta ?? null,
+          })
+          .catch(() => {
+            // Swallow DB write errors to avoid disrupting the plugin.
+          });
       },
     },
 
@@ -271,6 +304,29 @@ export function buildHostServices(
         const project = await projects.getById(params.projectId);
         if (!inCompany(project, companyId)) return null;
         const row = await projects.getPrimaryWorkspace(params.projectId);
+        if (!row) return null;
+        const path = sanitizeWorkspacePath(row.cwd);
+        const name = sanitizeWorkspaceName(row.name, path);
+        return {
+          id: row.id,
+          projectId: row.projectId,
+          name,
+          path,
+          isPrimary: row.isPrimary,
+          createdAt: row.createdAt.toISOString(),
+          updatedAt: row.updatedAt.toISOString(),
+        };
+      },
+
+      async getWorkspaceForIssue(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        const issue = await issues.getById(params.issueId);
+        if (!inCompany(issue, companyId)) return null;
+        const projectId = (issue as Record<string, unknown>).projectId as string | null;
+        if (!projectId) return null;
+        const project = await projects.getById(projectId);
+        if (!inCompany(project, companyId)) return null;
+        const row = await projects.getPrimaryWorkspace(projectId);
         if (!row) return null;
         const path = sanitizeWorkspacePath(row.cwd);
         const name = sanitizeWorkspaceName(row.name, path);
@@ -333,6 +389,33 @@ export function buildHostServices(
         const agent = await agents.getById(params.agentId);
         return (inCompany(agent, companyId) ? agent : null) as Agent | null;
       },
+      async pause(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        const agent = await agents.getById(params.agentId);
+        requireInCompany("Agent", agent, companyId);
+        return (await agents.pause(params.agentId)) as Agent;
+      },
+      async resume(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        const agent = await agents.getById(params.agentId);
+        requireInCompany("Agent", agent, companyId);
+        return (await agents.resume(params.agentId)) as Agent;
+      },
+      async invoke(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        const agent = await agents.getById(params.agentId);
+        requireInCompany("Agent", agent, companyId);
+        const run = await heartbeat.wakeup(params.agentId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: params.reason ?? null,
+          payload: { prompt: params.prompt },
+          requestedByActorType: "system",
+          requestedByActorId: pluginId,
+        });
+        if (!run) throw new Error("Agent wakeup was skipped by heartbeat policy");
+        return { runId: run.id };
+      },
     },
 
     goals: {
@@ -348,6 +431,173 @@ export function buildHostServices(
         const companyId = ensureCompanyId(params.companyId);
         const goal = await goals.getById(params.goalId);
         return (inCompany(goal, companyId) ? goal : null) as Goal | null;
+      },
+      async create(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        return (await goals.create(companyId, {
+          title: params.title,
+          description: params.description,
+          level: params.level as any,
+          status: params.status as any,
+          parentId: params.parentId,
+          ownerAgentId: params.ownerAgentId,
+        })) as Goal;
+      },
+      async update(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        requireInCompany("Goal", await goals.getById(params.goalId), companyId);
+        return (await goals.update(params.goalId, params.patch as any)) as Goal;
+      },
+    },
+
+    agentSessions: {
+      async create(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        const agent = await agents.getById(params.agentId);
+        requireInCompany("Agent", agent, companyId);
+        const taskKey = params.taskKey ?? `plugin:${pluginKey}:session:${randomUUID()}`;
+
+        const row = await db
+          .insert(agentTaskSessionsTable)
+          .values({
+            companyId,
+            agentId: params.agentId,
+            adapterType: agent!.adapterType,
+            taskKey,
+            sessionParamsJson: null,
+            sessionDisplayId: null,
+            lastRunId: null,
+            lastError: null,
+          })
+          .returning()
+          .then((rows) => rows[0]);
+
+        return {
+          sessionId: row!.id,
+          agentId: params.agentId,
+          companyId,
+          status: "active" as const,
+          createdAt: row!.createdAt.toISOString(),
+        };
+      },
+
+      async list(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        const rows = await db
+          .select()
+          .from(agentTaskSessionsTable)
+          .where(
+            and(
+              eq(agentTaskSessionsTable.agentId, params.agentId),
+              eq(agentTaskSessionsTable.companyId, companyId),
+              like(agentTaskSessionsTable.taskKey, `plugin:${pluginKey}:session:%`),
+            ),
+          )
+          .orderBy(desc(agentTaskSessionsTable.createdAt));
+
+        return rows.map((row) => ({
+          sessionId: row.id,
+          agentId: row.agentId,
+          companyId: row.companyId,
+          status: "active" as const,
+          createdAt: row.createdAt.toISOString(),
+        }));
+      },
+
+      async sendMessage(params) {
+        const companyId = ensureCompanyId(params.companyId);
+
+        // Verify session exists and belongs to this plugin
+        const session = await db
+          .select()
+          .from(agentTaskSessionsTable)
+          .where(
+            and(
+              eq(agentTaskSessionsTable.id, params.sessionId),
+              eq(agentTaskSessionsTable.companyId, companyId),
+              like(agentTaskSessionsTable.taskKey, `plugin:${pluginKey}:session:%`),
+            ),
+          )
+          .then((rows) => rows[0] ?? null);
+        if (!session) throw new Error(`Session not found: ${params.sessionId}`);
+
+        const run = await heartbeat.wakeup(session.agentId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: params.reason ?? null,
+          payload: { prompt: params.prompt },
+          contextSnapshot: {
+            taskKey: session.taskKey,
+            wakeSource: "automation",
+            wakeTriggerDetail: "system",
+          },
+          requestedByActorType: "system",
+          requestedByActorId: pluginId,
+        });
+        if (!run) throw new Error("Agent wakeup was skipped by heartbeat policy");
+
+        // Subscribe to live events and forward to the plugin worker as notifications
+        if (notifyWorker) {
+          const TERMINAL_STATUSES = new Set(["succeeded", "failed", "cancelled", "timed_out"]);
+          const unsubscribe = subscribeCompanyLiveEvents(companyId, (event) => {
+            const payload = event.payload as Record<string, unknown> | undefined;
+            if (!payload || payload.runId !== run.id) return;
+
+            if (event.type === "heartbeat.run.log" || event.type === "heartbeat.run.event") {
+              notifyWorker("agents.sessions.event", {
+                sessionId: params.sessionId,
+                runId: run.id,
+                seq: (payload.seq as number) ?? 0,
+                eventType: "chunk",
+                stream: (payload.stream as string) ?? null,
+                message: (payload.chunk as string) ?? (payload.message as string) ?? null,
+                payload: payload,
+              });
+            } else if (event.type === "heartbeat.run.status") {
+              const status = payload.status as string;
+              if (TERMINAL_STATUSES.has(status)) {
+                notifyWorker("agents.sessions.event", {
+                  sessionId: params.sessionId,
+                  runId: run.id,
+                  seq: 0,
+                  eventType: status === "succeeded" ? "done" : "error",
+                  stream: "system",
+                  message: status === "succeeded" ? "Run completed" : `Run ${status}`,
+                  payload: payload,
+                });
+                unsubscribe();
+              } else {
+                notifyWorker("agents.sessions.event", {
+                  sessionId: params.sessionId,
+                  runId: run.id,
+                  seq: 0,
+                  eventType: "status",
+                  stream: "system",
+                  message: `Run status: ${status}`,
+                  payload: payload,
+                });
+              }
+            }
+          });
+        }
+
+        return { runId: run.id };
+      },
+
+      async close(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        const deleted = await db
+          .delete(agentTaskSessionsTable)
+          .where(
+            and(
+              eq(agentTaskSessionsTable.id, params.sessionId),
+              eq(agentTaskSessionsTable.companyId, companyId),
+              like(agentTaskSessionsTable.taskKey, `plugin:${pluginKey}:session:%`),
+            ),
+          )
+          .returning()
+          .then((rows) => rows.length);
+        if (deleted === 0) throw new Error(`Session not found: ${params.sessionId}`);
       },
     },
   };

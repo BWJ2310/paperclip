@@ -56,6 +56,7 @@ import type {
   ToolRunContext,
   ToolResult,
   EventFilter,
+  AgentSessionEvent,
 } from "./types.js";
 import type {
   JsonRpcId,
@@ -257,6 +258,9 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
   const dataHandlers = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
   const actionHandlers = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
   const toolHandlers = new Map<string, (params: unknown, runCtx: ToolRunContext) => Promise<ToolResult>>();
+
+  // Agent session event callbacks (populated by sendMessage, cleared by close)
+  const sessionEventCallbacks = new Map<string, (event: AgentSessionEvent) => void>();
 
   // Pending outbound (worker→host) requests
   const pendingRequests = new Map<string | number, {
@@ -549,6 +553,10 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
         async getPrimaryWorkspace(projectId: string, companyId: string) {
           return callHost("projects.getPrimaryWorkspace", { projectId, companyId }) as any;
         },
+
+        async getWorkspaceForIssue(issueId: string, companyId: string) {
+          return callHost("projects.getWorkspaceForIssue", { issueId, companyId }) as any;
+        },
       },
 
       companies: {
@@ -623,6 +631,59 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
         async get(agentId: string, companyId: string) {
           return callHost("agents.get", { agentId, companyId }) as any;
         },
+
+        async pause(agentId: string, companyId: string) {
+          return callHost("agents.pause", { agentId, companyId }) as any;
+        },
+
+        async resume(agentId: string, companyId: string) {
+          return callHost("agents.resume", { agentId, companyId }) as any;
+        },
+
+        async invoke(agentId: string, companyId: string, opts: { prompt: string; reason?: string }) {
+          return callHost("agents.invoke", { agentId, companyId, prompt: opts.prompt, reason: opts.reason }) as any;
+        },
+
+        sessions: {
+          async create(agentId: string, companyId: string, opts?: { taskKey?: string; reason?: string }) {
+            return callHost("agents.sessions.create", {
+              agentId,
+              companyId,
+              taskKey: opts?.taskKey,
+              reason: opts?.reason,
+            }) as any;
+          },
+
+          async list(agentId: string, companyId: string) {
+            return callHost("agents.sessions.list", { agentId, companyId }) as any;
+          },
+
+          async sendMessage(sessionId: string, companyId: string, opts: {
+            prompt: string;
+            reason?: string;
+            onEvent?: (event: AgentSessionEvent) => void;
+          }) {
+            if (opts.onEvent) {
+              sessionEventCallbacks.set(sessionId, opts.onEvent);
+            }
+            try {
+              return await callHost("agents.sessions.sendMessage", {
+                sessionId,
+                companyId,
+                prompt: opts.prompt,
+                reason: opts.reason,
+              }) as any;
+            } catch (err) {
+              sessionEventCallbacks.delete(sessionId);
+              throw err;
+            }
+          },
+
+          async close(sessionId: string, companyId: string) {
+            sessionEventCallbacks.delete(sessionId);
+            await callHost("agents.sessions.close", { sessionId, companyId });
+          },
+        },
       },
 
       goals: {
@@ -638,6 +699,26 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
 
         async get(goalId: string, companyId: string) {
           return callHost("goals.get", { goalId, companyId }) as any;
+        },
+
+        async create(input) {
+          return callHost("goals.create", {
+            companyId: input.companyId,
+            title: input.title,
+            description: input.description,
+            level: input.level,
+            status: input.status,
+            parentId: input.parentId,
+            ownerAgentId: input.ownerAgentId,
+          }) as any;
+        },
+
+        async update(goalId: string, patch, companyId: string) {
+          return callHost("goals.update", {
+            goalId,
+            patch: patch as Record<string, unknown>,
+            companyId,
+          }) as any;
         },
       },
 
@@ -1002,8 +1083,13 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
         }
       });
     } else if (isJsonRpcNotification(message)) {
-      // Notifications from the host are logged but not currently used
-      // Future: could be used for host→worker push notifications
+      // Dispatch host→worker push notifications
+      const notif = message as { method: string; params?: unknown };
+      if (notif.method === "agents.sessions.event" && notif.params) {
+        const event = notif.params as AgentSessionEvent;
+        const cb = sessionEventCallbacks.get(event.sessionId);
+        if (cb) cb(event);
+      }
     }
   }
 
@@ -1032,6 +1118,7 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
       );
     }
     pendingRequests.clear();
+    sessionEventCallbacks.clear();
   }
 
   // -----------------------------------------------------------------------

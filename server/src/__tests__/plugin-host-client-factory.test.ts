@@ -26,7 +26,16 @@ const ALL_CAPABILITIES: PluginCapability[] = [
   "issues.read",
   "issue.comments.read",
   "agents.read",
+  "agents.pause",
+  "agents.resume",
+  "agents.invoke",
+  "agent.sessions.create",
+  "agent.sessions.list",
+  "agent.sessions.send",
+  "agent.sessions.close",
   "goals.read",
+  "goals.create",
+  "goals.update",
   "activity.read",
   "costs.read",
   "issues.create",
@@ -130,10 +139,21 @@ function createMockServices(): HostServices {
     agents: {
       list: vi.fn().mockResolvedValue([]),
       get: vi.fn().mockResolvedValue(null),
+      pause: vi.fn().mockResolvedValue({ id: "a1", status: "paused" }),
+      resume: vi.fn().mockResolvedValue({ id: "a1", status: "idle" }),
+      invoke: vi.fn().mockResolvedValue({ runId: "run-1" }),
+    },
+    agentSessions: {
+      create: vi.fn().mockResolvedValue({ sessionId: "sess-1", agentId: "a1", companyId: "c1", status: "active", createdAt: "2025-01-01T00:00:00Z" }),
+      list: vi.fn().mockResolvedValue([]),
+      sendMessage: vi.fn().mockResolvedValue({ runId: "run-1" }),
+      close: vi.fn().mockResolvedValue(undefined),
     },
     goals: {
       list: vi.fn().mockResolvedValue([]),
       get: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({ id: "g1" }),
+      update: vi.fn().mockResolvedValue({ id: "g1" }),
     },
   };
 }
@@ -172,8 +192,9 @@ describe("createHostClientHandlers", () => {
         "companies.list", "companies.get",
         "projects.list", "projects.get", "projects.listWorkspaces", "projects.getPrimaryWorkspace",
         "issues.list", "issues.get", "issues.create", "issues.update", "issues.listComments", "issues.createComment",
-        "agents.list", "agents.get",
-        "goals.list", "goals.get",
+        "agents.list", "agents.get", "agents.pause", "agents.resume", "agents.invoke",
+        "agents.sessions.create", "agents.sessions.list", "agents.sessions.sendMessage", "agents.sessions.close",
+        "goals.list", "goals.get", "goals.create", "goals.update",
       ];
 
       for (const method of expectedMethods) {
@@ -469,6 +490,90 @@ describe("createHostClientHandlers", () => {
       ).rejects.toThrow(CapabilityDeniedError);
     });
 
+    it("blocks agents.pause without agents.pause capability", async () => {
+      const handlers = createHostClientHandlers({
+        pluginId: "test.plugin",
+        capabilities: ["agents.read"],
+        services,
+      });
+
+      await expect(
+        handlers["agents.pause"]({ agentId: "a1", companyId: "c1" }),
+      ).rejects.toThrow(CapabilityDeniedError);
+    });
+
+    it("blocks agents.resume without agents.resume capability", async () => {
+      const handlers = createHostClientHandlers({
+        pluginId: "test.plugin",
+        capabilities: ["agents.read", "agents.pause"],
+        services,
+      });
+
+      await expect(
+        handlers["agents.resume"]({ agentId: "a1", companyId: "c1" }),
+      ).rejects.toThrow(CapabilityDeniedError);
+    });
+
+    it("blocks agents.invoke without agents.invoke capability", async () => {
+      const handlers = createHostClientHandlers({
+        pluginId: "test.plugin",
+        capabilities: ["agents.read", "agents.pause", "agents.resume"],
+        services,
+      });
+
+      await expect(
+        handlers["agents.invoke"]({ agentId: "a1", companyId: "c1", prompt: "test" }),
+      ).rejects.toThrow(CapabilityDeniedError);
+    });
+
+    it("blocks agents.sessions.create without agent.sessions.create capability", async () => {
+      const handlers = createHostClientHandlers({
+        pluginId: "test.plugin",
+        capabilities: ["agents.read", "agents.invoke"],
+        services,
+      });
+
+      await expect(
+        handlers["agents.sessions.create"]({ agentId: "a1", companyId: "c1" }),
+      ).rejects.toThrow(CapabilityDeniedError);
+    });
+
+    it("blocks agents.sessions.list without agent.sessions.list capability", async () => {
+      const handlers = createHostClientHandlers({
+        pluginId: "test.plugin",
+        capabilities: ["agents.read"],
+        services,
+      });
+
+      await expect(
+        handlers["agents.sessions.list"]({ agentId: "a1", companyId: "c1" }),
+      ).rejects.toThrow(CapabilityDeniedError);
+    });
+
+    it("blocks agents.sessions.sendMessage without agent.sessions.send capability", async () => {
+      const handlers = createHostClientHandlers({
+        pluginId: "test.plugin",
+        capabilities: ["agents.read", "agent.sessions.create"],
+        services,
+      });
+
+      await expect(
+        handlers["agents.sessions.sendMessage"]({ sessionId: "s1", companyId: "c1", prompt: "hi" }),
+      ).rejects.toThrow(CapabilityDeniedError);
+    });
+
+    it("blocks agents.sessions.close without agent.sessions.close capability", async () => {
+      const handlers = createHostClientHandlers({
+        pluginId: "test.plugin",
+        capabilities: ["agents.read", "agent.sessions.create"],
+        services,
+      });
+
+      await expect(
+        handlers["agents.sessions.close"]({ sessionId: "s1", companyId: "c1" }),
+      ).rejects.toThrow(CapabilityDeniedError);
+    });
+
     it("blocks agents.list without agents.read capability", async () => {
       const handlers = createHostClientHandlers({
         pluginId: "test.plugin",
@@ -487,6 +592,33 @@ describe("createHostClientHandlers", () => {
       });
 
       await expect(handlers["goals.list"]({})).rejects.toThrow(CapabilityDeniedError);
+    });
+
+    it("blocks goals.create without goals.create capability", async () => {
+      const handlers = createHostClientHandlers({
+        pluginId: "test.plugin",
+        capabilities: ["goals.read"],
+        services,
+      });
+
+      await expect(
+        handlers["goals.create"]({
+          companyId: "c1",
+          title: "New goal",
+        }),
+      ).rejects.toThrow(CapabilityDeniedError);
+    });
+
+    it("blocks goals.update without goals.update capability", async () => {
+      const handlers = createHostClientHandlers({
+        pluginId: "test.plugin",
+        capabilities: ["goals.read", "goals.create"],
+        services,
+      });
+
+      await expect(
+        handlers["goals.update"]({ goalId: "g1", patch: { title: "updated" }, companyId: "c1" }),
+      ).rejects.toThrow(CapabilityDeniedError);
     });
   });
 
@@ -862,6 +994,91 @@ describe("createHostClientHandlers", () => {
       expect(services.agents.get).toHaveBeenCalledWith({ agentId: "a1", companyId: "c1" });
     });
 
+    it("delegates agents.pause", async () => {
+      const handlers = createHostClientHandlers({
+        pluginId: "test.plugin",
+        capabilities: ALL_CAPABILITIES,
+        services,
+      });
+
+      await handlers["agents.pause"]({ agentId: "a1", companyId: "c1" });
+      expect(services.agents.pause).toHaveBeenCalledWith({ agentId: "a1", companyId: "c1" });
+    });
+
+    it("delegates agents.resume", async () => {
+      const handlers = createHostClientHandlers({
+        pluginId: "test.plugin",
+        capabilities: ALL_CAPABILITIES,
+        services,
+      });
+
+      await handlers["agents.resume"]({ agentId: "a1", companyId: "c1" });
+      expect(services.agents.resume).toHaveBeenCalledWith({ agentId: "a1", companyId: "c1" });
+    });
+
+    it("delegates agents.invoke", async () => {
+      const handlers = createHostClientHandlers({
+        pluginId: "test.plugin",
+        capabilities: ALL_CAPABILITIES,
+        services,
+      });
+
+      const params = { agentId: "a1", companyId: "c1", prompt: "Run health check", reason: "scheduled" };
+      const result = await handlers["agents.invoke"](params);
+      expect(services.agents.invoke).toHaveBeenCalledWith(params);
+      expect(result).toEqual({ runId: "run-1" });
+    });
+
+    it("delegates agents.sessions.create", async () => {
+      const handlers = createHostClientHandlers({
+        pluginId: "test.plugin",
+        capabilities: ALL_CAPABILITIES,
+        services,
+      });
+
+      const params = { agentId: "a1", companyId: "c1", reason: "chat" };
+      const result = await handlers["agents.sessions.create"](params);
+      expect(services.agentSessions.create).toHaveBeenCalledWith(params);
+      expect(result.sessionId).toBe("sess-1");
+    });
+
+    it("delegates agents.sessions.list", async () => {
+      const handlers = createHostClientHandlers({
+        pluginId: "test.plugin",
+        capabilities: ALL_CAPABILITIES,
+        services,
+      });
+
+      const params = { agentId: "a1", companyId: "c1" };
+      await handlers["agents.sessions.list"](params);
+      expect(services.agentSessions.list).toHaveBeenCalledWith(params);
+    });
+
+    it("delegates agents.sessions.sendMessage", async () => {
+      const handlers = createHostClientHandlers({
+        pluginId: "test.plugin",
+        capabilities: ALL_CAPABILITIES,
+        services,
+      });
+
+      const params = { sessionId: "sess-1", companyId: "c1", prompt: "Hello agent" };
+      const result = await handlers["agents.sessions.sendMessage"](params);
+      expect(services.agentSessions.sendMessage).toHaveBeenCalledWith(params);
+      expect(result).toEqual({ runId: "run-1" });
+    });
+
+    it("delegates agents.sessions.close", async () => {
+      const handlers = createHostClientHandlers({
+        pluginId: "test.plugin",
+        capabilities: ALL_CAPABILITIES,
+        services,
+      });
+
+      const params = { sessionId: "sess-1", companyId: "c1" };
+      await handlers["agents.sessions.close"](params);
+      expect(services.agentSessions.close).toHaveBeenCalledWith(params);
+    });
+
     it("delegates goals.list", async () => {
       const handlers = createHostClientHandlers({
         pluginId: "test.plugin",
@@ -882,6 +1099,37 @@ describe("createHostClientHandlers", () => {
 
       await handlers["goals.get"]({ goalId: "g1", companyId: "c1" });
       expect(services.goals.get).toHaveBeenCalledWith({ goalId: "g1", companyId: "c1" });
+    });
+
+    it("delegates goals.create", async () => {
+      const handlers = createHostClientHandlers({
+        pluginId: "test.plugin",
+        capabilities: ALL_CAPABILITIES,
+        services,
+      });
+
+      const params = {
+        companyId: "c1",
+        title: "Ship v2",
+        description: "Launch version 2",
+        level: "team",
+        ownerAgentId: "a1",
+      };
+
+      await handlers["goals.create"](params);
+      expect(services.goals.create).toHaveBeenCalledWith(params);
+    });
+
+    it("delegates goals.update", async () => {
+      const handlers = createHostClientHandlers({
+        pluginId: "test.plugin",
+        capabilities: ALL_CAPABILITIES,
+        services,
+      });
+
+      const params = { goalId: "g1", patch: { title: "Updated", status: "active" }, companyId: "c1" };
+      await handlers["goals.update"](params);
+      expect(services.goals.update).toHaveBeenCalledWith(params);
     });
   });
 
@@ -990,8 +1238,17 @@ describe("getRequiredCapability", () => {
     expect(getRequiredCapability("issues.createComment")).toBe("issue.comments.create");
     expect(getRequiredCapability("agents.list")).toBe("agents.read");
     expect(getRequiredCapability("agents.get")).toBe("agents.read");
+    expect(getRequiredCapability("agents.pause")).toBe("agents.pause");
+    expect(getRequiredCapability("agents.resume")).toBe("agents.resume");
+    expect(getRequiredCapability("agents.invoke")).toBe("agents.invoke");
+    expect(getRequiredCapability("agents.sessions.create")).toBe("agent.sessions.create");
+    expect(getRequiredCapability("agents.sessions.list")).toBe("agent.sessions.list");
+    expect(getRequiredCapability("agents.sessions.sendMessage")).toBe("agent.sessions.send");
+    expect(getRequiredCapability("agents.sessions.close")).toBe("agent.sessions.close");
     expect(getRequiredCapability("goals.list")).toBe("goals.read");
     expect(getRequiredCapability("goals.get")).toBe("goals.read");
+    expect(getRequiredCapability("goals.create")).toBe("goals.create");
+    expect(getRequiredCapability("goals.update")).toBe("goals.update");
   });
 });
 

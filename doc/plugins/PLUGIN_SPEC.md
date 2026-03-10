@@ -30,11 +30,9 @@ The following spec sections are implemented on `feature/plugins`:
 | §22 Secrets | Done | `server/src/services/plugin-secrets-handler.ts` |
 | §24 Operator UX | Done | `ui/src/pages/PluginManager.tsx`, `PluginSettings.tsx` |
 
-Not yet implemented:
-- §20 Local Tooling (workspace plugins) — deferred
-- §25.4.5 Frontend Cache Invalidation — cache headers implemented, but no WebSocket push for live invalidation
-- §26 Plugin Observability — structured logging implemented, but no dedicated metrics/tracing export
-- §29 Compatibility / Versioning — single API version (v1) supported; migration tooling deferred
+Partially implemented:
+- §20 Local Tooling — workspace metadata (`ctx.projects.listWorkspaces`, `getPrimaryWorkspace`, `getWorkspaceForIssue`) and dev watcher are implemented; `devUiUrl` proxy is not yet wired
+- §29 Compatibility / Versioning — single API version (v1) supported; multi-version loading and migration tooling deferred
 
 ## 1. Scope
 
@@ -720,6 +718,29 @@ export interface PluginContext {
     upsert(input: PluginEntityUpsert): Promise<void>;
     list(input: PluginEntityQuery): Promise<PluginEntityRecord[]>;
   };
+  agents: {
+    list(companyId?: string, opts?: { status?: string }): Promise<Agent[]>;
+    get(agentId: string, companyId: string): Promise<Agent | null>;
+    pause(agentId: string, companyId: string): Promise<Agent>;
+    resume(agentId: string, companyId: string): Promise<Agent>;
+    invoke(agentId: string, companyId: string, opts: { prompt: string; reason?: string }): Promise<{ runId: string }>;
+    sessions: {
+      create(agentId: string, companyId: string, opts?: { taskKey?: string; reason?: string }): Promise<AgentSession>;
+      list(agentId: string, companyId: string): Promise<AgentSession[]>;
+      sendMessage(sessionId: string, companyId: string, opts: {
+        prompt: string;
+        reason?: string;
+        onEvent?: (event: AgentSessionEvent) => void;
+      }): Promise<{ runId: string }>;
+      close(sessionId: string, companyId: string): Promise<void>;
+    };
+  };
+  goals: {
+    list(companyId?: string, opts?: { level?: string }): Promise<Goal[]>;
+    get(goalId: string, companyId: string): Promise<Goal | null>;
+    create(input: GoalCreateInput): Promise<Goal>;
+    update(goalId: string, patch: Partial<Goal>, companyId: string): Promise<Goal>;
+  };
   data: {
     register(key: string, handler: (params: Record<string, unknown>) => Promise<unknown>): void;
   };
@@ -763,6 +784,8 @@ The host enforces capabilities in the SDK layer and refuses calls outside the gr
 - `issue.comments.read`
 - `agents.read`
 - `goals.read`
+- `goals.create`
+- `goals.update`
 - `activity.read`
 - `costs.read`
 
@@ -775,6 +798,16 @@ The host enforces capabilities in the SDK layer and refuses calls outside the gr
 - `assets.read`
 - `activity.log.write`
 - `metrics.write`
+
+### Agent Control
+
+- `agents.pause`
+- `agents.resume`
+- `agents.invoke`
+- `agent.sessions.create`
+- `agent.sessions.list`
+- `agent.sessions.send`
+- `agent.sessions.close`
 
 ### Plugin State
 
@@ -820,6 +853,55 @@ If a plugin upgrade adds capabilities:
 1. the host must mark the plugin `upgrade_pending`
 2. the operator must explicitly approve the new capability set
 3. the new version does not become `ready` until approval completes
+
+## 15.4 Agent Operations & Sessions
+
+Plugins with the appropriate capabilities can control agents and hold conversational sessions with them.
+
+### Agent Control Operations
+
+| Capability | SDK Method | Description |
+|---|---|---|
+| `agents.read` | `ctx.agents.list()`, `ctx.agents.get()` | List/read agent metadata |
+| `agents.pause` | `ctx.agents.pause()` | Pause an active agent |
+| `agents.resume` | `ctx.agents.resume()` | Resume a paused agent |
+| `agents.invoke` | `ctx.agents.invoke()` | Fire-and-forget one-shot invocation |
+
+### Agent Session Lifecycle
+
+Sessions enable two-way conversational interaction with agents. A session maps to an `AgentTaskSession` row with a plugin-scoped task key for isolation.
+
+| Capability | SDK Method | Description |
+|---|---|---|
+| `agent.sessions.create` | `ctx.agents.sessions.create()` | Create a new session (does not send a prompt) |
+| `agent.sessions.list` | `ctx.agents.sessions.list()` | List active sessions for an agent |
+| `agent.sessions.send` | `ctx.agents.sessions.sendMessage()` | Send a message and receive streaming events |
+| `agent.sessions.close` | `ctx.agents.sessions.close()` | Close a session and release resources |
+
+**Session flow:**
+
+1. `sessions.create(agentId, companyId)` — creates the session. The agent's system prompt is inherent to the agent itself (stored in `adapterConfig`), not sent by the plugin.
+2. `sessions.sendMessage(sessionId, companyId, { prompt, onEvent })` — sends a user message. The host triggers a heartbeat run with the prompt in the payload. Streaming events are delivered to the `onEvent` callback via JSON-RPC notifications.
+3. Subsequent `sendMessage` calls reuse the same session, preserving conversation history through the adapter's session state.
+4. `sessions.close(sessionId, companyId)` — cleans up the task session row.
+
+**Streaming events** are delivered as `AgentSessionEvent` objects:
+
+```ts
+interface AgentSessionEvent {
+  sessionId: string;
+  runId: string;
+  seq: number;
+  eventType: "chunk" | "status" | "done" | "error";
+  stream: "stdout" | "stderr" | "system" | null;
+  message: string | null;
+  payload: Record<string, unknown> | null;
+}
+```
+
+The host subscribes to the company's live event stream, filters for the session's run, and forwards events as `agents.sessions.event` JSON-RPC notifications to the plugin worker. The `onEvent` callback in the SDK dispatches these to the plugin code.
+
+**Session isolation:** Each plugin's sessions are scoped by a task key prefix `plugin:<pluginKey>:session:<uuid>`. The host uses `wakeSource: "automation"` and `wakeTriggerDetail: "system"` to prevent the adapter from resetting session state between messages.
 
 ## 16. Event System
 
@@ -1506,7 +1588,7 @@ When a plugin is uninstalled, the host must handle plugin-owned data explicitly.
 3. Plugin-owned data (`plugin_state`, `plugin_entities`, `plugin_jobs`, `plugin_job_runs`, `plugin_webhook_deliveries`, `plugin_config`, `plugin_company_settings`) is retained for a configurable grace period (default: 30 days).
 4. During the grace period, the operator can reinstall the same plugin and recover its state.
 5. After the grace period, the host purges all plugin-owned data for the uninstalled plugin.
-6. The operator may force-purge immediately via CLI: `pnpm paperclipai plugin purge <plugin-id>`.
+6. The operator may force-purge immediately via CLI: `pnpm paperclipai plugin uninstall <plugin-id> --purge`.
 
 ### 25.2 Upgrade Data Considerations
 
@@ -1629,9 +1711,9 @@ These events can be consumed by other plugins (e.g. a notification plugin) or su
 
 ## 27. Plugin Development And Testing
 
-### 27.1 `@paperclipai/plugin-test-harness`
+### 27.1 `@paperclipai/plugin-sdk/testing`
 
-The host should publish a test harness package that plugin authors use for local development and testing.
+The SDK ships a test harness that plugin authors use for local development and testing.
 
 The test harness provides:
 
@@ -1640,13 +1722,14 @@ The test harness provides:
 - ability to trigger job runs and verify side effects
 - ability to simulate `getData` and `performAction` calls as if coming from the UI bridge
 - ability to simulate `executeTool` calls as if coming from an agent run
+- ability to simulate agent session events via `simulateSessionEvent()`
 - in-memory state and entity stores for assertions
 - configurable capability sets for testing capability denial paths
 
 Example usage:
 
 ```ts
-import { createTestHarness } from "@paperclipai/plugin-test-harness";
+import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
 import manifest from "../dist/manifest.js";
 import { register } from "../dist/worker.js";
 

@@ -1389,3 +1389,147 @@ describe("runWorker", () => {
     expect(response.result).toEqual({ ok: true });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Notification dispatch — agents.sessions.event
+// ---------------------------------------------------------------------------
+
+describe("agents.sessions.event notification dispatch", () => {
+  let stdio: MockStdio;
+  let host: WorkerRpcHost;
+
+  beforeEach(() => {
+    stdio = new MockStdio();
+  });
+
+  afterEach(() => {
+    if (host?.running) {
+      host.stop();
+    }
+    stdio.destroy();
+  });
+
+  it("dispatches agents.sessions.event notification to registered callback", async () => {
+    let receivedEvent: unknown = null;
+
+    const plugin = definePlugin({
+      async setup(ctx) {
+        ctx.events.on("issue.created", async () => {
+          // This triggers an outbound RPC call, which registers the onEvent callback
+          await ctx.agents.sessions.sendMessage("sess-1", "c1", {
+            prompt: "Hello",
+            onEvent: (event) => {
+              receivedEvent = event;
+            },
+          });
+        });
+      },
+    });
+
+    host = startWorkerRpcHost({
+      plugin,
+      stdin: stdio.workerStdin,
+      stdout: stdio.workerStdout,
+    });
+
+    await stdio.initialize({
+      manifest: makeManifest({
+        capabilities: [
+          "events.subscribe" as PluginCapability,
+          "agent.sessions.send" as PluginCapability,
+        ],
+      }),
+    });
+
+    // Trigger the event handler that calls sendMessage
+    stdio.sendToWorker({
+      jsonrpc: JSONRPC_VERSION,
+      id: 200,
+      method: "onEvent",
+      params: {
+        event: {
+          eventId: "evt-sess",
+          eventType: "issue.created",
+          companyId: "c1",
+          occurredAt: new Date().toISOString(),
+          payload: {},
+        },
+      },
+    });
+
+    // Read the outbound agents.sessions.sendMessage request
+    const sendRequest = await stdio.readNextMessage<JsonRpcRequest>();
+    expect(sendRequest.method).toBe("agents.sessions.sendMessage");
+    expect((sendRequest.params as any).sessionId).toBe("sess-1");
+    expect((sendRequest.params as any).prompt).toBe("Hello");
+
+    // Respond with runId
+    stdio.sendToWorker({
+      jsonrpc: JSONRPC_VERSION,
+      id: sendRequest.id,
+      result: { runId: "run-1" },
+    });
+
+    // Wait for the onEvent response
+    const eventResponse = await stdio.readNextMessage<JsonRpcResponse>();
+    expect((eventResponse as JsonRpcSuccessResponse).id).toBe(200);
+
+    // Now send a notification (no id) for the session event
+    stdio.sendToWorker({
+      jsonrpc: JSONRPC_VERSION,
+      method: "agents.sessions.event",
+      params: {
+        sessionId: "sess-1",
+        runId: "run-1",
+        seq: 1,
+        eventType: "chunk",
+        stream: "stdout",
+        message: "Agent response text",
+        payload: null,
+      },
+    });
+
+    // Give the notification time to be processed
+    await tick(50);
+
+    expect(receivedEvent).not.toBeNull();
+    expect((receivedEvent as any).sessionId).toBe("sess-1");
+    expect((receivedEvent as any).eventType).toBe("chunk");
+    expect((receivedEvent as any).message).toBe("Agent response text");
+  });
+
+  it("silently ignores notifications for unregistered session IDs", async () => {
+    const plugin = definePlugin({
+      async setup() {},
+    });
+
+    host = startWorkerRpcHost({
+      plugin,
+      stdin: stdio.workerStdin,
+      stdout: stdio.workerStdout,
+    });
+
+    await stdio.initialize();
+
+    // Send a notification for a session that has no registered callback
+    stdio.sendToWorker({
+      jsonrpc: JSONRPC_VERSION,
+      method: "agents.sessions.event",
+      params: {
+        sessionId: "unknown-session",
+        runId: "run-1",
+        seq: 1,
+        eventType: "chunk",
+        stream: "stdout",
+        message: "This should be silently ignored",
+        payload: null,
+      },
+    });
+
+    // Give it time — should not throw or crash
+    await tick(50);
+
+    // Worker should still be running
+    expect(host.running).toBe(true);
+  });
+});

@@ -37,7 +37,8 @@ import { pluginLifecycleManager } from "./services/plugin-lifecycle.js";
 import { createPluginJobCoordinator } from "./services/plugin-job-coordinator.js";
 import { buildHostServices } from "./services/plugin-host-services.js";
 import { createPluginEventBus } from "./services/plugin-event-bus.js";
-import { subscribeDomainEvents } from "./services/index.js";
+import { subscribeDomainEvents, publishGlobalLiveEvent } from "./services/index.js";
+import { createPluginDevWatcher } from "./services/plugin-dev-watcher.js";
 import { createHostClientHandlers } from "@paperclipai/plugin-sdk";
 import type { BetterAuthSessionResult } from "./auth/better-auth.js";
 
@@ -131,7 +132,19 @@ export async function createApp(
   // ---------------------------------------------------------------------------
   // Plugin runtime services — job scheduler, worker manager, tool dispatcher
   // ---------------------------------------------------------------------------
-  const workerManager = createPluginWorkerManager();
+  const workerManager = createPluginWorkerManager({
+    onWorkerEvent(event) {
+      publishGlobalLiveEvent({
+        type: event.type,
+        payload: {
+          pluginId: event.pluginId,
+          code: event.code ?? null,
+          signal: event.signal ?? null,
+          willRestart: event.willRestart ?? null,
+        },
+      });
+    },
+  });
   const eventBus = createPluginEventBus();
 
   // Bridge core domain events to the plugin event bus. This allows plugins to
@@ -177,7 +190,14 @@ export async function createApp(
         hostVersion: opts.hostVersion ?? "0.0.0",
       },
       buildHostHandlers: (pluginId, manifest) => {
-        const services = buildHostServices(db, pluginId, manifest.id, eventBus);
+        // Lazy notifyWorker — the worker handle doesn't exist yet at build
+        // time, so we look it up on each call (which only happens after the
+        // worker is running and sending RPC requests).
+        const notifyWorker = (method: string, params: unknown) => {
+          const handle = workerManager.getWorker(pluginId);
+          if (handle) handle.notify(method, params);
+        };
+        const services = buildHostServices(db, pluginId, manifest.id, eventBus, notifyWorker);
         return createHostClientHandlers({
           pluginId,
           capabilities: manifest.capabilities,
@@ -285,8 +305,20 @@ export async function createApp(
     );
   });
 
-  // Load and activate all plugins that are in 'ready' status
-  void loader.loadAll().catch((err) => {
+  // Dev watcher — watches local-path plugins for file changes and restarts workers
+  const devWatcher = createPluginDevWatcher(lifecycle);
+
+  // Load and activate all plugins that are in 'ready' status, then start
+  // watching any local-path plugins for file changes.
+  void loader.loadAll().then((result) => {
+    if (result) {
+      for (const loaded of result.results) {
+        if (loaded.success && loaded.plugin.packagePath) {
+          devWatcher.watch(loaded.plugin.id, loaded.plugin.packagePath);
+        }
+      }
+    }
+  }).catch((err) => {
     logger.error(
       { err: err instanceof Error ? err.message : String(err) },
       "Failed to load ready plugins on startup",
@@ -307,6 +339,7 @@ export async function createApp(
     logger.info("Shutting down plugin runtime services…");
 
     unsubscribeDomainEvents();
+    devWatcher.close();
     jobCoordinator.stop();
     scheduler.stop();
     toolDispatcher.teardown();

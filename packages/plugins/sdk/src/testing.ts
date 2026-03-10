@@ -22,6 +22,8 @@ import type {
   ToolResult,
   ToolRunContext,
   PluginWorkspace,
+  AgentSession,
+  AgentSessionEvent,
 } from "./types.js";
 
 export interface TestHarnessOptions {
@@ -64,6 +66,8 @@ export interface TestHarness {
   executeTool<T = ToolResult>(name: string, params: unknown, runCtx?: Partial<ToolRunContext>): Promise<T>;
   /** Read raw in-memory state for assertions. */
   getState(input: ScopeKey): unknown;
+  /** Simulate a streaming event arriving for an active session. */
+  simulateSessionEvent(sessionId: string, event: Omit<AgentSessionEvent, "sessionId">): void;
   logs: TestHarnessLogEntry[];
   activity: Array<{ message: string; entityType?: string; entityId?: string; metadata?: Record<string, unknown> }>;
   metrics: Array<{ name: string; value: number; tags?: Record<string, string> }>;
@@ -141,6 +145,9 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
   const agents = new Map<string, Agent>();
   const goals = new Map<string, Goal>();
   const projectWorkspaces = new Map<string, PluginWorkspace[]>();
+
+  const sessions = new Map<string, AgentSession>();
+  const sessionEventCallbacks = new Map<string, (event: AgentSessionEvent) => void>();
 
   const events: EventRegistration[] = [];
   const jobs = new Map<string, (job: PluginJobContext) => Promise<void>>();
@@ -306,6 +313,16 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         const workspaces = projectWorkspaces.get(projectId) ?? [];
         return workspaces.find((workspace) => workspace.isPrimary) ?? null;
       },
+      async getWorkspaceForIssue(issueId, companyId) {
+        requireCapability(manifest, capabilitySet, "project.workspaces.read");
+        const issue = issues.get(issueId);
+        if (!isInCompany(issue, companyId)) return null;
+        const projectId = (issue as unknown as Record<string, unknown>)?.projectId as string | undefined;
+        if (!projectId) return null;
+        if (!isInCompany(projects.get(projectId), companyId)) return null;
+        const workspaces = projectWorkspaces.get(projectId) ?? [];
+        return workspaces.find((workspace) => workspace.isPrimary) ?? null;
+      },
     },
     companies: {
       async list(input) {
@@ -430,6 +447,83 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         const agent = agents.get(agentId);
         return isInCompany(agent, companyId) ? agent : null;
       },
+      async pause(agentId, companyId) {
+        requireCapability(manifest, capabilitySet, "agents.pause");
+        const cid = requireCompanyId(companyId);
+        const agent = agents.get(agentId);
+        if (!isInCompany(agent, cid)) throw new Error(`Agent not found: ${agentId}`);
+        if (agent!.status === "terminated") throw new Error("Cannot pause terminated agent");
+        const updated: Agent = { ...agent!, status: "paused", updatedAt: new Date() };
+        agents.set(agentId, updated);
+        return updated;
+      },
+      async resume(agentId, companyId) {
+        requireCapability(manifest, capabilitySet, "agents.resume");
+        const cid = requireCompanyId(companyId);
+        const agent = agents.get(agentId);
+        if (!isInCompany(agent, cid)) throw new Error(`Agent not found: ${agentId}`);
+        if (agent!.status === "terminated") throw new Error("Cannot resume terminated agent");
+        if (agent!.status === "pending_approval") throw new Error("Pending approval agents cannot be resumed");
+        const updated: Agent = { ...agent!, status: "idle", updatedAt: new Date() };
+        agents.set(agentId, updated);
+        return updated;
+      },
+      async invoke(agentId, companyId, opts) {
+        requireCapability(manifest, capabilitySet, "agents.invoke");
+        const cid = requireCompanyId(companyId);
+        const agent = agents.get(agentId);
+        if (!isInCompany(agent, cid)) throw new Error(`Agent not found: ${agentId}`);
+        if (
+          agent!.status === "paused" ||
+          agent!.status === "terminated" ||
+          agent!.status === "pending_approval"
+        ) {
+          throw new Error(`Agent is not invokable in its current state: ${agent!.status}`);
+        }
+        return { runId: randomUUID() };
+      },
+      sessions: {
+        async create(agentId, companyId, opts) {
+          requireCapability(manifest, capabilitySet, "agent.sessions.create");
+          const cid = requireCompanyId(companyId);
+          const agent = agents.get(agentId);
+          if (!isInCompany(agent, cid)) throw new Error(`Agent not found: ${agentId}`);
+          const session: AgentSession = {
+            sessionId: randomUUID(),
+            agentId,
+            companyId: cid,
+            status: "active",
+            createdAt: new Date().toISOString(),
+          };
+          sessions.set(session.sessionId, session);
+          return session;
+        },
+        async list(agentId, companyId) {
+          requireCapability(manifest, capabilitySet, "agent.sessions.list");
+          const cid = requireCompanyId(companyId);
+          return [...sessions.values()].filter(
+            (s) => s.agentId === agentId && s.companyId === cid && s.status === "active",
+          );
+        },
+        async sendMessage(sessionId, companyId, opts) {
+          requireCapability(manifest, capabilitySet, "agent.sessions.send");
+          const session = sessions.get(sessionId);
+          if (!session || session.status !== "active") throw new Error(`Session not found or closed: ${sessionId}`);
+          if (session.companyId !== companyId) throw new Error(`Session not found: ${sessionId}`);
+          if (opts.onEvent) {
+            sessionEventCallbacks.set(sessionId, opts.onEvent);
+          }
+          return { runId: randomUUID() };
+        },
+        async close(sessionId, companyId) {
+          requireCapability(manifest, capabilitySet, "agent.sessions.close");
+          const session = sessions.get(sessionId);
+          if (!session) throw new Error(`Session not found: ${sessionId}`);
+          if (session.companyId !== companyId) throw new Error(`Session not found: ${sessionId}`);
+          session.status = "closed";
+          sessionEventCallbacks.delete(sessionId);
+        },
+      },
     },
     goals: {
       async list(input) {
@@ -447,6 +541,36 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         requireCapability(manifest, capabilitySet, "goals.read");
         const goal = goals.get(goalId);
         return isInCompany(goal, companyId) ? goal : null;
+      },
+      async create(input) {
+        requireCapability(manifest, capabilitySet, "goals.create");
+        const now = new Date();
+        const record: Goal = {
+          id: randomUUID(),
+          companyId: input.companyId,
+          title: input.title,
+          description: input.description ?? null,
+          level: input.level ?? "task",
+          status: input.status ?? "planned",
+          parentId: input.parentId ?? null,
+          ownerAgentId: input.ownerAgentId ?? null,
+          createdAt: now,
+          updatedAt: now,
+        };
+        goals.set(record.id, record);
+        return record;
+      },
+      async update(goalId, patch, companyId) {
+        requireCapability(manifest, capabilitySet, "goals.update");
+        const record = goals.get(goalId);
+        if (!isInCompany(record, companyId)) throw new Error(`Goal not found: ${goalId}`);
+        const updated: Goal = {
+          ...record,
+          ...patch,
+          updatedAt: new Date(),
+        };
+        goals.set(goalId, updated);
+        return updated;
       },
     },
     data: {
@@ -560,6 +684,11 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
     },
     getState(input) {
       return state.get(stateMapKey(input));
+    },
+    simulateSessionEvent(sessionId, event) {
+      const cb = sessionEventCallbacks.get(sessionId);
+      if (!cb) throw new Error(`No active session event callback for session: ${sessionId}`);
+      cb({ ...event, sessionId });
     },
     logs,
     activity,

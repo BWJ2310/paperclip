@@ -277,6 +277,57 @@ export function pluginUiStaticRoutes(db: Db, options: PluginUiStaticRouteOptions
       return;
     }
 
+    // Step 2b: Check for devUiUrl in plugin config — proxy to local dev server
+    // when a plugin author has configured a dev server URL for hot-reload.
+    // See PLUGIN_SPEC.md §27.2 — Local Development Workflow
+    try {
+      const configRow = await registry.getConfig(plugin.id);
+      const devUiUrl =
+        configRow &&
+        typeof configRow === "object" &&
+        "configJson" in configRow &&
+        (configRow as { configJson: Record<string, unknown> }).configJson?.devUiUrl;
+
+      if (typeof devUiUrl === "string" && devUiUrl.length > 0) {
+        // Proxy the request to the dev server
+        const targetUrl = new URL(rawFilePath, devUiUrl.endsWith("/") ? devUiUrl : devUiUrl + "/");
+        log.debug(
+          { pluginId: plugin.id, devUiUrl, targetUrl: targetUrl.href },
+          "plugin-ui-static: proxying to devUiUrl",
+        );
+
+        try {
+          const upstream = await fetch(targetUrl.href);
+          if (!upstream.ok) {
+            res.status(upstream.status).json({
+              error: `Dev server returned ${upstream.status}`,
+            });
+            return;
+          }
+
+          const contentType = upstream.headers.get("content-type");
+          if (contentType) res.set("Content-Type", contentType);
+          res.set("Cache-Control", "no-cache, no-store, must-revalidate");
+
+          const body = await upstream.arrayBuffer();
+          res.send(Buffer.from(body));
+          return;
+        } catch (proxyErr) {
+          log.warn(
+            {
+              pluginId: plugin.id,
+              devUiUrl,
+              err: proxyErr instanceof Error ? proxyErr.message : String(proxyErr),
+            },
+            "plugin-ui-static: failed to proxy to devUiUrl, falling back to static",
+          );
+          // Fall through to static serving below
+        }
+      }
+    } catch {
+      // Config lookup failure is non-fatal — fall through to static serving
+    }
+
     // Step 3: Resolve the plugin's UI directory
     const uiDir = resolvePluginUiDir(
       options.localPluginDir,

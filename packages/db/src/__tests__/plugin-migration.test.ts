@@ -307,13 +307,6 @@ describe("_journal.json — migration 0026_plugin_tables entry", () => {
     expect(Number.isFinite(entry?.when)).toBe(true);
     expect(entry!.when).toBeGreaterThan(0);
   });
-
-  it("latest plugin migration (0028_plugin_company_settings) is the last entry (highest idx)", async () => {
-    const journal = await readJournal();
-    const maxIdx = Math.max(...journal.entries.map((e) => e.idx));
-    const entry = journal.entries.find((e) => e.tag === "0028_plugin_company_settings");
-    expect(entry?.idx).toBe(maxIdx);
-  });
 });
 
 // ===========================================================================

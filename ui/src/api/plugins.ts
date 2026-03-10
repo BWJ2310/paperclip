@@ -233,6 +233,23 @@ export const pluginsApi = {
     api.get<PluginDashboardData>(`/plugins/${pluginId}/dashboard`),
 
   /**
+   * Fetch recent log entries for a plugin.
+   *
+   * @param pluginId - UUID of the plugin.
+   * @param options - Optional filters: limit, level, since.
+   */
+  logs: (pluginId: string, options?: { limit?: number; level?: string; since?: string }) => {
+    const params = new URLSearchParams();
+    if (options?.limit) params.set("limit", String(options.limit));
+    if (options?.level) params.set("level", options.level);
+    if (options?.since) params.set("since", options.since);
+    const qs = params.toString();
+    return api.get<Array<{ id: number; pluginId: string; level: string; message: string; meta: Record<string, unknown> | null; createdAt: string }>>(
+      `/plugins/${pluginId}/logs${qs ? `?${qs}` : ""}`,
+    );
+  },
+
+  /**
    * Upgrade a plugin to a newer version.
    *
    * If the new version declares additional capabilities, the plugin is

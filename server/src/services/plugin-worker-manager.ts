@@ -1080,6 +1080,23 @@ export function createPluginWorkerHandle(
 // ---------------------------------------------------------------------------
 
 /**
+ * Options for creating a PluginWorkerManager.
+ */
+export interface PluginWorkerManagerOptions {
+  /**
+   * Optional callback invoked when a worker emits a lifecycle event
+   * (crash, restart). Used by the server to publish global live events.
+   */
+  onWorkerEvent?: (event: {
+    type: "plugin.worker.crashed" | "plugin.worker.restarted";
+    pluginId: string;
+    code?: number | null;
+    signal?: string | null;
+    willRestart?: boolean;
+  }) => void;
+}
+
+/**
  * Create a new PluginWorkerManager.
  *
  * The manager holds all plugin worker handles and provides a unified API for
@@ -1105,7 +1122,9 @@ export function createPluginWorkerHandle(
  * await manager.stopAll();
  * ```
  */
-export function createPluginWorkerManager(): PluginWorkerManager {
+export function createPluginWorkerManager(
+  managerOptions?: PluginWorkerManagerOptions,
+): PluginWorkerManager {
   const log = logger.child({ service: "plugin-worker-manager" });
   const workers = new Map<string, PluginWorkerHandle>();
 
@@ -1123,6 +1142,30 @@ export function createPluginWorkerManager(): PluginWorkerManager {
 
       const handle = createPluginWorkerHandle(pluginId, options);
       workers.set(pluginId, handle);
+
+      // Subscribe to crash/ready events for live event forwarding
+      if (managerOptions?.onWorkerEvent) {
+        const notify = managerOptions.onWorkerEvent;
+        handle.on("crash", (payload) => {
+          notify({
+            type: "plugin.worker.crashed",
+            pluginId: payload.pluginId,
+            code: payload.code,
+            signal: payload.signal,
+            willRestart: payload.willRestart,
+          });
+        });
+        handle.on("ready", (payload) => {
+          // Only emit restarted if this was a crash recovery (totalCrashes > 0)
+          const diag = handle.diagnostics();
+          if (diag.totalCrashes > 0) {
+            notify({
+              type: "plugin.worker.restarted",
+              pluginId: payload.pluginId,
+            });
+          }
+        });
+      }
 
       log.info({ pluginId }, "starting plugin worker");
       await handle.start();

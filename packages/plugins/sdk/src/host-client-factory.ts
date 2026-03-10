@@ -151,12 +151,13 @@ export interface HostServices {
     get(params: WorkerToHostMethods["companies.get"][0]): Promise<WorkerToHostMethods["companies.get"][1]>;
   };
 
-  /** Provides `projects.list`, `projects.get`, `projects.listWorkspaces`, `projects.getPrimaryWorkspace`. */
+  /** Provides `projects.list`, `projects.get`, `projects.listWorkspaces`, `projects.getPrimaryWorkspace`, `projects.getWorkspaceForIssue`. */
   projects: {
     list(params: WorkerToHostMethods["projects.list"][0]): Promise<WorkerToHostMethods["projects.list"][1]>;
     get(params: WorkerToHostMethods["projects.get"][0]): Promise<WorkerToHostMethods["projects.get"][1]>;
     listWorkspaces(params: WorkerToHostMethods["projects.listWorkspaces"][0]): Promise<WorkerToHostMethods["projects.listWorkspaces"][1]>;
     getPrimaryWorkspace(params: WorkerToHostMethods["projects.getPrimaryWorkspace"][0]): Promise<WorkerToHostMethods["projects.getPrimaryWorkspace"][1]>;
+    getWorkspaceForIssue(params: WorkerToHostMethods["projects.getWorkspaceForIssue"][0]): Promise<WorkerToHostMethods["projects.getWorkspaceForIssue"][1]>;
   };
 
   /** Provides `issues.list`, `issues.get`, `issues.create`, `issues.update`, `issues.listComments`, `issues.createComment`. */
@@ -169,16 +170,29 @@ export interface HostServices {
     createComment(params: WorkerToHostMethods["issues.createComment"][0]): Promise<WorkerToHostMethods["issues.createComment"][1]>;
   };
 
-  /** Provides `agents.list`, `agents.get`. */
+  /** Provides `agents.list`, `agents.get`, `agents.pause`, `agents.resume`, `agents.invoke`. */
   agents: {
     list(params: WorkerToHostMethods["agents.list"][0]): Promise<WorkerToHostMethods["agents.list"][1]>;
     get(params: WorkerToHostMethods["agents.get"][0]): Promise<WorkerToHostMethods["agents.get"][1]>;
+    pause(params: WorkerToHostMethods["agents.pause"][0]): Promise<WorkerToHostMethods["agents.pause"][1]>;
+    resume(params: WorkerToHostMethods["agents.resume"][0]): Promise<WorkerToHostMethods["agents.resume"][1]>;
+    invoke(params: WorkerToHostMethods["agents.invoke"][0]): Promise<WorkerToHostMethods["agents.invoke"][1]>;
   };
 
-  /** Provides `goals.list`, `goals.get`. */
+  /** Provides `agents.sessions.create`, `agents.sessions.list`, `agents.sessions.sendMessage`, `agents.sessions.close`. */
+  agentSessions: {
+    create(params: WorkerToHostMethods["agents.sessions.create"][0]): Promise<WorkerToHostMethods["agents.sessions.create"][1]>;
+    list(params: WorkerToHostMethods["agents.sessions.list"][0]): Promise<WorkerToHostMethods["agents.sessions.list"][1]>;
+    sendMessage(params: WorkerToHostMethods["agents.sessions.sendMessage"][0]): Promise<WorkerToHostMethods["agents.sessions.sendMessage"][1]>;
+    close(params: WorkerToHostMethods["agents.sessions.close"][0]): Promise<void>;
+  };
+
+  /** Provides `goals.list`, `goals.get`, `goals.create`, `goals.update`. */
   goals: {
     list(params: WorkerToHostMethods["goals.list"][0]): Promise<WorkerToHostMethods["goals.list"][1]>;
     get(params: WorkerToHostMethods["goals.get"][0]): Promise<WorkerToHostMethods["goals.get"][1]>;
+    create(params: WorkerToHostMethods["goals.create"][0]): Promise<WorkerToHostMethods["goals.create"][1]>;
+    update(params: WorkerToHostMethods["goals.update"][0]): Promise<WorkerToHostMethods["goals.update"][1]>;
   };
 }
 
@@ -282,6 +296,7 @@ const METHOD_CAPABILITY_MAP: Record<WorkerToHostMethodName, PluginCapability | n
   "projects.get": "projects.read",
   "projects.listWorkspaces": "project.workspaces.read",
   "projects.getPrimaryWorkspace": "project.workspaces.read",
+  "projects.getWorkspaceForIssue": "project.workspaces.read",
 
   // Issues
   "issues.list": "issues.read",
@@ -294,10 +309,21 @@ const METHOD_CAPABILITY_MAP: Record<WorkerToHostMethodName, PluginCapability | n
   // Agents
   "agents.list": "agents.read",
   "agents.get": "agents.read",
+  "agents.pause": "agents.pause",
+  "agents.resume": "agents.resume",
+  "agents.invoke": "agents.invoke",
+
+  // Agent Sessions
+  "agents.sessions.create": "agent.sessions.create",
+  "agents.sessions.list": "agent.sessions.list",
+  "agents.sessions.sendMessage": "agent.sessions.send",
+  "agents.sessions.close": "agent.sessions.close",
 
   // Goals
   "goals.list": "goals.read",
   "goals.get": "goals.read",
+  "goals.create": "goals.create",
+  "goals.update": "goals.update",
 };
 
 // ---------------------------------------------------------------------------
@@ -446,6 +472,9 @@ export function createHostClientHandlers(
     "projects.getPrimaryWorkspace": gated("projects.getPrimaryWorkspace", async (params) => {
       return services.projects.getPrimaryWorkspace(params);
     }),
+    "projects.getWorkspaceForIssue": gated("projects.getWorkspaceForIssue", async (params) => {
+      return services.projects.getWorkspaceForIssue(params);
+    }),
 
     // Issues
     "issues.list": gated("issues.list", async (params) => {
@@ -474,6 +503,29 @@ export function createHostClientHandlers(
     "agents.get": gated("agents.get", async (params) => {
       return services.agents.get(params);
     }),
+    "agents.pause": gated("agents.pause", async (params) => {
+      return services.agents.pause(params);
+    }),
+    "agents.resume": gated("agents.resume", async (params) => {
+      return services.agents.resume(params);
+    }),
+    "agents.invoke": gated("agents.invoke", async (params) => {
+      return services.agents.invoke(params);
+    }),
+
+    // Agent Sessions
+    "agents.sessions.create": gated("agents.sessions.create", async (params) => {
+      return services.agentSessions.create(params);
+    }),
+    "agents.sessions.list": gated("agents.sessions.list", async (params) => {
+      return services.agentSessions.list(params);
+    }),
+    "agents.sessions.sendMessage": gated("agents.sessions.sendMessage", async (params) => {
+      return services.agentSessions.sendMessage(params);
+    }),
+    "agents.sessions.close": gated("agents.sessions.close", async (params) => {
+      return services.agentSessions.close(params);
+    }),
 
     // Goals
     "goals.list": gated("goals.list", async (params) => {
@@ -481,6 +533,12 @@ export function createHostClientHandlers(
     }),
     "goals.get": gated("goals.get", async (params) => {
       return services.goals.get(params);
+    }),
+    "goals.create": gated("goals.create", async (params) => {
+      return services.goals.create(params);
+    }),
+    "goals.update": gated("goals.update", async (params) => {
+      return services.goals.update(params);
     }),
   };
 }

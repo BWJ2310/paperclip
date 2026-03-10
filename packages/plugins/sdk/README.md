@@ -88,6 +88,8 @@ runWorker(plugin, import.meta.url);
 
 **Context (`ctx`) in setup:** `config`, `events`, `jobs`, `launchers`, `http`, `secrets`, `assets`, `activity`, `state`, `entities`, `projects`, `companies`, `issues`, `agents`, `goals`, `data`, `actions`, `tools`, `metrics`, `logger`, `manifest`. All host APIs are capability-gated; declare capabilities in the manifest.
 
+**Agents:** `ctx.agents.invoke(agentId, companyId, opts)` for one-shot invocation. `ctx.agents.sessions` for two-way chat: `create`, `list`, `sendMessage` (with streaming `onEvent` callback), `close`. See the [Plugin Authoring Guide](../../doc/plugins/PLUGIN_AUTHORING_GUIDE.md#agent-sessions-two-way-chat) for details.
+
 **Jobs:** Declare in `manifest.jobs` with `jobKey`, `displayName`, `schedule` (cron). Register handler with `ctx.jobs.register(jobKey, fn)`. **Webhooks:** Declare in `manifest.webhooks` with `endpointKey`; handle in `onWebhook(input)`. **State:** `ctx.state.get/set/delete(scopeKey)`; scope kinds: `instance`, `company`, `project`, `project_workspace`, `agent`, `issue`, `goal`, `run`.
 
 ## Events
@@ -104,6 +106,7 @@ Subscribe in `setup` with `ctx.events.on(name, handler)` or `ctx.events.on(name,
 | `issue.created`, `issue.updated`, `issue.comment.created` | issue |
 | `agent.created`, `agent.updated`, `agent.status_changed` | agent |
 | `agent.run.started`, `agent.run.finished`, `agent.run.failed`, `agent.run.cancelled` | run |
+| `goal.created`, `goal.updated` | goal |
 | `approval.created`, `approval.decided` | approval |
 | `cost_event.created` | cost |
 | `activity.logged` | activity |
@@ -225,6 +228,8 @@ Declare in `manifest.capabilities`. Grouped by scope:
 | | `issue.comments.read` |
 | | `agents.read` |
 | | `goals.read` |
+| | `goals.create` |
+| | `goals.update` |
 | | `activity.read` |
 | | `costs.read` |
 | | `issues.create` |
@@ -244,6 +249,11 @@ Declare in `manifest.capabilities`. Grouped by scope:
 | | `http.outbound` |
 | | `secrets.read-ref` |
 | **Agent** | `agent.tools.register` |
+| | `agents.invoke` |
+| | `agent.sessions.create` |
+| | `agent.sessions.list` |
+| | `agent.sessions.send` |
+| | `agent.sessions.close` |
 | **UI** | `ui.sidebar.register` |
 | | `ui.page.register` |
 | | `ui.detailTab.register` |
@@ -440,6 +450,34 @@ export function SyncToolbarButton() {
 ```
 
 Prefer deep-linkable tabs and pages for primary workflows. Reserve plugin-owned modals for confirmations, pickers, and compact editors.
+
+## Agent sessions (two-way chat)
+
+Plugins can hold multi-turn conversational sessions with agents:
+
+```ts
+// Create a session
+const session = await ctx.agents.sessions.create(agentId, companyId);
+
+// Send a message and stream the response
+await ctx.agents.sessions.sendMessage(session.sessionId, companyId, {
+  prompt: "Help me triage this issue",
+  onEvent: (event) => {
+    if (event.eventType === "chunk") console.log(event.message);
+    if (event.eventType === "done") console.log("Stream complete");
+  },
+});
+
+// List active sessions
+const sessions = await ctx.agents.sessions.list(agentId, companyId);
+
+// Close when done
+await ctx.agents.sessions.close(session.sessionId, companyId);
+```
+
+Requires capabilities: `agent.sessions.create`, `agent.sessions.list`, `agent.sessions.send`, `agent.sessions.close`.
+
+Exported types: `AgentSession`, `AgentSessionEvent`, `AgentSessionSendResult`, `PluginAgentSessionsClient`.
 
 ## Testing utilities
 

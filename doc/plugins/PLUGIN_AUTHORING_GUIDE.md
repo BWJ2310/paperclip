@@ -24,6 +24,8 @@ For in-repo first-party reference implementations, see [EXAMPLE_PLUGINS.md](./EX
    - [Secrets and Config](#secrets-and-config)
    - [Plugin State](#plugin-state)
    - [Agent Tools](#agent-tools)
+   - [Agent Invocation](#agent-invocation)
+   - [Agent Sessions (Two-Way Chat)](#agent-sessions-two-way-chat)
    - [Data and Action Handlers](#data-and-action-handlers)
    - [Lifecycle Hooks](#lifecycle-hooks)
 6. [UI Components](#ui-components)
@@ -69,6 +71,7 @@ Plugins can:
 - **Run scheduled jobs**
 - **Receive webhooks** from external services
 - **Read and write plugin-scoped state** (per-instance, per-company, per-project, etc.)
+- **Invoke agents** (one-shot or conversational sessions with streaming)
 - **Emit plugin-to-plugin events**
 
 Plugins **cannot**:
@@ -623,6 +626,177 @@ ctx.tools.register(
 
 Requires the `agent.tools.register` capability.
 
+### Agent Invocation
+
+Plugins can invoke agents on demand using `ctx.agents.invoke()`. This is a fire-and-forget call — it triggers a single agent run and returns immediately.
+
+```ts
+const result = await ctx.agents.invoke(agentId, companyId, {
+  reason: "Automated triage for new issue",
+  payload: { issueId: "iss_123" },
+});
+// result: { runId: string }
+```
+
+Requires the `agents.invoke` capability.
+
+### Agent Sessions (Two-Way Chat)
+
+Plugins can hold conversational sessions with agents, enabling multi-turn chat UIs. A session maintains conversational continuity across multiple messages — the agent remembers previous exchanges within the session.
+
+**Capabilities required:** `agent.sessions.create`, `agent.sessions.list`, `agent.sessions.send`, `agent.sessions.close`
+
+#### Creating a session
+
+```ts
+const session = await ctx.agents.sessions.create(agentId, companyId, {
+  taskKey: "support-chat-42",  // optional — plugin-scoped identifier
+  reason: "User opened support chat",
+});
+// session: { sessionId, agentId, companyId, status: "active", createdAt }
+```
+
+#### Sending messages with streaming
+
+`sendMessage` triggers an agent run and streams response events via the `onEvent` callback:
+
+```ts
+const result = await ctx.agents.sessions.sendMessage(sessionId, companyId, {
+  prompt: "What is the status of issue ISS-42?",
+  reason: "User asked about issue status",
+  onEvent: (event) => {
+    // event: AgentSessionEvent
+    switch (event.eventType) {
+      case "chunk":
+        // Append to the streaming response
+        process.stdout.write(event.message ?? "");
+        break;
+      case "status":
+        // Agent status update (e.g. "thinking", "tool_use")
+        break;
+      case "done":
+        // Stream complete
+        break;
+      case "error":
+        // Something went wrong
+        ctx.logger.error("Session error", { message: event.message });
+        break;
+    }
+  },
+});
+// result: { runId }
+```
+
+**`AgentSessionEvent` fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sessionId` | string | The session this event belongs to |
+| `runId` | string | The agent run that produced this event |
+| `seq` | number | Monotonically increasing sequence number |
+| `eventType` | `"chunk" \| "status" \| "done" \| "error"` | Event classification |
+| `stream` | `"stdout" \| "stderr" \| "system" \| null` | Which output stream |
+| `message` | `string \| null` | Text content of the event |
+| `payload` | `Record<string, unknown> \| null` | Structured event data |
+
+#### Listing active sessions
+
+```ts
+const sessions = await ctx.agents.sessions.list(agentId, companyId);
+// sessions: AgentSession[]
+```
+
+#### Closing a session
+
+```ts
+await ctx.agents.sessions.close(sessionId, companyId);
+```
+
+After closing, sending to the session will throw. Close sessions when the conversation is complete to release resources.
+
+#### Full chat flow example
+
+```ts
+import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
+
+const plugin = definePlugin({
+  async setup(ctx) {
+    ctx.actions.register("start-chat", async ({ agentId, companyId }) => {
+      // Create a session
+      const session = await ctx.agents.sessions.create(
+        agentId as string,
+        companyId as string,
+      );
+
+      // Send the first message
+      const chunks: string[] = [];
+      await ctx.agents.sessions.sendMessage(session.sessionId, companyId as string, {
+        prompt: "Hello! Can you help me with issue triage?",
+        onEvent: (event) => {
+          if (event.eventType === "chunk" && event.message) {
+            chunks.push(event.message);
+          }
+        },
+      });
+
+      return { sessionId: session.sessionId, response: chunks.join("") };
+    });
+
+    ctx.actions.register("send-message", async ({ sessionId, companyId, prompt }) => {
+      const chunks: string[] = [];
+      await ctx.agents.sessions.sendMessage(sessionId as string, companyId as string, {
+        prompt: prompt as string,
+        onEvent: (event) => {
+          if (event.eventType === "chunk" && event.message) {
+            chunks.push(event.message);
+          }
+        },
+      });
+      return { response: chunks.join("") };
+    });
+
+    ctx.actions.register("end-chat", async ({ sessionId, companyId }) => {
+      await ctx.agents.sessions.close(sessionId as string, companyId as string);
+      return { closed: true };
+    });
+  },
+});
+
+export default plugin;
+runWorker(plugin, import.meta.url);
+```
+
+#### Testing sessions
+
+The test harness provides full session mock support:
+
+```ts
+import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
+
+const harness = createTestHarness({ manifest });
+await plugin.definition.setup(harness.ctx);
+
+// Create and use a session
+const session = await harness.ctx.agents.sessions.create("agent-1", "company-1");
+const result = await harness.ctx.agents.sessions.sendMessage(
+  session.sessionId, "company-1", { prompt: "Hello" },
+);
+
+// Simulate streaming events from the agent
+harness.simulateSessionEvent(session.sessionId, {
+  sessionId: session.sessionId,
+  runId: result.runId,
+  seq: 1,
+  eventType: "chunk",
+  stream: "stdout",
+  message: "Hello! How can I help?",
+  payload: null,
+});
+
+// Clean up
+await harness.ctx.agents.sessions.close(session.sessionId, "company-1");
+```
+
 ### Data and Action Handlers
 
 Register handlers that your UI components call via the bridge:
@@ -1108,6 +1282,8 @@ Sandbox/runtime enforcement rules:
 | `issue.comments.read` | Reading issue comments |
 | `agents.read` | Reading agent data |
 | `goals.read` | Reading goal data |
+| `goals.create` | Creating goals |
+| `goals.update` | Updating goals |
 | `activity.read` | Reading activity log |
 | `costs.read` | Reading cost data |
 | `issues.create` | Creating issues |
@@ -1126,6 +1302,11 @@ Sandbox/runtime enforcement rules:
 | `http.outbound` | `ctx.http.fetch()` |
 | `secrets.read-ref` | `ctx.secrets.resolve()` |
 | `agent.tools.register` | `ctx.tools.register()` |
+| `agents.invoke` | `ctx.agents.invoke()` |
+| `agent.sessions.create` | `ctx.agents.sessions.create()` |
+| `agent.sessions.list` | `ctx.agents.sessions.list()` |
+| `agent.sessions.send` | `ctx.agents.sessions.sendMessage()` |
+| `agent.sessions.close` | `ctx.agents.sessions.close()` |
 | `instance.settings.register` | Registering instance settings pages |
 | `ui.sidebar.register` | Sidebar slot |
 | `ui.page.register` | Page slot |

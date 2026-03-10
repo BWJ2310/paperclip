@@ -1,6 +1,7 @@
 /// <reference path="./types/express.d.ts" />
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
+import os from "node:os";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
@@ -389,7 +390,7 @@ export async function startServer(): Promise<StartedServer> {
         "Use authenticated mode for non-loopback deployments.",
     );
   }
-  
+
   if (config.deploymentMode === "local_trusted" && config.deploymentExposure !== "private") {
     throw new Error("local_trusted mode only supports private exposure");
   }
@@ -463,6 +464,13 @@ export async function startServer(): Promise<StartedServer> {
   const listenPort = await detectPort(config.port);
   const uiMode = config.uiDevMiddleware ? "vite-dev" : config.serveUi ? "static" : "none";
   const storageService = createStorageServiceFromConfig(config);
+  const instancePluginDir = resolve(
+    os.homedir(),
+    ".paperclip",
+    "instances",
+    config.instanceId,
+    "plugins",
+  );
   const { app, shutdownPlugins } = await createApp(db as any, {
     uiMode,
     serverPort: listenPort,
@@ -473,6 +481,8 @@ export async function startServer(): Promise<StartedServer> {
     bindHost: config.host,
     authReady,
     companyDeletionEnabled: config.companyDeletionEnabled,
+    instanceId: config.instanceId,
+    localPluginDir: instancePluginDir,
     betterAuthHandler,
     resolveSession,
   });

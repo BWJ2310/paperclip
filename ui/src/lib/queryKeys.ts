@@ -159,6 +159,11 @@ export const queryKeys = {
     dashboard: (pluginId: string) => ["plugins", pluginId, "dashboard"] as const,
 
     /**
+     * Cache key for a plugin's recent log entries (`GET /api/plugins/:pluginId/logs`).
+     */
+    logs: (pluginId: string) => ["plugins", pluginId, "logs"] as const,
+
+    /**
      * Root key for all company-scoped plugin availability queries for one company.
      *
      * @param companyId - UUID of the company.

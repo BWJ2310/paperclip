@@ -20,9 +20,9 @@
 import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import type { Response } from "express";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, gte } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { pluginWebhookDeliveries } from "@paperclipai/db";
+import { pluginLogs, pluginWebhookDeliveries } from "@paperclipai/db";
 import type {
   PluginStatus,
   PaperclipPluginManifestV1,
@@ -38,6 +38,7 @@ import { pluginRegistryService } from "../services/plugin-registry.js";
 import { pluginLifecycleManager } from "../services/plugin-lifecycle.js";
 import { getPluginUiContributionMetadata, pluginLoader } from "../services/plugin-loader.js";
 import { logActivity } from "../services/activity-log.js";
+import { publishGlobalLiveEvent } from "../services/live-events.js";
 import type { PluginJobScheduler } from "../services/plugin-job-scheduler.js";
 import type { PluginJobStore } from "../services/plugin-job-store.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -730,6 +731,7 @@ export function pluginRoutes(
           // no-op
         }
         const updated = await registry.getById(existingPlugin.id);
+        publishGlobalLiveEvent({ type: "plugin.ui.updated", payload: { pluginId: existingPlugin.id, action: "installed" } });
         res.json(updated);
       } else {
         // This shouldn't happen since installPlugin already registers in the DB
@@ -1224,6 +1226,7 @@ export function pluginRoutes(
 
     try {
       const result = await lifecycle.unload(plugin.id, purge);
+      publishGlobalLiveEvent({ type: "plugin.ui.updated", payload: { pluginId: plugin.id, action: "uninstalled" } });
       res.json(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1253,6 +1256,7 @@ export function pluginRoutes(
 
     try {
       const result = await lifecycle.enable(plugin.id);
+      publishGlobalLiveEvent({ type: "plugin.ui.updated", payload: { pluginId: plugin.id, action: "enabled" } });
       res.json(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1287,6 +1291,7 @@ export function pluginRoutes(
 
     try {
       const result = await lifecycle.disable(plugin.id, reason);
+      publishGlobalLiveEvent({ type: "plugin.ui.updated", payload: { pluginId: plugin.id, action: "disabled" } });
       res.json(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1365,6 +1370,53 @@ export function pluginRoutes(
   });
 
   /**
+   * GET /api/plugins/:pluginId/logs
+   *
+   * Query recent log entries for a plugin.
+   *
+   * Query params:
+   * - limit: Maximum number of entries (default 100, max 500)
+   * - level: Filter by log level (info, warn, error, debug)
+   * - since: ISO timestamp to filter logs newer than this time
+   *
+   * Response: Array of log entries, newest first.
+   */
+  router.get("/plugins/:pluginId/logs", async (req, res) => {
+    assertBoard(req);
+    const { pluginId } = req.params;
+
+    const plugin = await resolvePlugin(registry, pluginId);
+    if (!plugin) {
+      res.status(404).json({ error: "Plugin not found" });
+      return;
+    }
+
+    const limit = Math.min(Math.max(parseInt(req.query.limit as string, 10) || 100, 1), 500);
+    const level = req.query.level as string | undefined;
+    const since = req.query.since as string | undefined;
+
+    const conditions = [eq(pluginLogs.pluginId, plugin.id)];
+    if (level) {
+      conditions.push(eq(pluginLogs.level, level));
+    }
+    if (since) {
+      const sinceDate = new Date(since);
+      if (!isNaN(sinceDate.getTime())) {
+        conditions.push(gte(pluginLogs.createdAt, sinceDate));
+      }
+    }
+
+    const rows = await db
+      .select()
+      .from(pluginLogs)
+      .where(and(...conditions))
+      .orderBy(desc(pluginLogs.createdAt))
+      .limit(limit);
+
+    res.json(rows);
+  });
+
+  /**
    * POST /api/plugins/:pluginId/upgrade
    *
    * Upgrade a plugin to a newer version.
@@ -1398,6 +1450,7 @@ export function pluginRoutes(
       // 3. If new capabilities, mark as upgrade_pending
       // 4. Otherwise, transition to ready
       const result = await lifecycle.upgrade(plugin.id, version);
+      publishGlobalLiveEvent({ type: "plugin.ui.updated", payload: { pluginId: plugin.id, action: "upgraded" } });
       res.json(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1470,6 +1523,35 @@ export function pluginRoutes(
       const result = await registry.upsertConfig(plugin.id, {
         configJson: body.configJson,
       });
+
+      // Notify the running worker about the config change (PLUGIN_SPEC §25.4.4).
+      // If the worker implements onConfigChanged, send the new config via RPC.
+      // If it doesn't (METHOD_NOT_IMPLEMENTED), restart the worker so it picks
+      // up the new config on re-initialize. If no worker is running, skip.
+      if (bridgeDeps?.workerManager.isRunning(plugin.id)) {
+        try {
+          await bridgeDeps.workerManager.call(
+            plugin.id,
+            "configChanged",
+            { config: body.configJson },
+          );
+        } catch (rpcErr) {
+          if (
+            rpcErr instanceof JsonRpcCallError &&
+            rpcErr.code === PLUGIN_RPC_ERROR_CODES.METHOD_NOT_IMPLEMENTED
+          ) {
+            // Worker doesn't handle live config — restart it.
+            try {
+              await lifecycle.restartWorker(plugin.id);
+            } catch {
+              // Restart failure is non-fatal for the config save response.
+            }
+          }
+          // Other RPC errors (timeout, unavailable) are non-fatal — config is
+          // already persisted and will take effect on next worker restart.
+        }
+      }
+
       res.json(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

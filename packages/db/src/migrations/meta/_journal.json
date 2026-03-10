@@ -218,6 +218,13 @@
       "when": 1772900002000,
       "tag": "0028_plugin_company_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1772900003000,
+      "tag": "0029_plugin_logs",
+      "breakpoints": true
     }
   ]
 }

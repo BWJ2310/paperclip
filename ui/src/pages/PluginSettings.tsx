@@ -81,6 +81,13 @@ export function PluginSettings() {
     refetchInterval: 30000,
   });
 
+  const { data: recentLogs } = useQuery({
+    queryKey: queryKeys.plugins.logs(pluginId!),
+    queryFn: () => pluginsApi.logs(pluginId!, { limit: 50 }),
+    enabled: !!pluginId && plugin?.status === "ready",
+    refetchInterval: 30000,
+  });
+
   // Fetch existing config for the plugin
   const configSchema = plugin?.manifestJson?.instanceConfigSchema as JsonSchemaNode | undefined;
   const hasConfigSchema = configSchema && configSchema.properties && Object.keys(configSchema.properties).length > 0;
@@ -358,6 +365,38 @@ export function PluginSettings() {
                 <div className="pt-2 border-t border-border/50 text-xs text-muted-foreground flex items-center gap-1.5">
                   <Clock className="h-3 w-3" />
                   Last checked: {new Date(dashboardData.checkedAt).toLocaleTimeString()}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Recent Logs — queryable plugin log history (§26.1) */}
+          {recentLogs && recentLogs.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-1.5">
+                  <ActivitySquare className="h-4 w-4" />
+                  Recent Logs
+                </CardTitle>
+                <CardDescription>Last {recentLogs.length} log entries</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="max-h-64 overflow-y-auto space-y-1 font-mono text-xs">
+                  {recentLogs.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className={`flex gap-2 py-0.5 ${
+                        entry.level === "error" ? "text-destructive" :
+                        entry.level === "warn" ? "text-yellow-600 dark:text-yellow-400" :
+                        entry.level === "debug" ? "text-muted-foreground/60" :
+                        "text-muted-foreground"
+                      }`}
+                    >
+                      <span className="shrink-0 text-muted-foreground/50">{new Date(entry.createdAt).toLocaleTimeString()}</span>
+                      <Badge variant="outline" className="h-4 text-[10px] px-1 shrink-0">{entry.level}</Badge>
+                      <span className="truncate" title={entry.message}>{entry.message}</span>
+                    </div>
+                  ))}
                 </div>
               </CardContent>
             </Card>

@@ -60,7 +60,16 @@ const ALL_CAPABILITIES: PluginCapability[] = [
   "issue.comments.read",
   "issue.comments.create",
   "agents.read",
+  "agents.pause",
+  "agents.resume",
+  "agents.invoke",
+  "agent.sessions.create",
+  "agent.sessions.list",
+  "agent.sessions.send",
+  "agent.sessions.close",
   "goals.read",
+  "goals.create",
+  "goals.update",
   "activity.read",
   "costs.read",
   "issues.create",
@@ -385,6 +394,36 @@ describe("test harness capability gating", () => {
         /missing required capability.*agents\.read/i,
       );
     });
+
+    it("blocks agents.pause without agents.pause", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read"]),
+      });
+
+      await expect(h.ctx.agents.pause("a1", "c1")).rejects.toThrow(
+        /missing required capability.*agents\.pause/i,
+      );
+    });
+
+    it("blocks agents.resume without agents.resume", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read"]),
+      });
+
+      await expect(h.ctx.agents.resume("a1", "c1")).rejects.toThrow(
+        /missing required capability.*agents\.resume/i,
+      );
+    });
+
+    it("blocks agents.invoke without agents.invoke", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read"]),
+      });
+
+      await expect(
+        h.ctx.agents.invoke("a1", "c1", { prompt: "test" }),
+      ).rejects.toThrow(/missing required capability.*agents\.invoke/i);
+    });
   });
 
   describe("goals capability gating", () => {
@@ -396,6 +435,26 @@ describe("test harness capability gating", () => {
       await expect(h.ctx.goals.list({ companyId: "c1" })).rejects.toThrow(
         /missing required capability.*goals\.read/i,
       );
+    });
+
+    it("blocks goals.create without goals.create", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["goals.read"]),
+      });
+
+      await expect(
+        h.ctx.goals.create({ companyId: "c1", title: "New goal" }),
+      ).rejects.toThrow(/missing required capability.*goals\.create/i);
+    });
+
+    it("blocks goals.update without goals.update", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["goals.read", "goals.create"]),
+      });
+
+      await expect(
+        h.ctx.goals.update("g1", { title: "Updated" }, "c1"),
+      ).rejects.toThrow(/missing required capability.*goals\.update/i);
     });
   });
 
@@ -1721,6 +1780,182 @@ describe("seeded data reads through test harness", () => {
 });
 
 // ===========================================================================
+// Agent write operations (pause, resume, invoke)
+// ===========================================================================
+
+describe("agent write operations through test harness", () => {
+  const AGENT_SEED = {
+    id: "a1",
+    companyId: "c1",
+    name: "Test Agent",
+    title: null,
+    role: "engineer" as const,
+    reportsTo: null,
+    status: "active" as const,
+    adapterType: "codex-local",
+    adapterConfig: {},
+    runtimeConfig: {},
+    permissions: [],
+    capabilities: null,
+    budgetMonthlyCents: 0,
+    metadata: null,
+    terminatedAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    urlKey: "test-agent",
+  };
+
+  describe("agents.pause", () => {
+    it("pauses an active agent", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agents.pause"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED }] });
+
+      const paused = await h.ctx.agents.pause("a1", "c1");
+      expect(paused.status).toBe("paused");
+    });
+
+    it("rejects pausing a cross-company agent", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agents.pause"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED, companyId: "c2" }] });
+
+      await expect(h.ctx.agents.pause("a1", "c1")).rejects.toThrow(/Agent not found/);
+    });
+
+    it("rejects pausing a terminated agent", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agents.pause"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED, status: "terminated" as const }] });
+
+      await expect(h.ctx.agents.pause("a1", "c1")).rejects.toThrow(/terminated/i);
+    });
+  });
+
+  describe("agents.resume", () => {
+    it("resumes a paused agent", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agents.resume"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED, status: "paused" as const }] });
+
+      const resumed = await h.ctx.agents.resume("a1", "c1");
+      expect(resumed.status).toBe("idle");
+    });
+
+    it("rejects resuming a cross-company agent", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agents.resume"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED, companyId: "c2", status: "paused" as const }] });
+
+      await expect(h.ctx.agents.resume("a1", "c1")).rejects.toThrow(/Agent not found/);
+    });
+
+    it("rejects resuming a terminated agent", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agents.resume"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED, status: "terminated" as const }] });
+
+      await expect(h.ctx.agents.resume("a1", "c1")).rejects.toThrow(/terminated/i);
+    });
+
+    it("rejects resuming a pending_approval agent", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agents.resume"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED, status: "pending_approval" as const }] });
+
+      await expect(h.ctx.agents.resume("a1", "c1")).rejects.toThrow(/pending.?approval/i);
+    });
+  });
+
+  describe("agents.invoke", () => {
+    it("invokes an active agent and returns runId", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agents.invoke"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED }] });
+
+      const result = await h.ctx.agents.invoke("a1", "c1", { prompt: "Run health check" });
+      expect(result.runId).toBeDefined();
+      expect(typeof result.runId).toBe("string");
+    });
+
+    it("invokes an idle agent and returns runId", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agents.invoke"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED, status: "idle" as const }] });
+
+      const result = await h.ctx.agents.invoke("a1", "c1", {
+        prompt: "Generate report",
+        reason: "Scheduled daily report",
+      });
+      expect(result.runId).toBeDefined();
+    });
+
+    it("rejects invoking a cross-company agent", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agents.invoke"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED, companyId: "c2" }] });
+
+      await expect(
+        h.ctx.agents.invoke("a1", "c1", { prompt: "test" }),
+      ).rejects.toThrow(/Agent not found/);
+    });
+
+    it("rejects invoking a paused agent", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agents.invoke"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED, status: "paused" as const }] });
+
+      await expect(
+        h.ctx.agents.invoke("a1", "c1", { prompt: "test" }),
+      ).rejects.toThrow(/not invokable.*paused/i);
+    });
+
+    it("rejects invoking a terminated agent", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agents.invoke"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED, status: "terminated" as const }] });
+
+      await expect(
+        h.ctx.agents.invoke("a1", "c1", { prompt: "test" }),
+      ).rejects.toThrow(/not invokable.*terminated/i);
+    });
+
+    it("rejects invoking a pending_approval agent", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agents.invoke"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED, status: "pending_approval" as const }] });
+
+      await expect(
+        h.ctx.agents.invoke("a1", "c1", { prompt: "test" }),
+      ).rejects.toThrow(/not invokable.*pending_approval/i);
+    });
+
+    it("rejects invoking a non-existent agent", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agents.invoke"]),
+      });
+
+      await expect(
+        h.ctx.agents.invoke("missing", "c1", { prompt: "test" }),
+      ).rejects.toThrow(/Agent not found/);
+    });
+  });
+});
+
+// ===========================================================================
 // Secrets and assets through test harness
 // ===========================================================================
 
@@ -1884,5 +2119,265 @@ describe("integration: definePlugin with createTestHarness", () => {
     // Health check
     const health = await plugin.definition.onHealth!();
     expect(health.status).toBe("ok");
+  });
+});
+
+// ===========================================================================
+// Agent sessions through test harness
+// ===========================================================================
+
+describe("agent sessions through test harness", () => {
+  const AGENT_SEED = {
+    id: "a1",
+    companyId: "c1",
+    name: "Chat Agent",
+    title: null,
+    role: "engineer" as const,
+    reportsTo: null,
+    status: "active" as const,
+    adapterType: "claude_local" as const,
+    adapterConfig: {},
+    runtimeConfig: {},
+    permissions: [],
+    capabilities: null,
+    budgetMonthlyCents: 0,
+    metadata: null,
+    terminatedAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    urlKey: "chat-agent",
+  };
+
+  describe("sessions.create", () => {
+    it("creates a session and returns AgentSession", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agent.sessions.create"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED }] });
+
+      const session = await h.ctx.agents.sessions.create("a1", "c1");
+      expect(session.sessionId).toBeDefined();
+      expect(session.agentId).toBe("a1");
+      expect(session.companyId).toBe("c1");
+      expect(session.status).toBe("active");
+      expect(session.createdAt).toBeDefined();
+    });
+
+    it("creates a session with optional taskKey and reason", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agent.sessions.create"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED }] });
+
+      const session = await h.ctx.agents.sessions.create("a1", "c1", {
+        taskKey: "my-task",
+        reason: "chat",
+      });
+      expect(session.sessionId).toBeDefined();
+      expect(session.agentId).toBe("a1");
+    });
+
+    it("blocks create without agent.sessions.create capability", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED }] });
+
+      await expect(
+        h.ctx.agents.sessions.create("a1", "c1"),
+      ).rejects.toThrow(/capability/i);
+    });
+  });
+
+  describe("sessions.list", () => {
+    it("lists sessions for an agent", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agent.sessions.create", "agent.sessions.list"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED }] });
+
+      await h.ctx.agents.sessions.create("a1", "c1");
+      await h.ctx.agents.sessions.create("a1", "c1");
+
+      const sessions = await h.ctx.agents.sessions.list("a1", "c1");
+      expect(sessions).toHaveLength(2);
+      expect(sessions[0].agentId).toBe("a1");
+      expect(sessions[1].agentId).toBe("a1");
+    });
+
+    it("returns empty array when no sessions exist", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agent.sessions.list"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED }] });
+
+      const sessions = await h.ctx.agents.sessions.list("a1", "c1");
+      expect(sessions).toEqual([]);
+    });
+
+    it("blocks list without agent.sessions.list capability", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read"]),
+      });
+
+      await expect(
+        h.ctx.agents.sessions.list("a1", "c1"),
+      ).rejects.toThrow(/capability/i);
+    });
+  });
+
+  describe("sessions.sendMessage", () => {
+    it("sends a message and returns runId", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agent.sessions.create", "agent.sessions.send"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED }] });
+
+      const session = await h.ctx.agents.sessions.create("a1", "c1");
+      const result = await h.ctx.agents.sessions.sendMessage(session.sessionId, "c1", {
+        prompt: "Hello agent",
+      });
+
+      expect(result.runId).toBeDefined();
+      expect(typeof result.runId).toBe("string");
+    });
+
+    it("delivers streaming events via onEvent callback", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agent.sessions.create", "agent.sessions.send"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED }] });
+
+      const session = await h.ctx.agents.sessions.create("a1", "c1");
+
+      const events: unknown[] = [];
+      await h.ctx.agents.sessions.sendMessage(session.sessionId, "c1", {
+        prompt: "Hello",
+        onEvent: (event) => events.push(event),
+      });
+
+      // Simulate events from the harness
+      h.simulateSessionEvent(session.sessionId, {
+        runId: "run-1",
+        seq: 1,
+        eventType: "chunk",
+        stream: "stdout",
+        message: "Hello back!",
+        payload: null,
+      });
+
+      h.simulateSessionEvent(session.sessionId, {
+        runId: "run-1",
+        seq: 2,
+        eventType: "done",
+        stream: null,
+        message: null,
+        payload: null,
+      });
+
+      expect(events).toHaveLength(2);
+      expect((events[0] as { eventType: string }).eventType).toBe("chunk");
+      expect((events[0] as { message: string }).message).toBe("Hello back!");
+      expect((events[1] as { eventType: string }).eventType).toBe("done");
+    });
+
+    it("blocks sendMessage without agent.sessions.send capability", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agent.sessions.create"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED }] });
+
+      const session = await h.ctx.agents.sessions.create("a1", "c1");
+
+      await expect(
+        h.ctx.agents.sessions.sendMessage(session.sessionId, "c1", { prompt: "hi" }),
+      ).rejects.toThrow(/capability/i);
+    });
+
+    it("rejects sending to non-existent session", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agent.sessions.send"]),
+      });
+
+      await expect(
+        h.ctx.agents.sessions.sendMessage("missing-session", "c1", { prompt: "hi" }),
+      ).rejects.toThrow(/not found/i);
+    });
+  });
+
+  describe("sessions.close", () => {
+    it("closes an active session", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agent.sessions.create", "agent.sessions.close", "agent.sessions.list"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED }] });
+
+      const session = await h.ctx.agents.sessions.create("a1", "c1");
+      await h.ctx.agents.sessions.close(session.sessionId, "c1");
+
+      // Session should no longer appear in list
+      const sessions = await h.ctx.agents.sessions.list("a1", "c1");
+      expect(sessions.filter((s) => s.sessionId === session.sessionId)).toHaveLength(0);
+    });
+
+    it("rejects closing a non-existent session", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agent.sessions.close"]),
+      });
+
+      await expect(
+        h.ctx.agents.sessions.close("missing", "c1"),
+      ).rejects.toThrow(/not found/i);
+    });
+
+    it("blocks close without agent.sessions.close capability", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agent.sessions.create"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED }] });
+
+      const session = await h.ctx.agents.sessions.create("a1", "c1");
+
+      await expect(
+        h.ctx.agents.sessions.close(session.sessionId, "c1"),
+      ).rejects.toThrow(/capability/i);
+    });
+  });
+
+  describe("session event isolation", () => {
+    it("events for one session do not leak to another", async () => {
+      const h = createTestHarness({
+        manifest: manifest(["agents.read", "agent.sessions.create", "agent.sessions.send"]),
+      });
+      h.seed({ agents: [{ ...AGENT_SEED }] });
+
+      const session1 = await h.ctx.agents.sessions.create("a1", "c1");
+      const session2 = await h.ctx.agents.sessions.create("a1", "c1");
+
+      const events1: unknown[] = [];
+      const events2: unknown[] = [];
+
+      await h.ctx.agents.sessions.sendMessage(session1.sessionId, "c1", {
+        prompt: "msg1",
+        onEvent: (e) => events1.push(e),
+      });
+      await h.ctx.agents.sessions.sendMessage(session2.sessionId, "c1", {
+        prompt: "msg2",
+        onEvent: (e) => events2.push(e),
+      });
+
+      // Send event only to session1
+      h.simulateSessionEvent(session1.sessionId, {
+        runId: "run-1",
+        seq: 1,
+        eventType: "chunk",
+        stream: "stdout",
+        message: "For session 1 only",
+        payload: null,
+      });
+
+      expect(events1).toHaveLength(1);
+      expect(events2).toHaveLength(0);
+    });
   });
 });

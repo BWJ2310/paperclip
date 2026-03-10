@@ -16,7 +16,7 @@ export { accessService } from "./access.js";
 export { companyPortabilityService } from "./company-portability.js";
 export { logActivity, type LogActivityInput } from "./activity-log.js";
 export { notifyHireApproved, type NotifyHireApprovedInput } from "./hire-hook.js";
-export { publishLiveEvent, subscribeCompanyLiveEvents } from "./live-events.js";
+export { publishLiveEvent, publishGlobalLiveEvent, subscribeCompanyLiveEvents, subscribeGlobalLiveEvents } from "./live-events.js";
 export { reconcilePersistedRuntimeServicesOnStartup } from "./workspace-runtime.js";
 export { emitDomainEvent, subscribeDomainEvents, type DomainEvent } from "./domain-events.js";
 export { pluginRegistryService } from "./plugin-registry.js";

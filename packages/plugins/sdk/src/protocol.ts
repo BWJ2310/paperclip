@@ -546,6 +546,10 @@ export interface WorkerToHostMethods {
     params: { projectId: string; companyId: string },
     result: unknown | null,
   ];
+  "projects.getWorkspaceForIssue": [
+    params: { issueId: string; companyId: string },
+    result: unknown | null,
+  ];
 
   // Issues
   "issues.list": [
@@ -603,7 +607,39 @@ export interface WorkerToHostMethods {
     result: unknown | null,
   ];
 
-  // Goals (read)
+  // Agents (write)
+  "agents.pause": [
+    params: { agentId: string; companyId: string },
+    result: unknown,
+  ];
+  "agents.resume": [
+    params: { agentId: string; companyId: string },
+    result: unknown,
+  ];
+  "agents.invoke": [
+    params: { agentId: string; companyId: string; prompt: string; reason?: string },
+    result: { runId: string },
+  ];
+
+  // Agent Sessions
+  "agents.sessions.create": [
+    params: { agentId: string; companyId: string; taskKey?: string; reason?: string },
+    result: { sessionId: string; agentId: string; companyId: string; status: string; createdAt: string },
+  ];
+  "agents.sessions.list": [
+    params: { agentId: string; companyId: string },
+    result: Array<{ sessionId: string; agentId: string; companyId: string; status: string; createdAt: string }>,
+  ];
+  "agents.sessions.sendMessage": [
+    params: { sessionId: string; companyId: string; prompt: string; reason?: string },
+    result: { runId: string },
+  ];
+  "agents.sessions.close": [
+    params: { sessionId: string; companyId: string },
+    result: void,
+  ];
+
+  // Goals
   "goals.list": [
     params: { companyId: string; level?: string; status?: string; limit?: number; offset?: number },
     result: unknown[],
@@ -611,6 +647,26 @@ export interface WorkerToHostMethods {
   "goals.get": [
     params: { goalId: string; companyId: string },
     result: unknown | null,
+  ];
+  "goals.create": [
+    params: {
+      companyId: string;
+      title: string;
+      description?: string;
+      level?: string;
+      status?: string;
+      parentId?: string;
+      ownerAgentId?: string;
+    },
+    result: unknown,
+  ];
+  "goals.update": [
+    params: {
+      goalId: string;
+      patch: Record<string, unknown>;
+      companyId: string;
+    },
+    result: unknown,
   ];
 }
 
