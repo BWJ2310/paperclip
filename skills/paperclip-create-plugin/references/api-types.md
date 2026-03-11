@@ -279,6 +279,10 @@ export interface PluginWorkspace {
   path: string;
   /** Whether this is the project's primary workspace. */
   isPrimary: boolean;
+  /** Remote repository URL (e.g. `https://github.com/org/repo`), if configured. */
+  repoUrl: string | null;
+  /** Repository ref (branch, tag, or SHA) the workspace tracks, if configured. */
+  repoRef: string | null;
   /** ISO 8601 creation timestamp. */
   createdAt: string;
   /** ISO 8601 last-updated timestamp. */

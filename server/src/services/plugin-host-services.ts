@@ -697,6 +697,8 @@ export function buildHostServices(
             name,
             path,
             isPrimary: row.isPrimary,
+            repoUrl: row.repoUrl ?? null,
+            repoRef: row.repoRef ?? null,
             createdAt: row.createdAt.toISOString(),
             updatedAt: row.updatedAt.toISOString(),
           };
@@ -717,6 +719,8 @@ export function buildHostServices(
           name,
           path,
           isPrimary: row.isPrimary,
+          repoUrl: row.repoUrl ?? null,
+          repoRef: row.repoRef ?? null,
           createdAt: row.createdAt.toISOString(),
           updatedAt: row.updatedAt.toISOString(),
         };
@@ -741,6 +745,8 @@ export function buildHostServices(
           name,
           path,
           isPrimary: row.isPrimary,
+          repoUrl: row.repoUrl ?? null,
+          repoRef: row.repoRef ?? null,
           createdAt: row.createdAt.toISOString(),
           updatedAt: row.updatedAt.toISOString(),
         };

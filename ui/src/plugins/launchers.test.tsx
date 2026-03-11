@@ -777,6 +777,11 @@ describe("plugin launcher runtime", () => {
 
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(2);
 
+    // Extra flush to ensure the topmost dialog's useEffect keydown listener is attached.
+    // React 18 schedules effects via MessageChannel which may not align with
+    // the setTimeout-based flush above on every run (especially in CI).
+    await flushEffects();
+
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await waitFor(() => expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1));
 

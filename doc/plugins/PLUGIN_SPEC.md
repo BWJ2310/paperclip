@@ -212,6 +212,22 @@ Paperclip already has a concrete workspace model:
 
 Plugins that need local tooling (file browsing, git, terminals, process tracking) can resolve workspace paths through the project workspace APIs and then operate on the filesystem, spawn processes, and run git commands directly. The host does not wrap these operations — plugins own their own implementations.
 
+The `PluginWorkspace` type exposed to plugin workers via `ctx.projects` has the following shape:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `string` | UUID primary key |
+| `projectId` | `string` | UUID of the parent project |
+| `name` | `string` | Display name for this workspace |
+| `path` | `string` | Absolute filesystem path to the workspace directory |
+| `isPrimary` | `boolean` | Whether this is the project's primary workspace |
+| `repoUrl` | `string \| null` | Remote repository URL (e.g. `https://github.com/org/repo`), if configured |
+| `repoRef` | `string \| null` | Repository ref (branch, tag, or SHA) the workspace tracks, if configured |
+| `createdAt` | `string` | ISO 8601 creation timestamp |
+| `updatedAt` | `string` | ISO 8601 last-updated timestamp |
+
+When a worktree instance is seeded from a parent instance, workspace `path` values are automatically rebound to the worktree path. Plugins always receive the correct path for the instance they are running in.
+
 ## 8. Installation Model
 
 Plugin installation is global and operator-driven.
