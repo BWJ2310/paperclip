@@ -3,7 +3,7 @@ title: Local Development
 summary: Set up Paperclip for local development
 ---
 
-Run Paperclip locally with zero external dependencies.
+Run Paperclip locally with PostgreSQL and the Paperclip app stack.
 
 ## Prerequisites
 
@@ -14,6 +14,8 @@ Run Paperclip locally with zero external dependencies.
 
 ```sh
 pnpm install
+docker compose up -d
+# set DATABASE_URL in .env or export it
 pnpm dev
 ```
 
@@ -22,7 +24,7 @@ This starts:
 - **API server** at `http://localhost:3100`
 - **UI** served by the API server in dev middleware mode (same origin)
 
-No Docker or external database required. Paperclip uses embedded PostgreSQL automatically.
+Paperclip requires PostgreSQL. The included Compose stack is the simplest local option.
 
 ## One-Command Bootstrap
 
@@ -77,7 +79,8 @@ curl http://localhost:3100/api/companies
 To wipe local data and start fresh:
 
 ```sh
-rm -rf ~/.paperclip/instances/default/db
+docker compose down -v
+docker compose up -d
 pnpm dev
 ```
 
@@ -86,7 +89,6 @@ pnpm dev
 | Data | Path |
 |------|------|
 | Config | `~/.paperclip/instances/default/config.json` |
-| Database | `~/.paperclip/instances/default/db` |
 | Storage | `~/.paperclip/instances/default/data/storage` |
 | Secrets key | `~/.paperclip/instances/default/secrets/master.key` |
 | Logs | `~/.paperclip/instances/default/logs` |

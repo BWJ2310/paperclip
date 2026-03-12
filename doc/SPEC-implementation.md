@@ -50,7 +50,7 @@ As of 2026-02-17, the repo already includes:
 
 - Node + TypeScript backend with REST CRUD for `agents`, `projects`, `goals`, `issues`, `activity`
 - React UI pages for dashboard/agents/projects/goals/issues lists
-- PostgreSQL schema via Drizzle with embedded PostgreSQL fallback when `DATABASE_URL` is unset
+- PostgreSQL schema via Drizzle with explicit `DATABASE_URL` / config-based connection wiring
 
 V1 implementation extends this baseline into a company-centric, governance-aware control plane.
 
@@ -92,7 +92,6 @@ V1 implementation extends this baseline into a company-centric, governance-aware
 ## 6.2 Data Stores
 
 - Primary: PostgreSQL
-- Local default: embedded PostgreSQL at `~/.paperclip/instances/default/db`
 - Optional local prod-like: Docker Postgres
 - Optional hosted: Supabase/Postgres-compatible
 - File/object storage:
@@ -796,7 +795,7 @@ V1 is complete only when all criteria are true:
 6. Budget hard limit auto-pauses an agent and prevents new invocations.
 7. Dashboard shows accurate counts/spend from live DB data.
 8. Every mutation is auditable in activity log.
-9. App runs with embedded PostgreSQL by default and with external Postgres via `DATABASE_URL`.
+9. App runs against PostgreSQL provided via `DATABASE_URL` or `config.database.connectionString`.
 
 ## 20. Post-V1 Backlog (Explicitly Deferred)
 
