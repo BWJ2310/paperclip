@@ -148,12 +148,13 @@ function readConfig(configPath: string): PartialConfig | null {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error(`Invalid config at ${configPath}: expected a JSON object`);
   }
+  const parsedRecord = parsed as Record<string, unknown>;
 
   const database =
-    typeof parsed.database === "object" &&
-    parsed.database !== null &&
-    !Array.isArray(parsed.database)
-      ? parsed.database
+    typeof parsedRecord.database === "object" &&
+    parsedRecord.database !== null &&
+    !Array.isArray(parsedRecord.database)
+      ? (parsedRecord.database as Record<string, unknown>)
       : undefined;
 
   return {

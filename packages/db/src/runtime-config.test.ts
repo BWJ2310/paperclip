@@ -117,6 +117,7 @@ describe("resolveDatabaseTarget", () => {
   it("uses config postgres connection string when configured", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-db-runtime-"));
     const configPath = path.join(tempDir, "instance", "config.json");
+    process.chdir(tempDir);
     process.env.PAPERCLIP_CONFIG = configPath;
     writeJson(configPath, {
       database: {
@@ -137,6 +138,7 @@ describe("resolveDatabaseTarget", () => {
   it("throws when no connection string can be resolved", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-db-runtime-"));
     const configPath = path.join(tempDir, "instance", "config.json");
+    process.chdir(tempDir);
     process.env.PAPERCLIP_CONFIG = configPath;
     writeJson(configPath, {
       database: {
