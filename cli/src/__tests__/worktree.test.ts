@@ -45,9 +45,8 @@ function buildSourceConfig(): PaperclipConfig {
       source: "configure",
     },
     database: {
-      mode: "embedded-postgres",
-      embeddedPostgresDataDir: "/tmp/main/db",
-      embeddedPostgresPort: 54329,
+      mode: "postgres",
+      connectionString: "postgres://paperclip:paperclip@127.0.0.1:5432/paperclip-main",
       backup: {
         enabled: true,
         intervalMinutes: 60,
@@ -167,14 +166,13 @@ describe("worktree helpers", () => {
       sourceConfig: buildSourceConfig(),
       paths,
       serverPort: 3110,
-      databasePort: 54339,
+      databaseConnectionString: "postgres://paperclip:paperclip@127.0.0.1:5433/paperclip-worktree",
       now: new Date("2026-03-09T12:00:00.000Z"),
     });
 
-    expect(config.database.embeddedPostgresDataDir).toBe(
-      path.resolve("/tmp/paperclip-worktrees", "instances", "feature-worktree-support", "db"),
+    expect(config.database.connectionString).toBe(
+      "postgres://paperclip:paperclip@127.0.0.1:5433/paperclip-worktree",
     );
-    expect(config.database.embeddedPostgresPort).toBe(54339);
     expect(config.server.port).toBe(3110);
     expect(config.auth.publicBaseUrl).toBe("http://127.0.0.1:3110/");
     expect(config.storage.localDisk.baseDir).toBe(
@@ -275,6 +273,7 @@ describe("worktree helpers", () => {
 
       await worktreeInitCommand({
         seed: false,
+        databaseUrl: "postgres://paperclip:paperclip@127.0.0.1:5433/paperclip-worktree",
         fromConfig: path.join(tempRoot, "missing", "config.json"),
         home: path.join(tempRoot, ".paperclip-worktrees"),
       });
@@ -390,6 +389,7 @@ describe("worktree helpers", () => {
 
       await worktreeMakeCommand("paperclip-make-test", {
         seed: false,
+        databaseUrl: "postgres://paperclip:paperclip@127.0.0.1:5433/paperclip-worktree",
         home: path.join(tempRoot, ".paperclip-worktrees"),
       });
 
