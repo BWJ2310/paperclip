@@ -32,6 +32,30 @@ function renderEnvFile(entries: Record<string, string>) {
   return lines.join("\n");
 }
 
+function hasProjectBoundary(dir: string): boolean {
+  return fs.existsSync(path.resolve(dir, "pnpm-workspace.yaml")) || fs.existsSync(path.resolve(dir, ".git"));
+}
+
+function findProjectEnvFileFromAncestors(startDir = process.cwd()): string | null {
+  let currentDir = path.resolve(startDir);
+
+  while (true) {
+    const candidate = path.resolve(currentDir, ".env");
+    if (fs.existsSync(candidate)) return candidate;
+
+    const nextDir = path.resolve(currentDir, "..");
+    if (hasProjectBoundary(currentDir) || nextDir === currentDir) return null;
+    currentDir = nextDir;
+  }
+}
+
+function loadEnvFile(filePath: string): void {
+  if (loadedEnvFiles.has(filePath)) return;
+  if (!fs.existsSync(filePath)) return;
+  loadedEnvFiles.add(filePath);
+  loadDotenv({ path: filePath, override: false, quiet: true });
+}
+
 export function resolvePaperclipEnvFile(configPath?: string): string {
   return resolveEnvFilePath(configPath);
 }
@@ -41,15 +65,17 @@ export function resolveAgentJwtEnvFile(configPath?: string): string {
 }
 
 export function loadPaperclipEnvFile(configPath?: string): void {
-  loadAgentJwtEnvFile(resolveEnvFilePath(configPath));
+  const filePath = resolveEnvFilePath(configPath);
+  loadAgentJwtEnvFile(filePath);
+
+  const projectEnvPath = findProjectEnvFileFromAncestors();
+  if (projectEnvPath && projectEnvPath !== filePath) {
+    loadEnvFile(projectEnvPath);
+  }
 }
 
 export function loadAgentJwtEnvFile(filePath = resolveEnvFilePath()): void {
-  if (loadedEnvFiles.has(filePath)) return;
-
-  if (!fs.existsSync(filePath)) return;
-  loadedEnvFiles.add(filePath);
-  loadDotenv({ path: filePath, override: false, quiet: true });
+  loadEnvFile(filePath);
 }
 
 export function readAgentJwtSecretFromEnv(configPath?: string): string | null {

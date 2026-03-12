@@ -9,31 +9,19 @@ const INSTANCE_ID_RE = /^[a-zA-Z0-9_-]+$/;
 
 type PartialConfig = {
   database?: {
-    mode?: "embedded-postgres" | "postgres";
+    mode?: "postgres";
     connectionString?: string;
-    embeddedPostgresDataDir?: string;
-    embeddedPostgresPort?: number;
-    pgliteDataDir?: string;
-    pglitePort?: number;
   };
 };
 
 export type ResolvedDatabaseTarget =
-  | {
-      mode: "postgres";
-      connectionString: string;
-      source: "DATABASE_URL" | "paperclip-env" | "config.database.connectionString";
-      configPath: string;
-      envPath: string;
-    }
-  | {
-      mode: "embedded-postgres";
-      dataDir: string;
-      port: number;
-      source: `embedded-postgres@${number}`;
-      configPath: string;
-      envPath: string;
-    };
+  {
+    mode: "postgres";
+    connectionString: string;
+    source: "DATABASE_URL" | "paperclip-env" | "project-env" | "config.database.connectionString";
+    configPath: string;
+    envPath: string;
+  };
 
 function expandHomePrefix(value: string): string {
   if (value === "~") return os.homedir();
@@ -64,10 +52,6 @@ function resolveDefaultConfigPath(): string {
   );
 }
 
-function resolveDefaultEmbeddedPostgresDir(): string {
-  return path.resolve(resolvePaperclipHomeDir(), "instances", resolvePaperclipInstanceId(), "db");
-}
-
 function resolveHomeAwarePath(value: string): string {
   return path.resolve(expandHomePrefix(value));
 }
@@ -81,6 +65,23 @@ function findConfigFileFromAncestors(startDir: string): string | null {
 
     const nextDir = path.resolve(currentDir, "..");
     if (nextDir === currentDir) return null;
+    currentDir = nextDir;
+  }
+}
+
+function hasProjectBoundary(dir: string): boolean {
+  return existsSync(path.resolve(dir, "pnpm-workspace.yaml")) || existsSync(path.resolve(dir, ".git"));
+}
+
+function findProjectEnvFileFromAncestors(startDir: string): string | null {
+  let currentDir = path.resolve(startDir);
+
+  while (true) {
+    const candidate = path.resolve(currentDir, ENV_BASENAME);
+    if (existsSync(candidate)) return candidate;
+
+    const nextDir = path.resolve(currentDir, "..");
+    if (hasProjectBoundary(currentDir) || nextDir === currentDir) return null;
     currentDir = nextDir;
   }
 }
@@ -132,44 +133,6 @@ function readEnvEntries(envPath: string): Record<string, string> {
   return parseEnvFile(readFileSync(envPath, "utf8"));
 }
 
-function migrateLegacyConfig(raw: unknown): PartialConfig | null {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
-
-  const config = { ...(raw as Record<string, unknown>) };
-  const databaseRaw = config.database;
-  if (typeof databaseRaw !== "object" || databaseRaw === null || Array.isArray(databaseRaw)) {
-    return config;
-  }
-
-  const database = { ...(databaseRaw as Record<string, unknown>) };
-  if (database.mode === "pglite") {
-    database.mode = "embedded-postgres";
-
-    if (
-      typeof database.embeddedPostgresDataDir !== "string" &&
-      typeof database.pgliteDataDir === "string"
-    ) {
-      database.embeddedPostgresDataDir = database.pgliteDataDir;
-    }
-    if (
-      typeof database.embeddedPostgresPort !== "number" &&
-      typeof database.pglitePort === "number" &&
-      Number.isFinite(database.pglitePort)
-    ) {
-      database.embeddedPostgresPort = database.pglitePort;
-    }
-  }
-
-  config.database = database;
-  return config as PartialConfig;
-}
-
-function asPositiveInt(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  const rounded = Math.trunc(value);
-  return rounded > 0 ? rounded : null;
-}
-
 function readConfig(configPath: string): PartialConfig | null {
   if (!existsSync(configPath)) return null;
 
@@ -182,31 +145,23 @@ function readConfig(configPath: string): PartialConfig | null {
     );
   }
 
-  const migrated = migrateLegacyConfig(parsed);
-  if (migrated === null || typeof migrated !== "object" || Array.isArray(migrated)) {
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error(`Invalid config at ${configPath}: expected a JSON object`);
   }
 
   const database =
-    typeof migrated.database === "object" &&
-    migrated.database !== null &&
-    !Array.isArray(migrated.database)
-      ? migrated.database
+    typeof parsed.database === "object" &&
+    parsed.database !== null &&
+    !Array.isArray(parsed.database)
+      ? parsed.database
       : undefined;
 
   return {
     database: database
       ? {
-          mode: database.mode === "postgres" ? "postgres" : "embedded-postgres",
+          mode: "postgres",
           connectionString:
             typeof database.connectionString === "string" ? database.connectionString : undefined,
-          embeddedPostgresDataDir:
-            typeof database.embeddedPostgresDataDir === "string"
-              ? database.embeddedPostgresDataDir
-              : undefined,
-          embeddedPostgresPort: asPositiveInt(database.embeddedPostgresPort) ?? undefined,
-          pgliteDataDir: typeof database.pgliteDataDir === "string" ? database.pgliteDataDir : undefined,
-          pglitePort: asPositiveInt(database.pglitePort) ?? undefined,
         }
       : undefined,
   };
@@ -216,6 +171,11 @@ export function resolveDatabaseTarget(): ResolvedDatabaseTarget {
   const configPath = resolvePaperclipConfigPath();
   const envPath = resolvePaperclipEnvPath(configPath);
   const envEntries = readEnvEntries(envPath);
+  const projectEnvPath = findProjectEnvFileFromAncestors(process.cwd());
+  const projectEnvEntries =
+    projectEnvPath && projectEnvPath !== envPath
+      ? readEnvEntries(projectEnvPath)
+      : {};
 
   const envUrl = process.env.DATABASE_URL?.trim();
   if (envUrl) {
@@ -239,9 +199,20 @@ export function resolveDatabaseTarget(): ResolvedDatabaseTarget {
     };
   }
 
+  const projectEnvUrl = projectEnvEntries.DATABASE_URL?.trim();
+  if (projectEnvUrl) {
+    return {
+      mode: "postgres",
+      connectionString: projectEnvUrl,
+      source: "project-env",
+      configPath,
+      envPath: projectEnvPath!,
+    };
+  }
+
   const config = readConfig(configPath);
   const connectionString = config?.database?.connectionString?.trim();
-  if (config?.database?.mode === "postgres" && connectionString) {
+  if (connectionString) {
     return {
       mode: "postgres",
       connectionString,
@@ -251,17 +222,8 @@ export function resolveDatabaseTarget(): ResolvedDatabaseTarget {
     };
   }
 
-  const port = config?.database?.embeddedPostgresPort ?? 54329;
-  const dataDir = resolveHomeAwarePath(
-    config?.database?.embeddedPostgresDataDir ?? resolveDefaultEmbeddedPostgresDir(),
+  throw new Error(
+    `DATABASE_URL (or config.database.connectionString) is required. ` +
+      `Checked process environment, ${envPath}, ${projectEnvPath ?? "<no repo .env found>"}, and ${configPath}.`,
   );
-
-  return {
-    mode: "embedded-postgres",
-    dataDir,
-    port,
-    source: `embedded-postgres@${port}`,
-    configPath,
-    envPath,
-  };
 }

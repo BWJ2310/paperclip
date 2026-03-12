@@ -4,7 +4,6 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
-  readFileSync,
   readlinkSync,
   rmSync,
   statSync,
@@ -21,7 +20,6 @@ import { eq } from "drizzle-orm";
 import {
   applyPendingMigrations,
   createDb,
-  ensurePostgresDatabase,
   formatDatabaseBackupResult,
   projectWorkspaces,
   runDatabaseBackup,
@@ -55,8 +53,9 @@ type WorktreeInitOptions = {
   fromConfig?: string;
   fromDataDir?: string;
   fromInstance?: string;
+  databaseUrl?: string;
+  sourceDatabaseUrl?: string;
   serverPort?: number;
-  dbPort?: number;
   seed?: boolean;
   seedMode?: string;
   force?: boolean;
@@ -69,28 +68,6 @@ type WorktreeMakeOptions = WorktreeInitOptions & {
 type WorktreeEnvOptions = {
   config?: string;
   json?: boolean;
-};
-
-type EmbeddedPostgresInstance = {
-  initialise(): Promise<void>;
-  start(): Promise<void>;
-  stop(): Promise<void>;
-};
-
-type EmbeddedPostgresCtor = new (opts: {
-  databaseDir: string;
-  user: string;
-  password: string;
-  port: number;
-  persistent: boolean;
-  onLog?: (message: unknown) => void;
-  onError?: (message: unknown) => void;
-}) => EmbeddedPostgresInstance;
-
-type EmbeddedPostgresHandle = {
-  port: number;
-  startedByThisProcess: boolean;
-  stop: () => Promise<void>;
 };
 
 type GitWorkspaceInfo = {
@@ -183,29 +160,6 @@ export function resolveGitWorktreeAddArgs(input: {
   }
   const commitish = input.startPoint ?? "HEAD";
   return ["worktree", "add", "-b", input.branchName, input.targetPath, commitish];
-}
-
-function readPidFilePort(postmasterPidFile: string): number | null {
-  if (!existsSync(postmasterPidFile)) return null;
-  try {
-    const lines = readFileSync(postmasterPidFile, "utf8").split("\n");
-    const port = Number(lines[3]?.trim());
-    return Number.isInteger(port) && port > 0 ? port : null;
-  } catch {
-    return null;
-  }
-}
-
-function readRunningPostmasterPid(postmasterPidFile: string): number | null {
-  if (!existsSync(postmasterPidFile)) return null;
-  try {
-    const pid = Number(readFileSync(postmasterPidFile, "utf8").split("\n")[0]?.trim());
-    if (!Number.isInteger(pid) || pid <= 0) return null;
-    process.kill(pid, 0);
-    return pid;
-  } catch {
-    return null;
-  }
 }
 
 async function isPortAvailable(port: number): Promise<boolean> {
@@ -421,19 +375,48 @@ function resolveSourceConfigPath(opts: WorktreeInitOptions): string {
   return path.resolve(sourceHome, "instances", sourceInstanceId, "config.json");
 }
 
-function resolveSourceConnectionString(config: PaperclipConfig, envEntries: Record<string, string>, portOverride?: number): string {
-  if (config.database.mode === "postgres") {
-    const connectionString = nonEmpty(envEntries.DATABASE_URL) ?? nonEmpty(config.database.connectionString);
-    if (!connectionString) {
-      throw new Error(
-        "Source instance uses postgres mode but has no connection string in config or adjacent .env.",
-      );
-    }
-    return connectionString;
+function resolveSourceConnectionString(input: {
+  sourceConfigPath: string;
+  config: PaperclipConfig;
+  envEntries: Record<string, string>;
+  explicitDatabaseUrl?: string;
+}): string {
+  const allowProcessEnvFallback = isCurrentSourceConfigPath(input.sourceConfigPath);
+  const connectionString =
+    nonEmpty(input.explicitDatabaseUrl) ??
+    nonEmpty(input.envEntries.DATABASE_URL) ??
+    (allowProcessEnvFallback ? nonEmpty(process.env.DATABASE_URL) : null) ??
+    nonEmpty(input.config.database.connectionString);
+
+  if (!connectionString) {
+    throw new Error(
+      "Source instance has no PostgreSQL connection string in config, adjacent .env, or --source-database-url.",
+    );
   }
 
-  const port = portOverride ?? config.database.embeddedPostgresPort;
-  return `postgres://paperclip:paperclip@127.0.0.1:${port}/paperclip`;
+  return connectionString;
+}
+
+function resolveTargetConnectionString(explicitDatabaseUrl?: string): string {
+  const connectionString =
+    nonEmpty(explicitDatabaseUrl) ??
+    nonEmpty(process.env.PAPERCLIP_WORKTREE_DATABASE_URL);
+  if (!connectionString) {
+    throw new Error(
+      "Worktree setup requires --database-url or PAPERCLIP_WORKTREE_DATABASE_URL. Embedded PostgreSQL support has been removed.",
+    );
+  }
+  return connectionString;
+}
+
+function redactConnectionString(raw: string): string {
+  try {
+    const parsed = new URL(raw);
+    const username = parsed.username || "user";
+    return `${parsed.protocol}//${username}:***@${parsed.host}${parsed.pathname}`;
+  } catch {
+    return "<invalid postgres url>";
+  }
 }
 
 export function copySeededSecretsKey(input: {
@@ -485,57 +468,6 @@ export function copySeededSecretsKey(input: {
   }
 }
 
-async function ensureEmbeddedPostgres(dataDir: string, preferredPort: number): Promise<EmbeddedPostgresHandle> {
-  const moduleName = "embedded-postgres";
-  let EmbeddedPostgres: EmbeddedPostgresCtor;
-  try {
-    const mod = await import(moduleName);
-    EmbeddedPostgres = mod.default as EmbeddedPostgresCtor;
-  } catch {
-    throw new Error(
-      "Embedded PostgreSQL support requires dependency `embedded-postgres`. Reinstall dependencies and try again.",
-    );
-  }
-
-  const postmasterPidFile = path.resolve(dataDir, "postmaster.pid");
-  const runningPid = readRunningPostmasterPid(postmasterPidFile);
-  if (runningPid) {
-    return {
-      port: readPidFilePort(postmasterPidFile) ?? preferredPort,
-      startedByThisProcess: false,
-      stop: async () => {},
-    };
-  }
-
-  const port = await findAvailablePort(preferredPort);
-  const instance = new EmbeddedPostgres({
-    databaseDir: dataDir,
-    user: "paperclip",
-    password: "paperclip",
-    port,
-    persistent: true,
-    initdbFlags: ["--encoding=UTF8", "--locale=C"],
-    onLog: () => {},
-    onError: () => {},
-  });
-
-  if (!existsSync(path.resolve(dataDir, "PG_VERSION"))) {
-    await instance.initialise();
-  }
-  if (existsSync(postmasterPidFile)) {
-    rmSync(postmasterPidFile, { force: true });
-  }
-  await instance.start();
-
-  return {
-    port,
-    startedByThisProcess: true,
-    stop: async () => {
-      await instance.stop();
-    },
-  };
-}
-
 async function seedWorktreeDatabase(input: {
   sourceConfigPath: string;
   sourceConfig: PaperclipConfig;
@@ -543,6 +475,7 @@ async function seedWorktreeDatabase(input: {
   targetPaths: WorktreeLocalPaths;
   instanceId: string;
   seedMode: WorktreeSeedMode;
+  sourceDatabaseUrl?: string;
 }): Promise<SeedWorktreeDatabaseResult> {
   const seedPlan = resolveWorktreeSeedPlan(input.seedMode);
   const sourceEnvFile = resolvePaperclipEnvFile(input.sourceConfigPath);
@@ -553,61 +486,37 @@ async function seedWorktreeDatabase(input: {
     sourceEnvEntries,
     targetKeyFilePath: input.targetPaths.secretsKeyFilePath,
   });
-  let sourceHandle: EmbeddedPostgresHandle | null = null;
-  let targetHandle: EmbeddedPostgresHandle | null = null;
+  const sourceConnectionString = resolveSourceConnectionString({
+    sourceConfigPath: input.sourceConfigPath,
+    config: input.sourceConfig,
+    envEntries: sourceEnvEntries,
+    explicitDatabaseUrl: input.sourceDatabaseUrl,
+  });
+  const targetConnectionString = input.targetConfig.database.connectionString.trim();
+  const backup = await runDatabaseBackup({
+    connectionString: sourceConnectionString,
+    backupDir: path.resolve(input.targetPaths.backupDir, "seed"),
+    retentionDays: 7,
+    filenamePrefix: `${input.instanceId}-seed`,
+    includeMigrationJournal: true,
+    excludeTables: seedPlan.excludedTables,
+    nullifyColumns: seedPlan.nullifyColumns,
+  });
 
-  try {
-    if (input.sourceConfig.database.mode === "embedded-postgres") {
-      sourceHandle = await ensureEmbeddedPostgres(
-        input.sourceConfig.database.embeddedPostgresDataDir,
-        input.sourceConfig.database.embeddedPostgresPort,
-      );
-    }
-    const sourceConnectionString = resolveSourceConnectionString(
-      input.sourceConfig,
-      sourceEnvEntries,
-      sourceHandle?.port,
-    );
-    const backup = await runDatabaseBackup({
-      connectionString: sourceConnectionString,
-      backupDir: path.resolve(input.targetPaths.backupDir, "seed"),
-      retentionDays: 7,
-      filenamePrefix: `${input.instanceId}-seed`,
-      includeMigrationJournal: true,
-      excludeTables: seedPlan.excludedTables,
-      nullifyColumns: seedPlan.nullifyColumns,
-    });
+  await runDatabaseRestore({
+    connectionString: targetConnectionString,
+    backupFile: backup.backupFile,
+  });
+  await applyPendingMigrations(targetConnectionString);
+  const reboundWorkspaces = await rebindSeededProjectWorkspaces({
+    targetConnectionString,
+    currentCwd: input.targetPaths.cwd,
+  });
 
-    targetHandle = await ensureEmbeddedPostgres(
-      input.targetConfig.database.embeddedPostgresDataDir,
-      input.targetConfig.database.embeddedPostgresPort,
-    );
-
-    const adminConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${targetHandle.port}/postgres`;
-    await ensurePostgresDatabase(adminConnectionString, "paperclip");
-    const targetConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${targetHandle.port}/paperclip`;
-    await runDatabaseRestore({
-      connectionString: targetConnectionString,
-      backupFile: backup.backupFile,
-    });
-    await applyPendingMigrations(targetConnectionString);
-    const reboundWorkspaces = await rebindSeededProjectWorkspaces({
-      targetConnectionString,
-      currentCwd: input.targetPaths.cwd,
-    });
-
-    return {
-      backupSummary: formatDatabaseBackupResult(backup),
-      reboundWorkspaces,
-    };
-  } finally {
-    if (targetHandle?.startedByThisProcess) {
-      await targetHandle.stop();
-    }
-    if (sourceHandle?.startedByThisProcess) {
-      await sourceHandle.stop();
-    }
-  }
+  return {
+    backupSummary: formatDatabaseBackupResult(backup),
+    reboundWorkspaces,
+  };
 }
 
 async function runWorktreeInit(opts: WorktreeInitOptions): Promise<void> {
@@ -628,6 +537,7 @@ async function runWorktreeInit(opts: WorktreeInitOptions): Promise<void> {
   });
   const sourceConfigPath = resolveSourceConfigPath(opts);
   const sourceConfig = existsSync(sourceConfigPath) ? readConfig(sourceConfigPath) : null;
+  const sourceEnvEntries = readPaperclipEnvEntries(resolvePaperclipEnvFile(sourceConfigPath));
 
   if ((existsSync(paths.configPath) || existsSync(paths.instanceRoot)) && !opts.force) {
     throw new Error(
@@ -640,19 +550,32 @@ async function runWorktreeInit(opts: WorktreeInitOptions): Promise<void> {
     rmSync(paths.instanceRoot, { recursive: true, force: true });
   }
 
+  const targetDatabaseUrl = resolveTargetConnectionString(opts.databaseUrl);
   const preferredServerPort = opts.serverPort ?? ((sourceConfig?.server.port ?? 3100) + 1);
   const serverPort = await findAvailablePort(preferredServerPort);
-  const preferredDbPort = opts.dbPort ?? ((sourceConfig?.database.embeddedPostgresPort ?? 54329) + 1);
-  const databasePort = await findAvailablePort(preferredDbPort, new Set([serverPort]));
   const targetConfig = buildWorktreeConfig({
     sourceConfig,
     paths,
     serverPort,
-    databasePort,
+    databaseConnectionString: targetDatabaseUrl,
   });
 
+  if (
+    opts.seed !== false &&
+    sourceConfig &&
+    resolveSourceConnectionString({
+      sourceConfigPath,
+      config: sourceConfig,
+      envEntries: sourceEnvEntries,
+      explicitDatabaseUrl: opts.sourceDatabaseUrl,
+    }) === targetDatabaseUrl
+  ) {
+    throw new Error(
+      "Worktree target database must differ from the source database. Provide a distinct --database-url or PAPERCLIP_WORKTREE_DATABASE_URL.",
+    );
+  }
+
   writeConfig(targetConfig, paths.configPath);
-  const sourceEnvEntries = readPaperclipEnvEntries(resolvePaperclipEnvFile(sourceConfigPath));
   const existingAgentJwtSecret =
     nonEmpty(sourceEnvEntries.PAPERCLIP_AGENT_JWT_SECRET) ??
     nonEmpty(process.env.PAPERCLIP_AGENT_JWT_SECRET);
@@ -685,6 +608,7 @@ async function runWorktreeInit(opts: WorktreeInitOptions): Promise<void> {
         targetPaths: paths,
         instanceId,
         seedMode,
+        sourceDatabaseUrl: opts.sourceDatabaseUrl,
       });
       seedSummary = seeded.backupSummary;
       reboundWorkspaceSummary = seeded.reboundWorkspaces;
@@ -699,7 +623,8 @@ async function runWorktreeInit(opts: WorktreeInitOptions): Promise<void> {
   p.log.message(pc.dim(`Repo env: ${paths.envPath}`));
   p.log.message(pc.dim(`Isolated home: ${paths.homeDir}`));
   p.log.message(pc.dim(`Instance: ${paths.instanceId}`));
-  p.log.message(pc.dim(`Server port: ${serverPort} | DB port: ${databasePort}`));
+  p.log.message(pc.dim(`Server port: ${serverPort}`));
+  p.log.message(pc.dim(`Database URL: ${redactConnectionString(targetDatabaseUrl)}`));
   if (copiedGitHooks?.copied) {
     p.log.message(
       pc.dim(`Mirrored git hooks: ${copiedGitHooks.sourceHooksPath} -> ${copiedGitHooks.targetHooksPath}`),
@@ -833,8 +758,9 @@ export function registerWorktreeCommands(program: Command): void {
     .option("--from-config <path>", "Source config.json to seed from")
     .option("--from-data-dir <path>", "Source PAPERCLIP_HOME used when deriving the source config")
     .option("--from-instance <id>", "Source instance id when deriving the source config", "default")
+    .option("--database-url <url>", "Target PostgreSQL connection string for the new worktree instance")
+    .option("--source-database-url <url>", "Override source PostgreSQL connection string used for seeding")
     .option("--server-port <port>", "Preferred server port", (value) => Number(value))
-    .option("--db-port <port>", "Preferred embedded Postgres port", (value) => Number(value))
     .option("--seed-mode <mode>", "Seed profile: minimal or full (default: minimal)", "minimal")
     .option("--no-seed", "Skip database seeding from the source instance")
     .option("--force", "Replace existing repo-local config and isolated instance data", false)
@@ -849,8 +775,9 @@ export function registerWorktreeCommands(program: Command): void {
     .option("--from-config <path>", "Source config.json to seed from")
     .option("--from-data-dir <path>", "Source PAPERCLIP_HOME used when deriving the source config")
     .option("--from-instance <id>", "Source instance id when deriving the source config", "default")
+    .option("--database-url <url>", "Target PostgreSQL connection string for the new worktree instance")
+    .option("--source-database-url <url>", "Override source PostgreSQL connection string used for seeding")
     .option("--server-port <port>", "Preferred server port", (value) => Number(value))
-    .option("--db-port <port>", "Preferred embedded Postgres port", (value) => Number(value))
     .option("--seed-mode <mode>", "Seed profile: minimal or full (default: minimal)", "minimal")
     .option("--no-seed", "Skip database seeding from the source instance")
     .option("--force", "Replace existing repo-local config and isolated instance data", false)

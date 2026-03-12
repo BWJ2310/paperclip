@@ -33,10 +33,6 @@ export function resolveDefaultContextPath(): string {
   return path.resolve(resolvePaperclipHomeDir(), "context.json");
 }
 
-export function resolveDefaultEmbeddedPostgresDir(instanceId?: string): string {
-  return path.resolve(resolvePaperclipInstanceRoot(instanceId), "db");
-}
-
 export function resolveDefaultLogsDir(instanceId?: string): string {
   return path.resolve(resolvePaperclipInstanceRoot(instanceId), "logs");
 }
@@ -67,7 +63,6 @@ export function describeLocalInstancePaths(instanceId?: string) {
     instanceId: resolvedInstanceId,
     instanceRoot,
     configPath: resolveDefaultConfigPath(resolvedInstanceId),
-    embeddedPostgresDataDir: resolveDefaultEmbeddedPostgresDir(resolvedInstanceId),
     backupDir: resolveDefaultBackupDir(resolvedInstanceId),
     logDir: resolveDefaultLogsDir(resolvedInstanceId),
     secretsKeyFilePath: resolveDefaultSecretsKeyFilePath(resolvedInstanceId),

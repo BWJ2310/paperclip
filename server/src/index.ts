@@ -1,5 +1,4 @@
 /// <reference path="./types/express.d.ts" />
-import { existsSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -9,7 +8,6 @@ import type { Request as ExpressRequest, RequestHandler } from "express";
 import { and, eq } from "drizzle-orm";
 import {
   createDb,
-  ensurePostgresDatabase,
   inspectMigrations,
   applyPendingMigrations,
   reconcilePendingMigrationHistory,
@@ -40,23 +38,6 @@ type BetterAuthSessionResult = {
   session: { id: string; userId: string } | null;
   user: BetterAuthSessionUser | null;
 };
-
-type EmbeddedPostgresInstance = {
-  initialise(): Promise<void>;
-  start(): Promise<void>;
-  stop(): Promise<void>;
-};
-
-type EmbeddedPostgresCtor = new (opts: {
-  databaseDir: string;
-  user: string;
-  password: string;
-  port: number;
-  persistent: boolean;
-  onLog?: (message: unknown) => void;
-  onError?: (message: unknown) => void;
-}) => EmbeddedPostgresInstance;
-
 
 export interface StartedServer {
   server: ReturnType<typeof createServer>;
@@ -230,159 +211,21 @@ export async function startServer(): Promise<StartedServer> {
   }
   
   let db;
-  let embeddedPostgres: EmbeddedPostgresInstance | null = null;
-  let embeddedPostgresStartedByThisProcess = false;
   let migrationSummary: MigrationSummary = "skipped";
   let activeDatabaseConnectionString: string;
-  let startupDbInfo:
-    | { mode: "external-postgres"; connectionString: string }
-    | { mode: "embedded-postgres"; dataDir: string; port: number };
-  if (config.databaseUrl) {
-    migrationSummary = await ensureMigrations(config.databaseUrl, "PostgreSQL");
-  
-    db = createDb(config.databaseUrl);
-    logger.info("Using external PostgreSQL via DATABASE_URL/config");
-    activeDatabaseConnectionString = config.databaseUrl;
-    startupDbInfo = { mode: "external-postgres", connectionString: config.databaseUrl };
-  } else {
-    const moduleName = "embedded-postgres";
-    let EmbeddedPostgres: EmbeddedPostgresCtor;
-    try {
-      const mod = await import(moduleName);
-      EmbeddedPostgres = mod.default as EmbeddedPostgresCtor;
-    } catch {
-      throw new Error(
-        "Embedded PostgreSQL mode requires dependency `embedded-postgres`. Reinstall dependencies (without omitting required packages), or set DATABASE_URL for external Postgres.",
-      );
-    }
-  
-    const dataDir = resolve(config.embeddedPostgresDataDir);
-    const configuredPort = config.embeddedPostgresPort;
-    let port = configuredPort;
-    const embeddedPostgresLogBuffer: string[] = [];
-    const EMBEDDED_POSTGRES_LOG_BUFFER_LIMIT = 120;
-    const verboseEmbeddedPostgresLogs = process.env.PAPERCLIP_EMBEDDED_POSTGRES_VERBOSE === "true";
-    const appendEmbeddedPostgresLog = (message: unknown) => {
-      const text = typeof message === "string" ? message : message instanceof Error ? message.message : String(message ?? "");
-      for (const lineRaw of text.split(/\r?\n/)) {
-        const line = lineRaw.trim();
-        if (!line) continue;
-        embeddedPostgresLogBuffer.push(line);
-        if (embeddedPostgresLogBuffer.length > EMBEDDED_POSTGRES_LOG_BUFFER_LIMIT) {
-          embeddedPostgresLogBuffer.splice(0, embeddedPostgresLogBuffer.length - EMBEDDED_POSTGRES_LOG_BUFFER_LIMIT);
-        }
-        if (verboseEmbeddedPostgresLogs) {
-          logger.info({ embeddedPostgresLog: line }, "embedded-postgres");
-        }
-      }
-    };
-    const logEmbeddedPostgresFailure = (phase: "initialise" | "start", err: unknown) => {
-      if (embeddedPostgresLogBuffer.length > 0) {
-        logger.error(
-          {
-            phase,
-            recentLogs: embeddedPostgresLogBuffer,
-            err,
-          },
-          "Embedded PostgreSQL failed; showing buffered startup logs",
-        );
-      }
-    };
-  
-    if (config.databaseMode === "postgres") {
-      logger.warn("Database mode is postgres but no connection string was set; falling back to embedded PostgreSQL");
-    }
-  
-    const clusterVersionFile = resolve(dataDir, "PG_VERSION");
-    const clusterAlreadyInitialized = existsSync(clusterVersionFile);
-    const postmasterPidFile = resolve(dataDir, "postmaster.pid");
-    const isPidRunning = (pid: number): boolean => {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch {
-        return false;
-      }
-    };
-  
-    const getRunningPid = (): number | null => {
-      if (!existsSync(postmasterPidFile)) return null;
-      try {
-        const pidLine = readFileSync(postmasterPidFile, "utf8").split("\n")[0]?.trim();
-        const pid = Number(pidLine);
-        if (!Number.isInteger(pid) || pid <= 0) return null;
-        if (!isPidRunning(pid)) return null;
-        return pid;
-      } catch {
-        return null;
-      }
-    };
-  
-    const runningPid = getRunningPid();
-    if (runningPid) {
-      logger.warn(`Embedded PostgreSQL already running; reusing existing process (pid=${runningPid}, port=${port})`);
-    } else {
-      const detectedPort = await detectPort(configuredPort);
-      if (detectedPort !== configuredPort) {
-        logger.warn(`Embedded PostgreSQL port is in use; using next free port (requestedPort=${configuredPort}, selectedPort=${detectedPort})`);
-      }
-      port = detectedPort;
-      logger.info(`Using embedded PostgreSQL because no DATABASE_URL set (dataDir=${dataDir}, port=${port})`);
-      embeddedPostgres = new EmbeddedPostgres({
-        databaseDir: dataDir,
-        user: "paperclip",
-        password: "paperclip",
-        port,
-        persistent: true,
-        initdbFlags: ["--encoding=UTF8", "--locale=C"],
-        onLog: appendEmbeddedPostgresLog,
-        onError: appendEmbeddedPostgresLog,
-      });
-  
-      if (!clusterAlreadyInitialized) {
-        try {
-          await embeddedPostgres.initialise();
-        } catch (err) {
-          logEmbeddedPostgresFailure("initialise", err);
-          throw err;
-        }
-      } else {
-        logger.info(`Embedded PostgreSQL cluster already exists (${clusterVersionFile}); skipping init`);
-      }
-  
-      if (existsSync(postmasterPidFile)) {
-        logger.warn("Removing stale embedded PostgreSQL lock file");
-        rmSync(postmasterPidFile, { force: true });
-      }
-      try {
-        await embeddedPostgres.start();
-      } catch (err) {
-        logEmbeddedPostgresFailure("start", err);
-        throw err;
-      }
-      embeddedPostgresStartedByThisProcess = true;
-    }
-  
-    const embeddedAdminConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${port}/postgres`;
-    const dbStatus = await ensurePostgresDatabase(embeddedAdminConnectionString, "paperclip");
-    if (dbStatus === "created") {
-      logger.info("Created embedded PostgreSQL database: paperclip");
-    }
-  
-    const embeddedConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${port}/paperclip`;
-    const shouldAutoApplyFirstRunMigrations = !clusterAlreadyInitialized || dbStatus === "created";
-    if (shouldAutoApplyFirstRunMigrations) {
-      logger.info("Detected first-run embedded PostgreSQL setup; applying pending migrations automatically");
-    }
-    migrationSummary = await ensureMigrations(embeddedConnectionString, "Embedded PostgreSQL", {
-      autoApply: shouldAutoApplyFirstRunMigrations,
-    });
-  
-    db = createDb(embeddedConnectionString);
-    logger.info("Embedded PostgreSQL ready");
-    activeDatabaseConnectionString = embeddedConnectionString;
-    startupDbInfo = { mode: "embedded-postgres", dataDir, port };
+  let startupDbInfo: { mode: "external-postgres"; connectionString: string };
+  if (!config.databaseUrl) {
+    throw new Error(
+      "DATABASE_URL (or config.database.connectionString) is required. Embedded PostgreSQL support has been removed.",
+    );
   }
+
+  migrationSummary = await ensureMigrations(config.databaseUrl, "PostgreSQL");
+
+  db = createDb(config.databaseUrl);
+  logger.info("Using external PostgreSQL via DATABASE_URL/config");
+  activeDatabaseConnectionString = config.databaseUrl;
+  startupDbInfo = { mode: "external-postgres", connectionString: config.databaseUrl };
   
   if (config.deploymentMode === "local_trusted" && !isLoopbackHost(config.host)) {
     throw new Error(
@@ -646,27 +489,6 @@ export async function startServer(): Promise<StartedServer> {
       resolveListen();
     });
   });
-  
-  if (embeddedPostgres && embeddedPostgresStartedByThisProcess) {
-    const shutdown = async (signal: "SIGINT" | "SIGTERM") => {
-      logger.info({ signal }, "Stopping embedded PostgreSQL");
-      try {
-        await embeddedPostgres?.stop();
-      } catch (err) {
-        logger.error({ err }, "Failed to stop embedded PostgreSQL cleanly");
-      } finally {
-        process.exit(0);
-      }
-    };
-  
-    process.once("SIGINT", () => {
-      void shutdown("SIGINT");
-    });
-    process.once("SIGTERM", () => {
-      void shutdown("SIGTERM");
-    });
-  }
-
   return {
     server,
     host: config.host,

@@ -116,7 +116,7 @@ function collectDeploymentEnvRows(config: PaperclipConfig | null, configPath: st
   const jwtSource = jwtEnv ? "env" : jwtFile ? "file" : "missing";
 
   const dbUrl = process.env.DATABASE_URL ?? config?.database?.connectionString ?? "";
-  const databaseMode = config?.database?.mode ?? "embedded-postgres";
+  const databaseMode = config?.database?.mode ?? "postgres";
   const dbUrlSource: EnvSource = process.env.DATABASE_URL ? "env" : config?.database?.connectionString ? "config" : "missing";
   const publicUrl =
     process.env.PAPERCLIP_PUBLIC_URL ??
@@ -201,10 +201,7 @@ function collectDeploymentEnvRows(config: PaperclipConfig | null, configPath: st
       value: dbUrl,
       source: dbUrlSource,
       required: true,
-      note:
-        databaseMode === "postgres"
-          ? "Configured for postgres mode (required)"
-          : "Required for live deployment with managed PostgreSQL",
+      note: databaseMode === "postgres" ? "Configured PostgreSQL connection (required)" : "Required",
     },
     {
       key: "PORT",

@@ -27,7 +27,6 @@ import {
   describeLocalInstancePaths,
   expandHomePrefix,
   resolveDefaultBackupDir,
-  resolveDefaultEmbeddedPostgresDir,
   resolveDefaultLogsDir,
   resolvePaperclipInstanceId,
 } from "../config/home.js";
@@ -160,10 +159,8 @@ function quickstartDefaultsFromEnv(): {
   );
   const defaults: OnboardDefaults = {
     database: {
-      mode: databaseUrl ? "postgres" : "embedded-postgres",
-      ...(databaseUrl ? { connectionString: databaseUrl } : {}),
-      embeddedPostgresDataDir: resolveDefaultEmbeddedPostgresDir(instanceId),
-      embeddedPostgresPort: 54329,
+      mode: "postgres",
+      connectionString: databaseUrl ?? "",
       backup: {
         enabled: databaseBackupEnabled,
         intervalMinutes: databaseBackupIntervalMinutes,
@@ -230,7 +227,7 @@ function quickstartDefaultsFromEnv(): {
 }
 
 function canCreateBootstrapInviteImmediately(config: Pick<PaperclipConfig, "database" | "server">): boolean {
-  return config.server.deploymentMode === "authenticated" && config.database.mode !== "embedded-postgres";
+  return config.server.deploymentMode === "authenticated" && config.database.connectionString.trim().length > 0;
 }
 
 export async function onboard(opts: OnboardOptions): Promise<void> {
@@ -300,7 +297,7 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
     p.log.step(pc.bold("Database"));
     database = await promptDatabase(database);
 
-    if (database.mode === "postgres" && database.connectionString) {
+    if (database.connectionString) {
       const s = p.spinner();
       s.start("Testing database connection...");
       try {
@@ -388,11 +385,21 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
       p.log.message(pc.dim(`Environment-aware defaults active (${usedEnvKeys.length} env var(s) detected).`));
     } else {
       p.log.message(
-        pc.dim("No environment overrides detected: embedded database, file storage, local encrypted secrets."),
+        pc.dim("No environment overrides detected: PostgreSQL URL required, file storage, local encrypted secrets."),
       );
     }
     for (const ignored of ignoredEnvKeys) {
       p.log.message(pc.dim(`Ignored ${ignored.key}: ${ignored.reason}`));
+    }
+    if (!database.connectionString.trim()) {
+      if (opts.yes) {
+        throw new Error(
+          "DATABASE_URL is required for quickstart. Set it in the environment or .env file, or run `paperclipai onboard` without --yes to enter it interactively.",
+        );
+      }
+
+      p.log.message(pc.dim("No DATABASE_URL detected. Collecting PostgreSQL connection details."));
+      database = await promptDatabase(database);
     }
   }
 
@@ -432,7 +439,7 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
 
   p.note(
     [
-      `Database: ${database.mode}`,
+      "Database: postgres",
       llm ? `LLM: ${llm.provider}` : "LLM: not configured",
       `Logging: ${logging.mode} -> ${logging.logDir}`,
       `Server: ${server.deploymentMode}/${server.exposure} @ ${server.host}:${server.port}`,
@@ -475,16 +482,6 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
     const { runCommand } = await import("./run.js");
     await runCommand({ config: configPath, repair: true, yes: true });
     return;
-  }
-
-  if (server.deploymentMode === "authenticated" && database.mode === "embedded-postgres") {
-    p.log.info(
-      [
-        "Bootstrap CEO invite will be created after the server starts.",
-        `Next: ${pc.cyan("paperclipai run")}`,
-        `Then: ${pc.cyan("paperclipai auth bootstrap-ceo")}`,
-      ].join("\n"),
-    );
   }
 
   p.outro("You're all set!");

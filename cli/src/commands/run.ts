@@ -3,13 +3,10 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as p from "@clack/prompts";
 import pc from "picocolors";
-import { bootstrapCeoInvite } from "./auth-bootstrap-ceo.js";
 import { onboard } from "./onboard.js";
 import { doctor } from "./doctor.js";
 import { loadPaperclipEnvFile } from "../config/env.js";
 import { configExists, resolveConfigPath } from "../config/store.js";
-import type { PaperclipConfig } from "../config/schema.js";
-import { readConfig } from "../config/store.js";
 import {
   describeLocalInstancePaths,
   resolvePaperclipHomeDir,
@@ -72,41 +69,8 @@ export async function runCommand(opts: RunOptions): Promise<void> {
     process.exit(1);
   }
 
-  const config = readConfig(configPath);
-  if (!config) {
-    p.log.error(`No config found at ${configPath}.`);
-    process.exit(1);
-  }
-
   p.log.step("Starting Paperclip server...");
-  const startedServer = await importServerEntry();
-
-  if (shouldGenerateBootstrapInviteAfterStart(config)) {
-    p.log.step("Generating bootstrap CEO invite");
-    await bootstrapCeoInvite({
-      config: configPath,
-      dbUrl: startedServer.databaseUrl,
-      baseUrl: resolveBootstrapInviteBaseUrl(config, startedServer),
-    });
-  }
-}
-
-function resolveBootstrapInviteBaseUrl(
-  config: PaperclipConfig,
-  startedServer: StartedServer,
-): string {
-  const explicitBaseUrl =
-    process.env.PAPERCLIP_PUBLIC_URL ??
-    process.env.PAPERCLIP_AUTH_PUBLIC_BASE_URL ??
-    process.env.BETTER_AUTH_URL ??
-    process.env.BETTER_AUTH_BASE_URL ??
-    (config.auth.baseUrlMode === "explicit" ? config.auth.publicBaseUrl : undefined);
-
-  if (typeof explicitBaseUrl === "string" && explicitBaseUrl.trim().length > 0) {
-    return explicitBaseUrl.trim().replace(/\/+$/, "");
-  }
-
-  return startedServer.apiUrl.replace(/\/api$/, "");
+  await importServerEntry();
 }
 
 function formatError(err: unknown): string {
@@ -175,10 +139,6 @@ async function importServerEntry(): Promise<StartedServer> {
         `${formatError(err)}`,
     );
   }
-}
-
-function shouldGenerateBootstrapInviteAfterStart(config: PaperclipConfig): boolean {
-  return config.server.deploymentMode === "authenticated" && config.database.mode === "embedded-postgres";
 }
 
 async function startServerFromModule(mod: unknown, label: string): Promise<StartedServer> {

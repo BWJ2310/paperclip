@@ -33,10 +33,6 @@ export function resolveDefaultConfigPath(): string {
   return path.resolve(resolvePaperclipInstanceRoot(), "config.json");
 }
 
-export function resolveDefaultEmbeddedPostgresDir(): string {
-  return path.resolve(resolvePaperclipInstanceRoot(), "db");
-}
-
 export function resolveDefaultLogsDir(): string {
   return path.resolve(resolvePaperclipInstanceRoot(), "logs");
 }

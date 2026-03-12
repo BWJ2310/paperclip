@@ -18,14 +18,7 @@ function resolveDbUrl(configPath?: string, explicitDbUrl?: string) {
   if (explicitDbUrl) return explicitDbUrl;
   const config = readConfig(configPath);
   if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-  if (config?.database.mode === "postgres" && config.database.connectionString) {
-    return config.database.connectionString;
-  }
-  if (config?.database.mode === "embedded-postgres") {
-    const port = config.database.embeddedPostgresPort ?? 54329;
-    return `postgres://paperclip:paperclip@127.0.0.1:${port}/paperclip`;
-  }
-  return null;
+  return config?.database.connectionString ?? null;
 }
 
 function resolveBaseUrl(configPath?: string, explicitBaseUrl?: string) {
@@ -126,7 +119,6 @@ export async function bootstrapCeoInvite(opts: {
     p.log.message(`Expires: ${pc.dim(created.expiresAt.toISOString())}`);
   } catch (err) {
     p.log.error(`Could not create bootstrap invite: ${err instanceof Error ? err.message : String(err)}`);
-    p.log.info("If using embedded-postgres, start the Paperclip server and run this command again.");
   } finally {
     await closableDb.$client?.end?.({ timeout: 5 }).catch(() => undefined);
   }

@@ -11,7 +11,6 @@ import { defaultStorageConfig, promptStorage } from "../prompts/storage.js";
 import { promptServer } from "../prompts/server.js";
 import {
   resolveDefaultBackupDir,
-  resolveDefaultEmbeddedPostgresDir,
   resolveDefaultLogsDir,
   resolvePaperclipInstanceId,
 } from "../config/home.js";
@@ -37,9 +36,8 @@ function defaultConfig(): PaperclipConfig {
       source: "configure",
     },
     database: {
-      mode: "embedded-postgres",
-      embeddedPostgresDataDir: resolveDefaultEmbeddedPostgresDir(instanceId),
-      embeddedPostgresPort: 54329,
+      mode: "postgres",
+      connectionString: process.env.DATABASE_URL?.trim() || "",
       backup: {
         enabled: true,
         intervalMinutes: 60,
@@ -95,11 +93,22 @@ export async function configure(opts: {
   }
 
   let section: Section | undefined = opts.section as Section | undefined;
+  const hasDatabaseConnectionString = () => config.database.connectionString.trim().length > 0;
 
   if (section && !SECTION_LABELS[section]) {
     p.log.error(`Unknown section: ${section}. Choose from: ${Object.keys(SECTION_LABELS).join(", ")}`);
     p.outro("");
     return;
+  }
+
+  if (!hasDatabaseConnectionString()) {
+    if (section && section !== "database") {
+      p.log.error("Database connection string is required before saving other sections.");
+      p.outro("Run `paperclipai configure --section database` first.");
+      return;
+    }
+    section = "database";
+    p.log.message(pc.yellow("Database connection string is required. Opening database configuration first."));
   }
 
   // Section selection loop

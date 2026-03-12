@@ -37,7 +37,6 @@ export type WorktreeLocalPaths = {
   instanceId: string;
   instanceRoot: string;
   contextPath: string;
-  embeddedPostgresDataDir: string;
   backupDir: string;
   logDir: string;
   secretsKeyFilePath: string;
@@ -105,7 +104,6 @@ export function resolveWorktreeLocalPaths(opts: {
     instanceId: opts.instanceId,
     instanceRoot,
     contextPath: path.resolve(homeDir, "context.json"),
-    embeddedPostgresDataDir: path.resolve(instanceRoot, "db"),
     backupDir: path.resolve(instanceRoot, "data", "backups"),
     logDir: path.resolve(instanceRoot, "logs"),
     secretsKeyFilePath: path.resolve(instanceRoot, "secrets", "master.key"),
@@ -129,10 +127,10 @@ export function buildWorktreeConfig(input: {
   sourceConfig: PaperclipConfig | null;
   paths: WorktreeLocalPaths;
   serverPort: number;
-  databasePort: number;
+  databaseConnectionString: string;
   now?: Date;
 }): PaperclipConfig {
-  const { sourceConfig, paths, serverPort, databasePort } = input;
+  const { sourceConfig, paths, serverPort, databaseConnectionString } = input;
   const nowIso = (input.now ?? new Date()).toISOString();
 
   const source = sourceConfig;
@@ -146,9 +144,8 @@ export function buildWorktreeConfig(input: {
     },
     ...(source?.llm ? { llm: source.llm } : {}),
     database: {
-      mode: "embedded-postgres",
-      embeddedPostgresDataDir: paths.embeddedPostgresDataDir,
-      embeddedPostgresPort: databasePort,
+      mode: "postgres",
+      connectionString: databaseConnectionString,
       backup: {
         enabled: source?.database.backup.enabled ?? true,
         intervalMinutes: source?.database.backup.intervalMinutes ?? 60,

@@ -1,5 +1,6 @@
 import { readConfigFile } from "./config-file.js";
 import { existsSync } from "node:fs";
+import path from "node:path";
 import { config as loadDotenv } from "dotenv";
 import { resolvePaperclipEnvPath } from "./paths.js";
 import {
@@ -16,18 +17,39 @@ import {
 } from "@paperclipai/shared";
 import {
   resolveDefaultBackupDir,
-  resolveDefaultEmbeddedPostgresDir,
   resolveDefaultSecretsKeyFilePath,
   resolveDefaultStorageDir,
   resolveHomeAwarePath,
 } from "./home-paths.js";
 
 const PAPERCLIP_ENV_FILE_PATH = resolvePaperclipEnvPath();
+
+function hasProjectBoundary(dir: string): boolean {
+  return existsSync(path.resolve(dir, "pnpm-workspace.yaml")) || existsSync(path.resolve(dir, ".git"));
+}
+
+function findProjectEnvFileFromAncestors(startDir = process.cwd()): string | null {
+  let currentDir = path.resolve(startDir);
+
+  while (true) {
+    const candidate = path.resolve(currentDir, ".env");
+    if (existsSync(candidate)) return candidate;
+
+    const nextDir = path.resolve(currentDir, "..");
+    if (hasProjectBoundary(currentDir) || nextDir === currentDir) return null;
+    currentDir = nextDir;
+  }
+}
+
 if (existsSync(PAPERCLIP_ENV_FILE_PATH)) {
   loadDotenv({ path: PAPERCLIP_ENV_FILE_PATH, override: false, quiet: true });
 }
+const PROJECT_ENV_FILE_PATH = findProjectEnvFileFromAncestors();
+if (PROJECT_ENV_FILE_PATH && PROJECT_ENV_FILE_PATH !== PAPERCLIP_ENV_FILE_PATH) {
+  loadDotenv({ path: PROJECT_ENV_FILE_PATH, override: false, quiet: true });
+}
 
-type DatabaseMode = "embedded-postgres" | "postgres";
+type DatabaseMode = "postgres";
 
 export interface Config {
   deploymentMode: DeploymentMode;
@@ -40,8 +62,6 @@ export interface Config {
   authDisableSignUp: boolean;
   databaseMode: DatabaseMode;
   databaseUrl: string | undefined;
-  embeddedPostgresDataDir: string;
-  embeddedPostgresPort: number;
   databaseBackupEnabled: boolean;
   databaseBackupIntervalMinutes: number;
   databaseBackupRetentionDays: number;
@@ -65,13 +85,8 @@ export interface Config {
 
 export function loadConfig(): Config {
   const fileConfig = readConfigFile();
-  const fileDatabaseMode =
-    (fileConfig?.database.mode === "postgres" ? "postgres" : "embedded-postgres") as DatabaseMode;
-
-  const fileDbUrl =
-    fileDatabaseMode === "postgres"
-      ? fileConfig?.database.connectionString
-      : undefined;
+  const fileDatabaseMode: DatabaseMode = "postgres";
+  const fileDbUrl = fileConfig?.database.connectionString;
   const fileDatabaseBackup = fileConfig?.database.backup;
   const fileSecrets = fileConfig?.secrets;
   const fileStorage = fileConfig?.storage;
@@ -212,10 +227,6 @@ export function loadConfig(): Config {
     authDisableSignUp,
     databaseMode: fileDatabaseMode,
     databaseUrl: process.env.DATABASE_URL ?? fileDbUrl,
-    embeddedPostgresDataDir: resolveHomeAwarePath(
-      fileConfig?.database.embeddedPostgresDataDir ?? resolveDefaultEmbeddedPostgresDir(),
-    ),
-    embeddedPostgresPort: fileConfig?.database.embeddedPostgresPort ?? 54329,
     databaseBackupEnabled,
     databaseBackupIntervalMinutes,
     databaseBackupRetentionDays,
