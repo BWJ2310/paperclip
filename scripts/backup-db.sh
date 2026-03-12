@@ -8,7 +8,7 @@ set -euo pipefail
 #   ./scripts/backup-db.sh
 #   pnpm db:backup
 #
-# The embedded postgres must be running (start with: pnpm dev)
+# Requires DATABASE_URL or config.database.connectionString to point at a running PostgreSQL database.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"

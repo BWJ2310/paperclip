@@ -1,6 +1,6 @@
 # Developing
 
-This project can run fully in local dev without setting up PostgreSQL manually.
+This project requires a PostgreSQL database in local development.
 
 ## Deployment Modes
 
@@ -89,12 +89,14 @@ docker compose -f docker-compose.quickstart.yml up --build
 
 See `doc/DOCKER.md` for API key wiring (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) and persistence details.
 
-## Database in Dev (Auto-Handled)
+## Database in Dev
 
-For local development, leave `DATABASE_URL` unset.
-The server will automatically use embedded PostgreSQL and persist data at:
+For local development, run PostgreSQL yourself and set `DATABASE_URL`. The included Compose file starts PostgreSQL on `localhost:5432`:
 
-- `~/.paperclip/instances/default/db`
+```sh
+docker compose up -d
+cp .env.example .env
+```
 
 Override home and instance:
 
@@ -102,7 +104,7 @@ Override home and instance:
 PAPERCLIP_HOME=/custom/path PAPERCLIP_INSTANCE_ID=dev pnpm paperclipai run
 ```
 
-No Docker or external database is required for this mode.
+`pnpm db:migrate` and the server both read `DATABASE_URL` from the process environment, `.paperclip/.env`, the repo-root `.env`, or `config.database.connectionString`.
 
 ## Storage in Dev (Auto-Handled)
 
@@ -126,14 +128,14 @@ This path honors `PAPERCLIP_HOME` and `PAPERCLIP_INSTANCE_ID` in non-default set
 
 ## Worktree-local Instances
 
-When developing from multiple git worktrees, do not point two Paperclip servers at the same embedded PostgreSQL data directory.
+When developing from multiple git worktrees, do not point two Paperclip servers at the same database.
 
-Instead, create a repo-local Paperclip config plus an isolated instance for the worktree:
+Instead, create a repo-local Paperclip config plus an isolated instance for the worktree, and provide a distinct target PostgreSQL URL:
 
 ```sh
-paperclipai worktree init
+paperclipai worktree init --database-url postgres://paperclip:paperclip@127.0.0.1:5432/paperclip_worktree
 # or create the git worktree and initialize it in one step:
-pnpm paperclipai worktree:make paperclip-pr-432
+pnpm paperclipai worktree:make paperclip-pr-432 --database-url postgres://paperclip:paperclip@127.0.0.1:5432/paperclip_pr_432
 ```
 
 This command:
@@ -141,7 +143,8 @@ This command:
 - writes repo-local files at `.paperclip/config.json` and `.paperclip/.env`
 - creates an isolated instance under `~/.paperclip-worktrees/instances/<worktree-id>/`
 - when run inside a linked git worktree, mirrors the effective git hooks into that worktree's private git dir
-- picks a free app port and embedded PostgreSQL port
+- picks a free app port
+- requires a distinct target PostgreSQL connection string via `--database-url` or `PAPERCLIP_WORKTREE_DATABASE_URL`
 - by default seeds the isolated DB in `minimal` mode from your main instance via a logical SQL snapshot
 
 Seed modes:
@@ -174,8 +177,9 @@ eval "$(paperclipai worktree env)"
 | `--from-config <path>` | Source config.json to seed from |
 | `--from-data-dir <path>` | Source PAPERCLIP_HOME used when deriving the source config |
 | `--from-instance <id>` | Source instance id (default: `default`) |
+| `--database-url <url>` | Target PostgreSQL connection string for the worktree |
+| `--source-database-url <url>` | Override the source PostgreSQL URL used for seeding |
 | `--server-port <port>` | Preferred server port |
-| `--db-port <port>` | Preferred embedded Postgres port |
 | `--seed-mode <mode>` | Seed profile: `minimal` or `full` (default: `minimal`) |
 | `--no-seed` | Skip database seeding from the source instance |
 | `--force` | Replace existing repo-local config and isolated instance data |
@@ -200,8 +204,9 @@ paperclipai worktree init --force
 | `--from-config <path>` | Source config.json to seed from |
 | `--from-data-dir <path>` | Source PAPERCLIP_HOME used when deriving the source config |
 | `--from-instance <id>` | Source instance id (default: `default`) |
+| `--database-url <url>` | Target PostgreSQL connection string for the worktree |
+| `--source-database-url <url>` | Override the source PostgreSQL URL used for seeding |
 | `--server-port <port>` | Preferred server port |
-| `--db-port <port>` | Preferred embedded Postgres port |
 | `--seed-mode <mode>` | Seed profile: `minimal` or `full` (default: `minimal`) |
 | `--no-seed` | Skip database seeding from the source instance |
 | `--force` | Replace existing repo-local config and isolated instance data |
@@ -256,7 +261,7 @@ pnpm dev
 
 ## Optional: Use External Postgres
 
-If you set `DATABASE_URL`, the server will use that instead of embedded PostgreSQL.
+The server always requires `DATABASE_URL` (or `config.database.connectionString`).
 
 ## Automatic DB Backups
 

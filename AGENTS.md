@@ -28,12 +28,12 @@ Before making changes, read in this order:
 - `packages/shared/`: shared types, constants, validators, API path constants
 - `doc/`: operational and product docs
 
-## 4. Dev Setup (Auto DB)
-
-Use embedded PGlite in dev by leaving `DATABASE_URL` unset.
+## 4. Dev Setup
 
 ```sh
 pnpm install
+docker compose up -d
+# set DATABASE_URL in .env or export it
 pnpm dev
 ```
 
@@ -49,10 +49,11 @@ curl http://localhost:3100/api/health
 curl http://localhost:3100/api/companies
 ```
 
-Reset local dev DB:
+Reset local dev DB when using the local Docker Postgres:
 
 ```sh
-rm -rf data/pglite
+docker compose down -v
+docker compose up -d
 pnpm dev
 ```
 

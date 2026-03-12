@@ -183,10 +183,12 @@ Or manually:
 git clone https://github.com/paperclipai/paperclip.git
 cd paperclip
 pnpm install
+docker compose up -d
+# then set DATABASE_URL in .env or export it
 pnpm dev
 ```
 
-This starts the API server at `http://localhost:3100`. An embedded PostgreSQL database is created automatically — no setup required.
+This starts the API server at `http://localhost:3100`. Paperclip now requires a PostgreSQL connection string via `DATABASE_URL` or `config.database.connectionString`.
 
 > **Requirements:** Node.js 20+, pnpm 9.15+
 
@@ -195,7 +197,7 @@ This starts the API server at `http://localhost:3100`. An embedded PostgreSQL da
 ## FAQ
 
 **What does a typical setup look like?**
-Locally, a single Node.js process manages an embedded Postgres and local file storage. For production, point it at your own Postgres and deploy however you like. Configure projects, agents, and goals — the agents take care of the rest.
+Locally, run PostgreSQL yourself (for example with Docker Compose) and point Paperclip at it with `DATABASE_URL`. For production, point it at your own Postgres and deploy however you like. Configure projects, agents, and goals — the agents take care of the rest.
 
 If you're a solo-entreprenuer you can use Tailscale to access Paperclip on the go. Then later you can deploy to e.g. Vercel when you need it.
 

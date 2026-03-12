@@ -1,37 +1,15 @@
 # Database
 
-Paperclip uses PostgreSQL via [Drizzle ORM](https://orm.drizzle.team/). There are three ways to run the database, from simplest to most production-ready.
+Paperclip uses PostgreSQL via [Drizzle ORM](https://orm.drizzle.team/). It no longer starts or manages an embedded PostgreSQL instance. You must provide a real PostgreSQL connection string.
 
-## 1. Embedded PostgreSQL — zero config
+`pnpm db:migrate` resolves the target database in this order:
 
-If you don't set `DATABASE_URL`, the server automatically starts an embedded PostgreSQL instance and manages a local data directory.
+1. `process.env.DATABASE_URL`
+2. adjacent `.paperclip/.env`
+3. repo-root `.env`
+4. `config.database.connectionString`
 
-```sh
-pnpm dev
-```
-
-That's it. On first start the server:
-
-1. Creates a `~/.paperclip/instances/default/db/` directory for storage
-2. Ensures the `paperclip` database exists
-3. Runs migrations automatically for empty databases
-4. Starts serving requests
-
-Data persists across restarts in `~/.paperclip/instances/default/db/`. To reset local dev data, delete that directory.
-
-If you need to apply pending migrations manually, run:
-
-```sh
-pnpm db:migrate
-```
-
-When `DATABASE_URL` is unset, this command targets the current embedded PostgreSQL instance for your active Paperclip config/instance.
-
-This mode is ideal for local development and one-command installs.
-
-Docker note: the Docker quickstart image also uses embedded PostgreSQL by default. Persist `/paperclip` to keep DB state across container restarts (see `doc/DOCKER.md`).
-
-## 2. Local PostgreSQL (Docker)
+## 1. Local PostgreSQL (Docker)
 
 For a full PostgreSQL server locally, use the included Docker Compose setup:
 
@@ -60,7 +38,7 @@ Start the server:
 pnpm dev
 ```
 
-## 3. Hosted PostgreSQL (Supabase)
+## 2. Hosted PostgreSQL (Supabase)
 
 For production, use a hosted PostgreSQL provider. [Supabase](https://supabase.com/) is a good option with a free tier.
 
@@ -119,17 +97,9 @@ DATABASE_URL=postgres://postgres.[PROJECT-REF]:[PASSWORD]@...5432/postgres \
 
 See [Supabase pricing](https://supabase.com/pricing) for current details.
 
-## Switching between modes
+## Switching environments
 
-The database mode is controlled by `DATABASE_URL`:
-
-| `DATABASE_URL` | Mode |
-|---|---|
-| Not set | Embedded PostgreSQL (`~/.paperclip/instances/default/db/`) |
-| `postgres://...localhost...` | Local Docker PostgreSQL |
-| `postgres://...supabase.com...` | Hosted Supabase |
-
-Your Drizzle schema (`packages/db/src/schema/`) stays the same regardless of mode.
+Your Drizzle schema (`packages/db/src/schema/`) stays the same regardless of which PostgreSQL server you target.
 
 ## Secret storage
 

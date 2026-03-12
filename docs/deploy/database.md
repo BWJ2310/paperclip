@@ -1,30 +1,13 @@
 ---
 title: Database
-summary: Embedded PGlite vs Docker Postgres vs hosted
+summary: Local Docker Postgres vs hosted Postgres
 ---
 
-Paperclip uses PostgreSQL via Drizzle ORM. There are three ways to run the database.
+Paperclip uses PostgreSQL via Drizzle ORM. It no longer starts an embedded database automatically.
 
-## 1. Embedded PostgreSQL (Default)
+`pnpm db:migrate` resolves the target database from `DATABASE_URL`, adjacent `.paperclip/.env`, repo-root `.env`, or `config.database.connectionString`.
 
-Zero config. If you don't set `DATABASE_URL`, the server starts an embedded PostgreSQL instance automatically.
-
-```sh
-pnpm dev
-```
-
-On first start, the server:
-
-1. Creates `~/.paperclip/instances/default/db/` for storage
-2. Ensures the `paperclip` database exists
-3. Runs migrations automatically
-4. Starts serving requests
-
-Data persists across restarts. To reset: `rm -rf ~/.paperclip/instances/default/db`.
-
-The Docker quickstart also uses embedded PostgreSQL by default.
-
-## 2. Local PostgreSQL (Docker)
+## 1. Local PostgreSQL (Docker)
 
 For a full PostgreSQL server locally:
 
@@ -42,11 +25,10 @@ cp .env.example .env
 Push the schema:
 
 ```sh
-DATABASE_URL=postgres://paperclip:paperclip@localhost:5432/paperclip \
-  npx drizzle-kit push
+pnpm db:migrate
 ```
 
-## 3. Hosted PostgreSQL (Supabase)
+## 2. Hosted PostgreSQL (Supabase)
 
 For production, use a hosted provider like [Supabase](https://supabase.com/).
 
@@ -66,12 +48,4 @@ export function createDb(url: string) {
 }
 ```
 
-## Switching Between Modes
-
-| `DATABASE_URL` | Mode |
-|----------------|------|
-| Not set | Embedded PostgreSQL |
-| `postgres://...localhost...` | Local Docker PostgreSQL |
-| `postgres://...supabase.com...` | Hosted Supabase |
-
-The Drizzle schema (`packages/db/src/schema/`) is the same regardless of mode.
+The Drizzle schema (`packages/db/src/schema/`) is the same regardless of which PostgreSQL server you target.

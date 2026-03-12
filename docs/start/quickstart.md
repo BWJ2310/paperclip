@@ -11,7 +11,7 @@ Get Paperclip running locally in under 5 minutes.
 npx paperclipai onboard --yes
 ```
 
-This walks you through setup, configures your environment, and gets Paperclip running.
+This walks you through setup, but you still need a PostgreSQL connection string in `DATABASE_URL` or your Paperclip config.
 
 ## Local Development
 
@@ -19,12 +19,12 @@ Prerequisites: Node.js 20+ and pnpm 9+.
 
 ```sh
 pnpm install
+docker compose up -d
+# set DATABASE_URL in .env or export it
 pnpm dev
 ```
 
 This starts the API server and UI at [http://localhost:3100](http://localhost:3100).
-
-No external database required — Paperclip uses an embedded PostgreSQL instance by default.
 
 ## One-Command Bootstrap
 
