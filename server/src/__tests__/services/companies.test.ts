@@ -13,7 +13,7 @@ describe("companyService", () => {
   });
   afterAll(() => testDb.close());
   beforeEach(async () => {
-    await cleanDb(testDb.db);
+    await cleanDb();
     svc = companyService(testDb.db);
   });
 

@@ -15,7 +15,7 @@ describe("issueApprovalService", () => {
   });
   afterAll(() => testDb.close());
   beforeEach(async () => {
-    await cleanDb(testDb.db);
+    await cleanDb();
     const [co] = await testDb.db
       .insert(companies)
       .values({ name: "IssueApproval Co", issuePrefix: `IA${randomUUID().slice(0, 3).toUpperCase()}` })

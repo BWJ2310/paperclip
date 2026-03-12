@@ -31,7 +31,7 @@ describe("secretService", () => {
   });
   afterAll(() => testDb.close());
   beforeEach(async () => {
-    await cleanDb(testDb.db);
+    await cleanDb();
     const [co] = await testDb.db
       .insert(companies)
       .values({ name: "Secret Co", issuePrefix: `S${randomUUID().slice(0, 4).toUpperCase()}` })

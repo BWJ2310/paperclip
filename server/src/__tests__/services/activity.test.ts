@@ -14,7 +14,7 @@ describe("activityService & logActivity", () => {
   });
   afterAll(() => testDb.close());
   beforeEach(async () => {
-    await cleanDb(testDb.db);
+    await cleanDb();
     const [co] = await testDb.db
       .insert(companies)
       .values({ name: "Activity Co", issuePrefix: `X${randomUUID().slice(0, 4).toUpperCase()}` })

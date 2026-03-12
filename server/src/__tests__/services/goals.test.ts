@@ -13,7 +13,7 @@ describe("goalService", () => {
   });
   afterAll(() => testDb.close());
   beforeEach(async () => {
-    await cleanDb(testDb.db);
+    await cleanDb();
     const [co] = await testDb.db
       .insert(companies)
       .values({ name: "Goal Co", issuePrefix: `G${randomUUID().slice(0, 4).toUpperCase()}` })
