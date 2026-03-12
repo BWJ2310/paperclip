@@ -48,7 +48,7 @@ describe("resolveDatabaseTarget", () => {
     process.chdir(projectDir);
     delete process.env.PAPERCLIP_CONFIG;
     writeJson(path.join(projectDir, ".paperclip", "config.json"), {
-      database: { mode: "embedded-postgres", embeddedPostgresPort: 54329 },
+      database: { mode: "postgres" },
     });
     writeText(
       path.join(projectDir, ".paperclip", ".env"),
@@ -60,6 +60,56 @@ describe("resolveDatabaseTarget", () => {
     expect(target).toMatchObject({
       mode: "postgres",
       connectionString: "postgres://file-user:file-pass@db.example.com:6543/paperclip",
+      source: "paperclip-env",
+    });
+  });
+
+  it("uses DATABASE_URL from repo-root .env when adjacent .paperclip/.env is absent", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-db-runtime-"));
+    const projectDir = path.join(tempDir, "repo");
+    fs.mkdirSync(projectDir, { recursive: true });
+    process.chdir(projectDir);
+    delete process.env.PAPERCLIP_CONFIG;
+    writeJson(path.join(projectDir, ".paperclip", "config.json"), {
+      database: { mode: "postgres" },
+    });
+    writeText(
+      path.join(projectDir, ".env"),
+      'DATABASE_URL="postgres://root-user:root-pass@db.example.com:7654/paperclip"\n',
+    );
+
+    const target = resolveDatabaseTarget();
+
+    expect(target).toMatchObject({
+      mode: "postgres",
+      connectionString: "postgres://root-user:root-pass@db.example.com:7654/paperclip",
+      source: "project-env",
+    });
+  });
+
+  it("prefers repo-local .paperclip/.env over repo-root .env", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-db-runtime-"));
+    const projectDir = path.join(tempDir, "repo");
+    fs.mkdirSync(projectDir, { recursive: true });
+    process.chdir(projectDir);
+    delete process.env.PAPERCLIP_CONFIG;
+    writeJson(path.join(projectDir, ".paperclip", "config.json"), {
+      database: { mode: "postgres" },
+    });
+    writeText(
+      path.join(projectDir, ".paperclip", ".env"),
+      'DATABASE_URL="postgres://adjacent-user:adjacent-pass@db.example.com:6543/paperclip"\n',
+    );
+    writeText(
+      path.join(projectDir, ".env"),
+      'DATABASE_URL="postgres://root-user:root-pass@db.example.com:7654/paperclip"\n',
+    );
+
+    const target = resolveDatabaseTarget();
+
+    expect(target).toMatchObject({
+      mode: "postgres",
+      connectionString: "postgres://adjacent-user:adjacent-pass@db.example.com:6543/paperclip",
       source: "paperclip-env",
     });
   });
@@ -84,25 +134,16 @@ describe("resolveDatabaseTarget", () => {
     });
   });
 
-  it("falls back to embedded postgres settings from config", () => {
+  it("throws when no connection string can be resolved", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-db-runtime-"));
     const configPath = path.join(tempDir, "instance", "config.json");
     process.env.PAPERCLIP_CONFIG = configPath;
     writeJson(configPath, {
       database: {
-        mode: "embedded-postgres",
-        embeddedPostgresDataDir: "~/paperclip-test-db",
-        embeddedPostgresPort: 55444,
+        mode: "postgres",
       },
     });
 
-    const target = resolveDatabaseTarget();
-
-    expect(target).toMatchObject({
-      mode: "embedded-postgres",
-      dataDir: path.resolve(os.homedir(), "paperclip-test-db"),
-      port: 55444,
-      source: "embedded-postgres@55444",
-    });
+    expect(() => resolveDatabaseTarget()).toThrow(/DATABASE_URL \(or config\.database\.connectionString\) is required/);
   });
 });

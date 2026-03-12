@@ -18,9 +18,8 @@ function writeBaseConfig(configPath: string) {
       source: "configure",
     },
     database: {
-      mode: "embedded-postgres",
-      embeddedPostgresDataDir: "/tmp/paperclip-db",
-      embeddedPostgresPort: 54329,
+      mode: "postgres",
+      connectionString: "postgres://paperclip:paperclip@127.0.0.1:5432/paperclip",
       backup: {
         enabled: true,
         intervalMinutes: 60,

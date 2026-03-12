@@ -1,12 +1,18 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { doctor } from "../commands/doctor.js";
 import { writeConfig } from "../config/store.js";
 import type { PaperclipConfig } from "../config/schema.js";
 
 const ORIGINAL_ENV = { ...process.env };
+
+vi.mock("@paperclipai/db", () => ({
+  createDb: () => ({
+    execute: async () => undefined,
+  }),
+}));
 
 function createTempConfig(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-doctor-"));
@@ -20,9 +26,8 @@ function createTempConfig(): string {
       source: "configure",
     },
     database: {
-      mode: "embedded-postgres",
-      embeddedPostgresDataDir: path.join(runtimeRoot, "db"),
-      embeddedPostgresPort: 55432,
+      mode: "postgres",
+      connectionString: "postgres://paperclip:paperclip@127.0.0.1:5432/paperclip-doctor",
       backup: {
         enabled: true,
         intervalMinutes: 60,
@@ -93,7 +98,7 @@ describe("doctor", () => {
     });
 
     expect(summary.failed).toBe(0);
-    expect(summary.warned).toBe(0);
+    expect(summary.warned).toBe(1);
     expect(process.env.PAPERCLIP_AGENT_JWT_SECRET).toBeTruthy();
   });
 });
