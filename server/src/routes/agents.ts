@@ -188,7 +188,7 @@ export function agentRoutes(db: Db) {
     if (!actorAgent || actorAgent.companyId !== companyId) {
       throw forbidden("Agent key cannot access another company");
     }
-    const allowedByGrant = await access.hasPermission(companyId, "agent", actorAgent.id, "agents:create");
+    const allowedByGrant = (await access.hasPermission(companyId, "agent", actorAgent.id, "agents:create")).granted;
     if (!allowedByGrant && !canCreateAgents(actorAgent)) {
       throw forbidden("Missing permission: can create agents");
     }
@@ -208,7 +208,7 @@ export function agentRoutes(db: Db) {
     if (!req.actor.agentId) return false;
     const actorAgent = await svc.getById(req.actor.agentId);
     if (!actorAgent || actorAgent.companyId !== companyId) return false;
-    const allowedByGrant = await access.hasPermission(companyId, "agent", actorAgent.id, "agents:create");
+    const allowedByGrant = (await access.hasPermission(companyId, "agent", actorAgent.id, "agents:create")).granted;
     return allowedByGrant || canCreateAgents(actorAgent);
   }
 
@@ -224,12 +224,12 @@ export function agentRoutes(db: Db) {
 
     if (actorAgent.id === targetAgent.id) return;
     if (actorAgent.role === "ceo") return;
-    const allowedByGrant = await access.hasPermission(
+    const allowedByGrant = (await access.hasPermission(
       targetAgent.companyId,
       "agent",
       actorAgent.id,
       "agents:create",
-    );
+    )).granted;
     if (allowedByGrant || canCreateAgents(actorAgent)) return;
     throw forbidden("Only CEO or agent creators can modify other agents");
   }

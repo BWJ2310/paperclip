@@ -20,6 +20,7 @@ import {
   companies,
   companyMemberships,
   instanceUserRoles,
+  principalPermissionGrants,
 } from "@paperclipai/db";
 import detectPort from "detect-port";
 import { createApp } from "./app.js";
@@ -30,6 +31,7 @@ import { heartbeatService, reconcilePersistedRuntimeServicesOnStartup, routineSe
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
+import { ROLE_PRESETS } from "@paperclipai/shared";
 
 type BetterAuthSessionUser = {
   id: string;
@@ -225,6 +227,17 @@ export async function startServer(): Promise<StartedServer> {
         status: "active",
         membershipRole: "owner",
       });
+      const ownerGrants = ROLE_PRESETS.owner.map((k) => ({
+        companyId: company.id,
+        principalType: "user" as const,
+        principalId: LOCAL_BOARD_USER_ID,
+        permissionKey: k,
+        scope: null,
+        grantedByUserId: null,
+        createdAt: now,
+        updatedAt: now,
+      }));
+      await db.insert(principalPermissionGrants).values(ownerGrants).onConflictDoNothing();
     }
   }
   

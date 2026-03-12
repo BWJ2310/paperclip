@@ -7,6 +7,7 @@ import {
   createCompanySchema,
   updateCompanyBrandingSchema,
   updateCompanySchema,
+  ROLE_PRESETS,
 } from "@paperclipai/shared";
 import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
@@ -217,6 +218,13 @@ export function companyRoutes(db: Db, storage?: StorageService) {
     }
     const company = await svc.create(req.body);
     await access.ensureMembership(company.id, "user", req.actor.userId ?? "local-board", "owner", "active");
+    await access.setPrincipalGrants(
+      company.id,
+      "user",
+      req.actor.userId ?? "local-board",
+      ROLE_PRESETS.owner.map((k) => ({ permissionKey: k })),
+      req.actor.userId ?? null,
+    );
     await logActivity(db, {
       companyId: company.id,
       actorType: "user",
@@ -310,6 +318,13 @@ export function companyRoutes(db: Db, storage?: StorageService) {
     assertBoard(req);
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    if (req.actor.userId) {
+      const membership = await access.getMembership(companyId, "user", req.actor.userId);
+      if (!membership || membership.membershipRole !== "owner") {
+        const isAdmin = await access.isInstanceAdmin(req.actor.userId);
+        if (!isAdmin) throw forbidden("Only owners can archive companies");
+      }
+    }
     const company = await svc.archive(companyId);
     if (!company) {
       res.status(404).json({ error: "Company not found" });
@@ -330,6 +345,13 @@ export function companyRoutes(db: Db, storage?: StorageService) {
     assertBoard(req);
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    if (req.actor.userId) {
+      const membership = await access.getMembership(companyId, "user", req.actor.userId);
+      if (!membership || membership.membershipRole !== "owner") {
+        const isAdmin = await access.isInstanceAdmin(req.actor.userId);
+        if (!isAdmin) throw forbidden("Only owners can delete companies");
+      }
+    }
     const company = await svc.remove(companyId);
     if (!company) {
       res.status(404).json({ error: "Company not found" });
