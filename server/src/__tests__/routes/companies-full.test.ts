@@ -181,7 +181,7 @@ describe("companyRoutes", () => {
     });
 
     it("returns 403 for non-owner non-admin", async () => {
-      mockAccessService.getMembership.mockResolvedValue({ membershipRole: "member" });
+      mockAccessService.getMembership.mockResolvedValue({ membershipRole: "contributor" });
       mockAccessService.isInstanceAdmin.mockResolvedValue(false);
       const res = await request(createApp())
         .post("/api/companies/company-1/archive");
@@ -378,7 +378,7 @@ describe("companyRoutes", () => {
 
   describe("POST /:companyId/archive — admin path", () => {
     it("allows instance admin to archive even as non-owner", async () => {
-      mockAccessService.getMembership.mockResolvedValue({ membershipRole: "member" });
+      mockAccessService.getMembership.mockResolvedValue({ membershipRole: "contributor" });
       mockAccessService.isInstanceAdmin.mockResolvedValue(true);
       mockCompanyService.archive.mockResolvedValue({ id: "company-1", status: "archived" });
       const res = await request(createApp())
@@ -406,7 +406,7 @@ describe("companyRoutes", () => {
 
   describe("DELETE /:companyId — admin path", () => {
     it("allows instance admin to delete even as non-owner", async () => {
-      mockAccessService.getMembership.mockResolvedValue({ membershipRole: "member" });
+      mockAccessService.getMembership.mockResolvedValue({ membershipRole: "contributor" });
       mockAccessService.isInstanceAdmin.mockResolvedValue(true);
       mockCompanyService.remove.mockResolvedValue({ id: "company-1" });
       const res = await request(createApp())
