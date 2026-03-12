@@ -23,15 +23,11 @@ function resolveConnectionString(configPath?: string): { value: string; source: 
   if (envUrl) return { value: envUrl, source: "DATABASE_URL" };
 
   const config = readConfig(configPath);
-  if (config?.database.mode === "postgres" && config.database.connectionString?.trim()) {
+  if (config?.database.connectionString?.trim()) {
     return { value: config.database.connectionString.trim(), source: "config.database.connectionString" };
   }
 
-  const port = config?.database.embeddedPostgresPort ?? 54329;
-  return {
-    value: `postgres://paperclip:paperclip@127.0.0.1:${port}/paperclip`,
-    source: `embedded-postgres@${port}`,
-  };
+  throw new Error("DATABASE_URL or config.database.connectionString is required to create a backup.");
 }
 
 function normalizeRetentionDays(value: number | undefined, fallback: number): number {

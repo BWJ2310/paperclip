@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { parse as parseEnvFileContents } from "dotenv";
 import { paperclipConfigSchema, type PaperclipConfig } from "./schema.js";
 import {
   resolveDefaultConfigPath,
@@ -40,7 +41,20 @@ function parseJson(filePath: string): unknown {
   }
 }
 
-function migrateLegacyConfig(raw: unknown): unknown {
+function readAdjacentDatabaseUrl(configPath: string): string | null {
+  const envPath = path.resolve(path.dirname(configPath), ".env");
+  if (!fs.existsSync(envPath)) return null;
+
+  try {
+    const parsed = parseEnvFileContents(fs.readFileSync(envPath, "utf8"));
+    const value = parsed.DATABASE_URL;
+    return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function injectDatabaseUrl(raw: unknown, configPath: string): unknown {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
   const config = { ...(raw as Record<string, unknown>) };
   const databaseRaw = config.database;
@@ -49,19 +63,11 @@ function migrateLegacyConfig(raw: unknown): unknown {
   }
 
   const database = { ...(databaseRaw as Record<string, unknown>) };
-  if (database.mode === "pglite") {
-    database.mode = "embedded-postgres";
-
-    if (typeof database.embeddedPostgresDataDir !== "string" && typeof database.pgliteDataDir === "string") {
-      database.embeddedPostgresDataDir = database.pgliteDataDir;
-    }
-    if (
-      typeof database.embeddedPostgresPort !== "number" &&
-      typeof database.pglitePort === "number" &&
-      Number.isFinite(database.pglitePort)
-    ) {
-      database.embeddedPostgresPort = database.pglitePort;
-    }
+  if (typeof database.connectionString !== "string" || database.connectionString.trim().length === 0) {
+    database.connectionString =
+      process.env.DATABASE_URL?.trim() ||
+      readAdjacentDatabaseUrl(configPath) ||
+      undefined;
   }
 
   config.database = database;
@@ -87,8 +93,7 @@ export function readConfig(configPath?: string): PaperclipConfig | null {
   const filePath = resolveConfigPath(configPath);
   if (!fs.existsSync(filePath)) return null;
   const raw = parseJson(filePath);
-  const migrated = migrateLegacyConfig(raw);
-  const parsed = paperclipConfigSchema.safeParse(migrated);
+  const parsed = paperclipConfigSchema.safeParse(injectDatabaseUrl(raw, filePath));
   if (!parsed.success) {
     throw new Error(`Invalid config at ${filePath}: ${formatValidationError(parsed.error)}`);
   }

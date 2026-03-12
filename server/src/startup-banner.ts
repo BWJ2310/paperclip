@@ -11,12 +11,6 @@ type ExternalPostgresInfo = {
   connectionString: string;
 };
 
-type EmbeddedPostgresInfo = {
-  mode: "embedded-postgres";
-  dataDir: string;
-  port: number;
-};
-
 type StartupBannerOptions = {
   host: string;
   deploymentMode: DeploymentMode;
@@ -25,7 +19,7 @@ type StartupBannerOptions = {
   requestedPort: number;
   listenPort: number;
   uiMode: UiMode;
-  db: ExternalPostgresInfo | EmbeddedPostgresInfo;
+  db: ExternalPostgresInfo;
   migrationSummary: string;
   heartbeatSchedulerEnabled: boolean;
   heartbeatSchedulerIntervalMs: number;
@@ -105,10 +99,7 @@ export function printStartupBanner(opts: StartupBannerOptions): void {
   const envFilePath = resolvePaperclipEnvPath();
   const agentJwtSecret = resolveAgentJwtSecretStatus(envFilePath);
 
-  const dbMode =
-    opts.db.mode === "embedded-postgres"
-      ? color("embedded-postgres", "green")
-      : color("external-postgres", "yellow");
+  const dbMode = color("external-postgres", "yellow");
   const uiMode =
     opts.uiMode === "vite-dev"
       ? color("vite-dev-middleware", "cyan")
@@ -121,10 +112,7 @@ export function printStartupBanner(opts: StartupBannerOptions): void {
       ? `${opts.listenPort}`
       : `${opts.listenPort} ${color(`(requested ${opts.requestedPort})`, "dim")}`;
 
-  const dbDetails =
-    opts.db.mode === "embedded-postgres"
-      ? `${opts.db.dataDir} ${color(`(pg:${opts.db.port})`, "dim")}`
-      : redactConnectionString(opts.db.connectionString);
+  const dbDetails = redactConnectionString(opts.db.connectionString);
 
   const heartbeat = opts.heartbeatSchedulerEnabled
     ? `enabled ${color(`(${opts.heartbeatSchedulerIntervalMs}ms)`, "dim")}`

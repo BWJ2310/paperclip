@@ -2,12 +2,12 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { formatDatabaseBackupResult, runDatabaseBackup } from "./backup-lib.js";
+import { resolveDatabaseTarget } from "./runtime-config.js";
 
 type PartialConfig = {
   database?: {
-    mode?: "embedded-postgres" | "postgres";
+    mode?: "postgres";
     connectionString?: string;
-    embeddedPostgresPort?: number;
     backup?: {
       dir?: string;
       retentionDays?: number;
@@ -55,23 +55,6 @@ function asPositiveInt(value: unknown): number | null {
   return rounded > 0 ? rounded : null;
 }
 
-function resolveEmbeddedPort(config: PartialConfig | null): number {
-  return asPositiveInt(config?.database?.embeddedPostgresPort) ?? 54329;
-}
-
-function resolveConnectionString(config: PartialConfig | null): string {
-  const envUrl = process.env.DATABASE_URL?.trim();
-  if (envUrl) return envUrl;
-
-  if (config?.database?.mode === "postgres" && typeof config.database.connectionString === "string") {
-    const trimmed = config.database.connectionString.trim();
-    if (trimmed) return trimmed;
-  }
-
-  const port = resolveEmbeddedPort(config);
-  return `postgres://paperclip:paperclip@127.0.0.1:${port}/paperclip`;
-}
-
 function resolveDefaultBackupDir(): string {
   return path.resolve(resolvePaperclipHomeDir(), "instances", resolvePaperclipInstanceId(), "data", "backups");
 }
@@ -91,7 +74,7 @@ function resolveRetentionDays(config: PartialConfig | null): number {
 async function main() {
   const configPath = resolveDefaultConfigPath();
   const config = readConfig(configPath);
-  const connectionString = resolveConnectionString(config);
+  const connectionString = resolveDatabaseTarget().connectionString;
   const backupDir = resolveBackupDir(config);
   const retentionDays = resolveRetentionDays(config);
 
