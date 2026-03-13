@@ -1025,72 +1025,18 @@ export function issueRoutes(db: Db, storage: StorageService) {
       }
 
       if (commentBody && comment) {
-        let mentions = { agentIds: [] as string[], userIds: [] as string[] };
-        try {
-          mentions = await svc.findMentions(issue.companyId, commentBody);
-        } catch (err) {
-          logger.warn({ err, issueId: id }, "failed to resolve @-mentions");
-        }
-
-        for (const mentionedId of mentions.agentIds) {
-          if (wakeups.has(mentionedId)) continue;
-          if (actor.actorType === "agent" && actor.actorId === mentionedId) continue;
-          wakeups.set(mentionedId, {
-            source: "automation",
-            triggerDetail: "system",
-            reason: "issue_comment_mentioned",
-            payload: { issueId: id, commentId: comment.id },
-            requestedByActorType: actor.actorType,
-            requestedByActorId: actor.actorId,
-            contextSnapshot: {
-              issueId: id,
-              taskId: id,
-              commentId: comment.id,
-              wakeCommentId: comment.id,
-              wakeReason: "issue_comment_mentioned",
-              source: "comment.mention",
-            },
-          });
-        }
-
-        // Log activity and send email for mentioned human users
-        for (const mentionedUserId of mentions.userIds) {
-          if (actor.actorType === "user" && actor.actorId === mentionedUserId) continue;
-          logActivity(db, {
-            companyId: issue.companyId,
-            actorType: actor.actorType,
-            actorId: actor.actorId,
-            agentId: actor.agentId,
-            runId: actor.runId,
-            action: "issue.user_mentioned",
-            entityType: "issue",
-            entityId: issue.id,
-            details: { userId: mentionedUserId, issueId: issue.id, commentId: comment.id },
-          }).catch((err) => logger.warn({ err, issueId: id }, "failed to log user mention activity"));
-
-          const emailSvc = req.app.locals.emailService as EmailService | undefined;
-          if (emailSvc?.isConfigured()) {
-            void (async () => {
-              try {
-                const userRows = await db
-                  .select({ email: authUsers.email })
-                  .from(authUsers)
-                  .where(eq(authUsers.id, mentionedUserId));
-                const user = userRows[0];
-                if (!user?.email) return;
-                const baseUrl = `${req.protocol}://${req.get("host")}`;
-                const issueUrl = `${baseUrl}/issues/${issue.identifier ?? issue.id}`;
-                await emailSvc.sendMentionEmail(user.email, {
-                  issueTitle: issue.title,
-                  issueUrl,
-                  snippet: commentBody.slice(0, 200),
-                });
-              } catch (err) {
-                logger.warn({ err, issueId: issue.id, userId: mentionedUserId }, "failed to send mention email");
-              }
-            })();
-          }
-        }
+        await svc.processMentionNotifications({
+          companyId: issue.companyId,
+          issueId: issue.id,
+          issueTitle: issue.title,
+          issueIdentifier: issue.identifier,
+          commentId: comment.id,
+          body: commentBody,
+          baseUrl: `${req.protocol}://${req.get("host")}`,
+          actor,
+          emailService: req.app.locals.emailService as EmailService | undefined,
+          wakeups,
+        });
       }
 
       for (const [agentId, wakeup] of wakeups.entries()) {
@@ -1513,72 +1459,18 @@ export function issueRoutes(db: Db, storage: StorageService) {
         }
       }
 
-      let mentions = { agentIds: [] as string[], userIds: [] as string[] };
-      try {
-        mentions = await svc.findMentions(issue.companyId, req.body.body);
-      } catch (err) {
-        logger.warn({ err, issueId: id }, "failed to resolve @-mentions");
-      }
-
-      for (const mentionedId of mentions.agentIds) {
-        if (wakeups.has(mentionedId)) continue;
-        if (actorIsAgent && actor.actorId === mentionedId) continue;
-        wakeups.set(mentionedId, {
-          source: "automation",
-          triggerDetail: "system",
-          reason: "issue_comment_mentioned",
-          payload: { issueId: id, commentId: comment.id },
-          requestedByActorType: actor.actorType,
-          requestedByActorId: actor.actorId,
-          contextSnapshot: {
-            issueId: id,
-            taskId: id,
-            commentId: comment.id,
-            wakeCommentId: comment.id,
-            wakeReason: "issue_comment_mentioned",
-            source: "comment.mention",
-          },
-        });
-      }
-
-      // Log activity and send email for mentioned human users
-      for (const mentionedUserId of mentions.userIds) {
-        if (actor.actorType === "user" && actor.actorId === mentionedUserId) continue;
-        logActivity(db, {
-          companyId: currentIssue.companyId,
-          actorType: actor.actorType,
-          actorId: actor.actorId,
-          agentId: actor.agentId,
-          runId: actor.runId,
-          action: "issue.user_mentioned",
-          entityType: "issue",
-          entityId: currentIssue.id,
-          details: { userId: mentionedUserId, issueId: currentIssue.id, commentId: comment.id },
-        }).catch((err) => logger.warn({ err, issueId: id }, "failed to log user mention activity"));
-
-        const emailSvc = req.app.locals.emailService as EmailService | undefined;
-        if (emailSvc?.isConfigured()) {
-          void (async () => {
-            try {
-              const userRows = await db
-                .select({ email: authUsers.email })
-                .from(authUsers)
-                .where(eq(authUsers.id, mentionedUserId));
-              const user = userRows[0];
-              if (!user?.email) return;
-              const baseUrl = `${req.protocol}://${req.get("host")}`;
-              const issueUrl = `${baseUrl}/issues/${currentIssue.identifier ?? currentIssue.id}`;
-              await emailSvc.sendMentionEmail(user.email, {
-                issueTitle: currentIssue.title,
-                issueUrl,
-                snippet: req.body.body.slice(0, 200),
-              });
-            } catch (err) {
-              logger.warn({ err, issueId: currentIssue.id, userId: mentionedUserId }, "failed to send mention email");
-            }
-          })();
-        }
-      }
+      await svc.processMentionNotifications({
+        companyId: currentIssue.companyId,
+        issueId: currentIssue.id,
+        issueTitle: currentIssue.title,
+        issueIdentifier: currentIssue.identifier,
+        commentId: comment.id,
+        body: req.body.body,
+        baseUrl: `${req.protocol}://${req.get("host")}`,
+        actor,
+        emailService: req.app.locals.emailService as EmailService | undefined,
+        wakeups,
+      });
 
       for (const [agentId, wakeup] of wakeups.entries()) {
         heartbeat

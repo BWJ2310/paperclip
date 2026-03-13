@@ -22,6 +22,9 @@ import {
 } from "@paperclipai/db";
 import { extractProjectMentionIds } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
+import { logActivity } from "./activity-log.js";
+import { logger } from "../middleware/logger.js";
+import type { EmailService } from "./email.js";
 import {
   defaultIssueExecutionWorkspaceSettingsForProject,
   gateProjectExecutionWorkspacePolicy,
@@ -475,6 +478,32 @@ export function issueService(db: Db) {
       .then((rows) => rows[0] ?? null);
 
     return adopted;
+  }
+
+  async function findMentionsInner(companyId: string, body: string): Promise<{ agentIds: string[]; userIds: string[] }> {
+    const re = /\B@([^\s@,!?.]+)/g;
+    const tokens = new Set<string>();
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(body)) !== null) tokens.add(m[1].toLowerCase());
+    if (tokens.size === 0) return { agentIds: [], userIds: [] };
+
+    const agentRows = await db.select({ id: agents.id, name: agents.name })
+      .from(agents).where(eq(agents.companyId, companyId));
+    const agentIds = agentRows.filter(a => tokens.has(a.name.toLowerCase())).map(a => a.id);
+
+    const userRows = await db
+      .select({ id: authUsers.id, name: authUsers.name })
+      .from(companyMemberships)
+      .innerJoin(authUsers, eq(companyMemberships.principalId, authUsers.id))
+      .where(
+        and(
+          eq(companyMemberships.companyId, companyId),
+          eq(companyMemberships.principalType, "user"),
+        ),
+      );
+    const userIds = userRows.filter(u => tokens.has(u.name.toLowerCase())).map(u => u.id);
+
+    return { agentIds, userIds };
   }
 
   return {
@@ -1458,30 +1487,84 @@ export function issueService(db: Db) {
         return existing;
       }),
 
-    findMentions: async (companyId: string, body: string): Promise<{ agentIds: string[]; userIds: string[] }> => {
-      const re = /\B@([^\s@,!?.]+)/g;
-      const tokens = new Set<string>();
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(body)) !== null) tokens.add(m[1].toLowerCase());
-      if (tokens.size === 0) return { agentIds: [], userIds: [] };
+    findMentions: findMentionsInner,
 
-      const agentRows = await db.select({ id: agents.id, name: agents.name })
-        .from(agents).where(eq(agents.companyId, companyId));
-      const agentIds = agentRows.filter(a => tokens.has(a.name.toLowerCase())).map(a => a.id);
+    processMentionNotifications: async (opts: {
+      companyId: string;
+      issueId: string;
+      issueTitle: string;
+      issueIdentifier?: string | null;
+      commentId: string;
+      body: string;
+      baseUrl: string;
+      actor: { actorType: "user" | "agent" | "system"; actorId: string; agentId?: string | null; runId?: string | null };
+      emailService?: EmailService;
+      wakeups: Map<string, unknown>;
+    }) => {
+      let mentions = { agentIds: [] as string[], userIds: [] as string[] };
+      try {
+        mentions = await findMentionsInner(opts.companyId, opts.body);
+      } catch (err) {
+        logger.warn({ err, issueId: opts.issueId }, "failed to resolve @-mentions");
+        return;
+      }
 
-      const userRows = await db
-        .select({ id: authUsers.id, name: authUsers.name })
-        .from(companyMemberships)
-        .innerJoin(authUsers, eq(companyMemberships.principalId, authUsers.id))
-        .where(
-          and(
-            eq(companyMemberships.companyId, companyId),
-            eq(companyMemberships.principalType, "user"),
-          ),
-        );
-      const userIds = userRows.filter(u => tokens.has(u.name.toLowerCase())).map(u => u.id);
+      for (const mentionedId of mentions.agentIds) {
+        if (opts.wakeups.has(mentionedId)) continue;
+        if (opts.actor.actorType === "agent" && opts.actor.actorId === mentionedId) continue;
+        opts.wakeups.set(mentionedId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: "issue_comment_mentioned",
+          payload: { issueId: opts.issueId, commentId: opts.commentId },
+          requestedByActorType: opts.actor.actorType,
+          requestedByActorId: opts.actor.actorId,
+          contextSnapshot: {
+            issueId: opts.issueId,
+            taskId: opts.issueId,
+            commentId: opts.commentId,
+            wakeCommentId: opts.commentId,
+            wakeReason: "issue_comment_mentioned",
+            source: "comment.mention",
+          },
+        });
+      }
 
-      return { agentIds, userIds };
+      for (const mentionedUserId of mentions.userIds) {
+        if (opts.actor.actorType === "user" && opts.actor.actorId === mentionedUserId) continue;
+        logActivity(db, {
+          companyId: opts.companyId,
+          actorType: opts.actor.actorType,
+          actorId: opts.actor.actorId,
+          agentId: opts.actor.agentId,
+          runId: opts.actor.runId,
+          action: "issue.user_mentioned",
+          entityType: "issue",
+          entityId: opts.issueId,
+          details: { userId: mentionedUserId, issueId: opts.issueId, commentId: opts.commentId },
+        }).catch((err) => logger.warn({ err, issueId: opts.issueId }, "failed to log user mention activity"));
+
+        if (opts.emailService?.isConfigured()) {
+          void (async () => {
+            try {
+              const userRows = await db
+                .select({ email: authUsers.email })
+                .from(authUsers)
+                .where(eq(authUsers.id, mentionedUserId));
+              const user = userRows[0];
+              if (!user?.email) return;
+              const issueUrl = `${opts.baseUrl}/issues/${opts.issueIdentifier ?? opts.issueId}`;
+              await opts.emailService!.sendMentionEmail(user.email, {
+                issueTitle: opts.issueTitle,
+                issueUrl,
+                snippet: opts.body.slice(0, 200),
+              });
+            } catch (err) {
+              logger.warn({ err, issueId: opts.issueId, userId: mentionedUserId }, "failed to send mention email");
+            }
+          })();
+        }
+      }
     },
 
     findMentionedProjectIds: async (issueId: string) => {
