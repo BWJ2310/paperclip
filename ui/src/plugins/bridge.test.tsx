@@ -25,6 +25,7 @@ import {
   usePluginData,
   usePluginAction,
   useHostContext,
+  usePluginStream,
 } from "./bridge";
 import {
   PluginSlotMount,
@@ -317,6 +318,42 @@ describe("useHostContext", () => {
     // projectId should be inferred from entityType === "project"
     expect(captured!.projectId).toBe("project-1");
     view.unmount();
+  });
+});
+
+describe("usePluginStream", () => {
+  it("does not open an EventSource when the channel is blank", async () => {
+    const originalEventSource = globalThis.EventSource;
+    const eventSourceSpy = vi.fn();
+    globalThis.EventSource = eventSourceSpy as unknown as typeof EventSource;
+
+    function StreamProbe() {
+      const stream = usePluginStream("", { companyId: "company-1" });
+      return (
+        <div data-testid="stream-status">
+          {stream.connecting ? "connecting" : stream.connected ? "connected" : "idle"}
+        </div>
+      );
+    }
+
+    registerPluginReactComponent("acme.files", "StreamProbe", StreamProbe);
+    const streamSlot = { ...slot, exportName: "StreamProbe" };
+
+    const view = renderNode(
+      <PluginSlotMount
+        slot={streamSlot}
+        context={{ ...baseContext, companyId: "company-1" }}
+      />,
+    );
+
+    try {
+      await flushBridgeUpdates();
+      expect(eventSourceSpy).not.toHaveBeenCalled();
+      expect(view.container.querySelector("[data-testid='stream-status']")?.textContent).toBe("idle");
+    } finally {
+      globalThis.EventSource = originalEventSource;
+      view.unmount();
+    }
   });
 });
 

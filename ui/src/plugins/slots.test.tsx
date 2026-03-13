@@ -7,13 +7,21 @@ vi.mock("@tanstack/react-query", () => ({
   useQuery: vi.fn(),
 }));
 
+vi.mock("@/api/plugins", () => ({
+  pluginsApi: {
+    listUiContributions: vi.fn(),
+  },
+}));
+
 import { useQuery } from "@tanstack/react-query";
+import { pluginsApi } from "@/api/plugins";
 import {
   PluginSlotMount,
   PluginSlotOutlet,
   registerPluginReactComponent,
   registerPluginWebComponent,
   _applyJsxRuntimeKeyForTests,
+  _buildShimSourceForTests,
   _rewriteBareSpecifiersForTests,
   _resetPluginModuleLoader,
 } from "./slots";
@@ -64,8 +72,15 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
+function mockListUiContributions(data: MockContribution[] = []) {
+  vi.mocked(pluginsApi.listUiContributions).mockResolvedValue(
+    data as unknown as Awaited<ReturnType<typeof pluginsApi.listUiContributions>>,
+  );
+}
+
 describe("plugin slot runtime", () => {
   it("renders sorted detail slots and filters by entity type", () => {
+    mockListUiContributions();
     mockUseQuery([
       {
         pluginId: "p1",
@@ -123,6 +138,7 @@ describe("plugin slot runtime", () => {
   });
 
   it("usePluginSlots with projectSidebarItem and entityType project returns only slots with entityTypes including project", () => {
+    mockListUiContributions();
     mockUseQuery([
       {
         pluginId: "file-plugin",
@@ -175,6 +191,7 @@ describe("plugin slot runtime", () => {
   });
 
   it("renders placeholder when slot component is missing and placeholder mode is enabled", () => {
+    mockListUiContributions();
     mockUseQuery([
       {
         pluginId: "p2",
@@ -207,6 +224,7 @@ describe("plugin slot runtime", () => {
   });
 
   it("shows plugin extensions unavailable message when slot query fails", () => {
+    mockListUiContributions();
     mockUseQuery([], new Error("network down"));
 
     const view = renderNode(
@@ -221,6 +239,7 @@ describe("plugin slot runtime", () => {
   });
 
   it("contains plugin render errors with an error boundary", () => {
+    mockListUiContributions();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     registerPluginReactComponent("acme.crashy", "Crashy", () => {
       throw new Error("boom");
@@ -248,6 +267,7 @@ describe("plugin slot runtime", () => {
   });
 
   it("binds slot and context on registered web components", () => {
+    mockListUiContributions();
     registerPluginWebComponent("acme.web", "WebSlot", "paperclip-web-slot");
 
     const slot = {
@@ -320,6 +340,13 @@ describe("plugin module dynamic import", () => {
       configurable: true,
       value: originalRevokeObjectURL,
     });
+  });
+
+  it("includes modern React hook exports in the react shim", () => {
+    const shimSource = _buildShimSourceForTests("react");
+    expect(shimSource).toContain("useLayoutEffect");
+    expect(shimSource).toContain("useId");
+    expect(shimSource).toContain("useTransition");
   });
 
   it("dynamically imports plugin UI module and registers exports", async () => {

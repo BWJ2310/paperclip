@@ -19,6 +19,7 @@ vi.mock("@/context/BreadcrumbContext", () => ({
 const mockParams = { companyPrefix: "ACME", pluginId: "plug-1" };
 vi.mock("@/lib/router", () => ({
   useParams: () => mockParams,
+  useLocation: () => ({ pathname: "/ACME/plugins/plug-1", search: "" }),
   Link: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
   Navigate: ({ to, replace }: { to: string; replace?: boolean }) => (
     <div data-testid="navigate" data-to={to} data-replace={String(!!replace)} />
@@ -36,9 +37,12 @@ const mockPluginSlotMount = vi.hoisted(() =>
     <div data-testid="plugin-slot-mount">{slot.displayName}</div>
   ))
 );
+const mockEnsurePluginContributionLoaded = vi.hoisted(() => vi.fn());
 vi.mock("@/plugins/slots", () => ({
   PluginSlotMount: (props: { slot: { pluginId: string; type: string; displayName: string } }) =>
     mockPluginSlotMount(props),
+  ensurePluginContributionLoaded: (contribution: unknown) =>
+    mockEnsurePluginContributionLoaded(contribution),
 }));
 
 function renderWithClient(ui: React.ReactElement) {
@@ -52,7 +56,9 @@ function renderWithClient(ui: React.ReactElement) {
 
 describe("PluginPage", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.mocked(pluginsApi.listUiContributions).mockResolvedValue([]);
+    mockEnsurePluginContributionLoaded.mockResolvedValue(undefined);
   });
 
   it("redirects to plugin settings when plugin has no page slot", async () => {
@@ -77,8 +83,7 @@ describe("PluginPage", () => {
   });
 
   it("renders plugin page slot when contribution has page type", async () => {
-    vi.mocked(pluginsApi.listUiContributions).mockResolvedValue([
-      {
+    const contribution = {
         pluginId: "plug-1",
         pluginKey: "acme.test",
         displayName: "Test Plugin",
@@ -93,12 +98,13 @@ describe("PluginPage", () => {
           },
         ],
         launchers: [],
-      } as PluginUiContribution,
-    ]);
+      } as PluginUiContribution;
+    vi.mocked(pluginsApi.listUiContributions).mockResolvedValue([contribution]);
 
     renderWithClient(<PluginPage />);
 
     await screen.findByTestId("plugin-slot-mount");
+    expect(mockEnsurePluginContributionLoaded).toHaveBeenCalledWith(contribution);
     expect(mockPluginSlotMount).toHaveBeenCalled();
     const call = mockPluginSlotMount.mock.calls[0][0];
     expect(call.slot).toBeDefined();

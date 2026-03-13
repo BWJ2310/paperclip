@@ -205,4 +205,40 @@ describe("PluginLauncherButton", () => {
       navigateMock.mock.invocationCallOrder[0] ?? Infinity,
     );
   });
+
+  it("rewrites plugin page navigate targets from plugin key to installed plugin id", async () => {
+    renderLauncherButton({
+      id: "open-plugin-page",
+      displayName: "Open Plugin",
+      placementZone: "sidebar",
+      action: {
+        type: "navigate",
+        target: "/plugins/acme.tools",
+      },
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Plugin" }));
+
+    await waitFor(() => {
+      expect(navigateMock).toHaveBeenCalledWith("/plugins/plugin-1");
+    });
+  });
+
+  it("normalizes legacy relative plugin page navigate targets before resolving the installed plugin id", async () => {
+    renderLauncherButton({
+      id: "open-relative-plugin-page",
+      displayName: "Open Relative Plugin",
+      placementZone: "sidebar",
+      action: {
+        type: "navigate",
+        target: "plugins/acme.tools",
+      },
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Relative Plugin" }));
+
+    await waitFor(() => {
+      expect(navigateMock).toHaveBeenCalledWith("/plugins/plugin-1");
+    });
+  });
 });
