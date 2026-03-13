@@ -1000,14 +1000,14 @@ export function issueRoutes(db: Db, storage: StorageService) {
       }
 
       if (commentBody && comment) {
-        let mentionedIds: string[] = [];
+        let mentions = { agentIds: [] as string[], userIds: [] as string[] };
         try {
-          mentionedIds = await svc.findMentionedAgents(issue.companyId, commentBody);
+          mentions = await svc.findMentions(issue.companyId, commentBody);
         } catch (err) {
           logger.warn({ err, issueId: id }, "failed to resolve @-mentions");
         }
 
-        for (const mentionedId of mentionedIds) {
+        for (const mentionedId of mentions.agentIds) {
           if (wakeups.has(mentionedId)) continue;
           if (actor.actorType === "agent" && actor.actorId === mentionedId) continue;
           wakeups.set(mentionedId, {
@@ -1439,14 +1439,14 @@ export function issueRoutes(db: Db, storage: StorageService) {
         }
       }
 
-      let mentionedIds: string[] = [];
+      let mentions = { agentIds: [] as string[], userIds: [] as string[] };
       try {
-        mentionedIds = await svc.findMentionedAgents(issue.companyId, req.body.body);
+        mentions = await svc.findMentions(issue.companyId, req.body.body);
       } catch (err) {
         logger.warn({ err, issueId: id }, "failed to resolve @-mentions");
       }
 
-      for (const mentionedId of mentionedIds) {
+      for (const mentionedId of mentions.agentIds) {
         if (wakeups.has(mentionedId)) continue;
         if (actorIsAgent && actor.actorId === mentionedId) continue;
         wakeups.set(mentionedId, {

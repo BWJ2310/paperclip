@@ -1,0 +1,15 @@
+{
+  "workerId": "paperclip-multiuser-group5v2",
+  "messages": [
+    {
+      "id": "msg-289a8a20-2045-4608-a0a8-f5d2c8a2b2ef",
+      "from": "team-lead",
+      "to": "paperclip-multiuser-group5v2",
+      "body": "# Group 5: Agents Recognize People\n\nYou are implementing Group 5 of the \"complete-multiuser\" wish for Paperclip.\n\n## BRANCH SETUP\n```bash\ngit checkout dev && git pull origin dev && git checkout -b feat/multiuser-group5-people-recognition\n```\n\n## CONTEXT\nRead these files first:\n- `.genie/wishes/complete-multiuser/WISH.md` (full wish spec — read Group 5 section)\n- `server/src/routes/issues.ts` (issue queries — main file to modify)\n- `server/src/services/activity.ts` (activity log)\n- `server/src/services/heartbeat.ts` (heartbeat context)\n- `packages/db/src/schema/` (DB schema — issues, authUsers)\n- `server/src/routes/access.ts` (people endpoint from Group 4 already in dev)\n\n## DELIVERABLES\n\n### 1. Enriched issue API responses\nIn issue list/detail query in `server/src/routes/issues.ts`, add LEFT JOIN on `authUsers` to include:\n- `createdByUserName` — name of the user who created the issue (when `createdByUserId` is set)\n- `assigneeUserName` — name of the assigned user (when `assigneeUserId` is set)\n\n### 2. Enriched comment API responses\nIn comment query, add LEFT JOIN on `authUsers` to include:\n- `authorUserName` — name of the comment author (when `actorType === 'user'`)\n\n### 3. Enriched activity log responses\nIn `server/src/services/activity.ts` or activity queries, add `actorName` for user actors via LEFT JOIN on `authUsers`.\n\n### 4. Heartbeat context enrichment\nIn `server/src/services/heartbeat.ts`, when building `contextSnapshot` for an issue run:\n- Include `assigneeUser: { id, name, email }` if `assigneeUserId` is set\n- Include `createdByUser: { id, name }` if the issue was created by a user\n\n## ACCEPTANCE CRITERIA\n- `GET /issues/:id` response includes `createdByUserName` and `assigneeUserName` when applicable\n- `GET /issues/:id/comments` includes `authorUserName` on each comment\n- Agent heartbeat contextSnapshot includes user identity objects\n- `pnpm -r typecheck && pnpm test:run && pnpm build` passes\n\n## VALIDATION\n```bash\npnpm -r typecheck && pnpm test:run && pnpm build\n```\n\nPush when done:\n```bash\ngit add -A && git commit -m \"feat: enrich API responses with user names for agent recognition (Group 5)\" && git push -u origin feat/multiuser-group5-people-recognition\n```",
+      "createdAt": "2026-03-13T04:56:33.076Z",
+      "read": false,
+      "deliveredAt": "2026-03-13T04:56:33.080Z"
+    }
+  ],
+  "lastUpdated": "2026-03-13T04:56:33.080Z"
+}

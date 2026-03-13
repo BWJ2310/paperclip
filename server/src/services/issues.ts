@@ -3,6 +3,7 @@ import type { Db } from "@paperclipai/db";
 import {
   agents,
   assets,
+  authUsers,
   companies,
   companyMemberships,
   documents,
@@ -1457,15 +1458,30 @@ export function issueService(db: Db) {
         return existing;
       }),
 
-    findMentionedAgents: async (companyId: string, body: string) => {
+    findMentions: async (companyId: string, body: string): Promise<{ agentIds: string[]; userIds: string[] }> => {
       const re = /\B@([^\s@,!?.]+)/g;
       const tokens = new Set<string>();
       let m: RegExpExecArray | null;
       while ((m = re.exec(body)) !== null) tokens.add(m[1].toLowerCase());
-      if (tokens.size === 0) return [];
-      const rows = await db.select({ id: agents.id, name: agents.name })
+      if (tokens.size === 0) return { agentIds: [], userIds: [] };
+
+      const agentRows = await db.select({ id: agents.id, name: agents.name })
         .from(agents).where(eq(agents.companyId, companyId));
-      return rows.filter(a => tokens.has(a.name.toLowerCase())).map(a => a.id);
+      const agentIds = agentRows.filter(a => tokens.has(a.name.toLowerCase())).map(a => a.id);
+
+      const userRows = await db
+        .select({ id: authUsers.id, name: authUsers.name })
+        .from(companyMemberships)
+        .innerJoin(authUsers, eq(companyMemberships.principalId, authUsers.id))
+        .where(
+          and(
+            eq(companyMemberships.companyId, companyId),
+            eq(companyMemberships.principalType, "user"),
+          ),
+        );
+      const userIds = userRows.filter(u => tokens.has(u.name.toLowerCase())).map(u => u.id);
+
+      return { agentIds, userIds };
     },
 
     findMentionedProjectIds: async (issueId: string) => {
