@@ -24,10 +24,13 @@ import { queryKeys } from "../lib/queryKeys";
 import { useInboxBadge } from "../hooks/useInboxBadge";
 import { Button } from "@/components/ui/button";
 import { PluginSlotOutlet } from "@/plugins/slots";
+import { UserMenu } from "./UserMenu";
+import { useMyPermissions } from "../hooks/useMyPermissions";
 
 export function Sidebar() {
   const { openNewIssue } = useDialog();
   const { selectedCompanyId, selectedCompany } = useCompany();
+  const { can } = useMyPermissions(selectedCompanyId);
   const inboxBadge = useInboxBadge(selectedCompanyId);
   const { data: liveRuns } = useQuery({
     queryKey: queryKeys.liveRuns(selectedCompanyId!),
@@ -112,7 +115,9 @@ export function Sidebar() {
           <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
           <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
           <SidebarNavItem to="/activity" label="Activity" icon={History} />
-          <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
+          {can("users:manage_permissions") && (
+            <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
+          )}
         </SidebarSection>
 
         <PluginSlotOutlet
@@ -123,6 +128,9 @@ export function Sidebar() {
           missingBehavior="placeholder"
         />
       </nav>
+      <div className="shrink-0 border-t border-border px-3 py-2">
+        <UserMenu />
+      </div>
     </aside>
   );
 }
