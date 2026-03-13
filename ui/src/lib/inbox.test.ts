@@ -221,6 +221,7 @@ describe("inbox helpers", () => {
       joinRequests: 1,
       unreadTouchedIssues: 1,
       alerts: 1,
+      mentions: 0,
     });
   });
 
@@ -241,6 +242,7 @@ describe("inbox helpers", () => {
       joinRequests: 0,
       unreadTouchedIssues: 0,
       alerts: 0,
+      mentions: 0,
     });
   });
 

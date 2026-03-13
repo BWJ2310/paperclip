@@ -21,6 +21,16 @@ export interface IssueForRun {
   priority: string;
 }
 
+export interface MentionEntry {
+  issueId: string;
+  identifier: string | null;
+  title: string;
+  status: string;
+  priority: string;
+  mentionedAt: string;
+  commentId: string | null;
+}
+
 export const activityApi = {
   list: (companyId: string, filters?: { entityType?: string; entityId?: string; agentId?: string }) => {
     const params = new URLSearchParams();
@@ -33,4 +43,6 @@ export const activityApi = {
   forIssue: (issueId: string) => api.get<ActivityEvent[]>(`/issues/${issueId}/activity`),
   runsForIssue: (issueId: string) => api.get<RunForIssue[]>(`/issues/${issueId}/runs`),
   issuesForRun: (runId: string) => api.get<IssueForRun[]>(`/heartbeat-runs/${runId}/issues`),
+  mentions: (companyId: string, userId: string = "me") =>
+    api.get<MentionEntry[]>(`/companies/${companyId}/mentions?userId=${userId}`),
 };

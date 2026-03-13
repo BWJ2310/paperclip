@@ -1,4 +1,4 @@
-import { isValidElement, useEffect, useId, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, isValidElement, useEffect, useId, useState, type CSSProperties, type ReactNode } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { parseProjectMentionHref } from "@paperclipai/shared";
@@ -114,6 +114,27 @@ function MermaidDiagramBlock({ source, darkMode }: { source: string; darkMode: b
   );
 }
 
+function highlightMentions(children: ReactNode): ReactNode {
+  if (children == null) return children;
+  if (typeof children === "string") {
+    const parts = children.split(/(\B@\w+)/g);
+    if (parts.length <= 1) return children;
+    return parts.map((part, index) =>
+      index % 2 === 1 ? (
+        <span key={index} className="font-medium text-primary">
+          {part}
+        </span>
+      ) : (
+        part
+      ),
+    );
+  }
+  if (Array.isArray(children)) {
+    return children.map((child, index) => <Fragment key={index}>{highlightMentions(child)}</Fragment>);
+  }
+  return children;
+}
+
 export function MarkdownBody({ children, className, resolveImageSrc }: MarkdownBodyProps) {
   const { theme } = useTheme();
   const components: Components = {
@@ -144,7 +165,14 @@ export function MarkdownBody({ children, className, resolveImageSrc }: MarkdownB
         </a>
       );
     },
+    p: ({ node: _node, children: pChildren, ...pProps }) => {
+      return <p {...pProps}>{highlightMentions(pChildren)}</p>;
+    },
+    li: ({ node: _node, children: liChildren, ...liProps }) => {
+      return <li {...liProps}>{highlightMentions(liChildren)}</li>;
+    },
   };
+
   if (resolveImageSrc) {
     components.img = ({ node: _node, src, alt, ...imgProps }) => {
       const resolved = src ? resolveImageSrc(src) : null;
@@ -155,7 +183,7 @@ export function MarkdownBody({ children, className, resolveImageSrc }: MarkdownB
   return (
     <div
       className={cn(
-        "paperclip-markdown prose prose-sm max-w-none break-words overflow-hidden",
+        "paperclip-markdown prose prose-sm max-w-none break-words overflow-hidden prose-pre:whitespace-pre-wrap prose-pre:break-words prose-code:break-all",
         theme === "dark" && "prose-invert",
         className,
       )}
