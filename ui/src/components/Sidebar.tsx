@@ -15,14 +15,15 @@ import { SidebarSection } from "./SidebarSection";
 import { SidebarNavItem } from "./SidebarNavItem";
 import { SidebarProjects } from "./SidebarProjects";
 import { SidebarAgents } from "./SidebarAgents";
+import { SidebarPlugins } from "./SidebarPlugins";
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
 import { heartbeatsApi } from "../api/heartbeats";
 import { queryKeys } from "../lib/queryKeys";
 import { useInboxBadge } from "../hooks/useInboxBadge";
 import { Button } from "@/components/ui/button";
-import { PluginSlotOutlet } from "@/plugins/slots";
 import { PluginLauncherOutlet } from "@/plugins/launchers";
+import { PluginSlotOutlet } from "@/plugins/slots";
 
 export function Sidebar() {
   const { openNewIssue } = useDialog();
@@ -93,30 +94,7 @@ export function Sidebar() {
 
         <SidebarAgents />
 
-        <SidebarSection label="Company">
-          <SidebarNavItem to="/org" label="Org" icon={Network} />
-          <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
-          <SidebarNavItem to="/activity" label="Activity" icon={History} />
-          <SidebarNavItem to="/company/settings" label="Company Settings" icon={Settings} />
-        </SidebarSection>
-
-        {/* Plugin sidebar nav entries — lightweight links/indicators among the nav sections */}
-        <PluginLauncherOutlet
-          placementZones={["sidebar"]}
-          context={{
-            companyId: selectedCompanyId,
-            companyPrefix: selectedCompany?.issuePrefix ?? null,
-          }}
-          className="flex flex-col gap-0.5"
-        />
-        <PluginSlotOutlet
-          slotTypes={["sidebar"]}
-          context={{
-            companyId: selectedCompanyId,
-            companyPrefix: selectedCompany?.issuePrefix ?? null,
-          }}
-          className="flex flex-col gap-0.5"
-        />
+        <SidebarPlugins />
 
         {/* Plugin sidebar panels — richer inline content (widgets, summaries, action panels) */}
         <div className="space-y-2">
@@ -137,6 +115,13 @@ export function Sidebar() {
             className="space-y-2"
           />
         </div>
+
+        <SidebarSection label="Company">
+          <SidebarNavItem to="/org" label="Org" icon={Network} />
+          <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
+          <SidebarNavItem to="/activity" label="Activity" icon={History} />
+          <SidebarNavItem to="/company/settings" label="Company Settings" icon={Settings} />
+        </SidebarSection>
       </nav>
     </aside>
   );

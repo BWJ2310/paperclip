@@ -1,13 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, Navigate, useLocation, useParams } from "@/lib/router";
+import { Navigate, useLocation, useParams } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { pluginsApi } from "@/api/plugins";
 import { queryKeys } from "@/lib/queryKeys";
 import { PluginSlotMount, ensurePluginContributionLoaded } from "@/plugins/slots";
-import { Button } from "@/components/ui/button";
-import { ArrowLeft } from "lucide-react";
 
 /**
  * Company-context plugin page. Renders a plugin's `page` slot at
@@ -151,21 +149,11 @@ export function PluginPage() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <Button variant="ghost" size="sm" asChild>
-          <Link to={companyPrefix ? `/${companyPrefix}/dashboard` : "/dashboard"}>
-            <ArrowLeft className="h-4 w-4 mr-1" />
-            Back
-          </Link>
-        </Button>
-      </div>
-      <PluginSlotMount
-        slot={pageSlot}
-        context={context}
-        className="min-h-[200px]"
-        missingBehavior="placeholder"
-      />
-    </div>
+    <PluginSlotMount
+      slot={pageSlot}
+      context={context}
+      className="min-h-[200px]"
+      missingBehavior="placeholder"
+    />
   );
 }
