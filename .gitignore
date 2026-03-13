@@ -42,3 +42,14 @@ tmp/
 tests/e2e/test-results/
 tests/e2e/playwright-report/
 .automaker/
+
+# Ignore plugin packages by default; keep core plugin workspaces tracked.
+packages/plugins/*
+!packages/plugins/create-paperclip-plugin/
+!packages/plugins/create-paperclip-plugin/**
+!packages/plugins/examples/
+!packages/plugins/examples/**
+!packages/plugins/sdk/
+!packages/plugins/sdk/**
+packages/plugins/**/dist/
+packages/plugins/**/node_modules/
