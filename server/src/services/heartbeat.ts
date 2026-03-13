@@ -10,6 +10,7 @@ import {
   agentRuntimeState,
   agentTaskSessions,
   agentWakeupRequests,
+  authUsers,
   heartbeatRunEvents,
   heartbeatRuns,
   issues,
@@ -1886,6 +1887,8 @@ export function heartbeatService(db: Db) {
             assigneeAgentId: issues.assigneeAgentId,
             assigneeAdapterOverrides: issues.assigneeAdapterOverrides,
             executionWorkspaceSettings: issues.executionWorkspaceSettings,
+            assigneeUserId: issues.assigneeUserId,
+            createdByUserId: issues.createdByUserId,
           })
           .from(issues)
           .where(and(eq(issues.id, issueId), eq(issues.companyId, agent.companyId)))
@@ -1965,6 +1968,29 @@ export function heartbeatService(db: Db) {
           executionWorkspacePreference: issueContext.executionWorkspacePreference,
         }
       : null;
+
+    // Enrich context with user information for assignee and creator.
+    if (issueContext) {
+      const userIdsToResolve = [issueContext.assigneeUserId, issueContext.createdByUserId]
+        .filter((id): id is string => typeof id === "string" && id.length > 0);
+      if (userIdsToResolve.length > 0) {
+        const uniqueIds = [...new Set(userIdsToResolve)];
+        const resolvedUsers = await db
+          .select({ id: authUsers.id, name: authUsers.name, email: authUsers.email })
+          .from(authUsers)
+          .where(inArray(authUsers.id, uniqueIds));
+        const userMap = new Map(resolvedUsers.map((u) => [u.id, u]));
+        if (issueContext.assigneeUserId) {
+          const u = userMap.get(issueContext.assigneeUserId);
+          if (u) context.assigneeUser = { id: u.id, name: u.name, email: u.email };
+        }
+        if (issueContext.createdByUserId) {
+          const u = userMap.get(issueContext.createdByUserId);
+          if (u) context.createdByUser = { id: u.id, name: u.name };
+        }
+      }
+    }
+
     const existingExecutionWorkspace =
       issueRef?.executionWorkspaceId ? await executionWorkspacesSvc.getById(issueRef.executionWorkspaceId) : null;
     const workspaceOperationRecorder = workspaceOperationsSvc.createRecorder({
