@@ -1,4 +1,4 @@
-CREATE TABLE "instance_settings" (
+CREATE TABLE IF NOT EXISTS "instance_settings" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"singleton_key" text DEFAULT 'default' NOT NULL,
 	"experimental" jsonb DEFAULT '{}'::jsonb NOT NULL,

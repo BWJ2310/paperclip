@@ -1,4 +1,4 @@
-CREATE TABLE "activity_log" (
+CREATE TABLE IF NOT EXISTS "activity_log" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"actor_type" text DEFAULT 'system' NOT NULL,
@@ -11,7 +11,7 @@ CREATE TABLE "activity_log" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "agent_api_keys" (
+CREATE TABLE IF NOT EXISTS "agent_api_keys" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"agent_id" uuid NOT NULL,
 	"company_id" uuid NOT NULL,
@@ -22,7 +22,7 @@ CREATE TABLE "agent_api_keys" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "agents" (
+CREATE TABLE IF NOT EXISTS "agents" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"name" text NOT NULL,
@@ -42,7 +42,7 @@ CREATE TABLE "agents" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "approvals" (
+CREATE TABLE IF NOT EXISTS "approvals" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"type" text NOT NULL,
@@ -57,7 +57,7 @@ CREATE TABLE "approvals" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "companies" (
+CREATE TABLE IF NOT EXISTS "companies" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"name" text NOT NULL,
 	"description" text,
@@ -68,7 +68,7 @@ CREATE TABLE "companies" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "cost_events" (
+CREATE TABLE IF NOT EXISTS "cost_events" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"agent_id" uuid NOT NULL,
@@ -85,7 +85,7 @@ CREATE TABLE "cost_events" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "goals" (
+CREATE TABLE IF NOT EXISTS "goals" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"title" text NOT NULL,
@@ -98,7 +98,7 @@ CREATE TABLE "goals" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "heartbeat_runs" (
+CREATE TABLE IF NOT EXISTS "heartbeat_runs" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"agent_id" uuid NOT NULL,
@@ -113,7 +113,7 @@ CREATE TABLE "heartbeat_runs" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "issue_comments" (
+CREATE TABLE IF NOT EXISTS "issue_comments" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"issue_id" uuid NOT NULL,
@@ -124,7 +124,7 @@ CREATE TABLE "issue_comments" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "issues" (
+CREATE TABLE IF NOT EXISTS "issues" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"project_id" uuid,
@@ -146,7 +146,7 @@ CREATE TABLE "issues" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "projects" (
+CREATE TABLE IF NOT EXISTS "projects" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"goal_id" uuid,

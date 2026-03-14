@@ -1,4 +1,4 @@
-CREATE TABLE "workspace_runtime_services" (
+CREATE TABLE IF NOT EXISTS "workspace_runtime_services" (
 	"id" uuid PRIMARY KEY NOT NULL,
 	"company_id" uuid NOT NULL,
 	"project_id" uuid,

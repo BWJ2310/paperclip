@@ -1,4 +1,4 @@
-CREATE TABLE "assets" (
+CREATE TABLE IF NOT EXISTS "assets" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"provider" text NOT NULL,
@@ -13,7 +13,7 @@ CREATE TABLE "assets" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "issue_attachments" (
+CREATE TABLE IF NOT EXISTS "issue_attachments" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"issue_id" uuid NOT NULL,

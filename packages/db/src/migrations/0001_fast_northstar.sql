@@ -1,4 +1,4 @@
-CREATE TABLE "agent_runtime_state" (
+CREATE TABLE IF NOT EXISTS "agent_runtime_state" (
 	"agent_id" uuid PRIMARY KEY NOT NULL,
 	"company_id" uuid NOT NULL,
 	"adapter_type" text NOT NULL,
@@ -15,7 +15,7 @@ CREATE TABLE "agent_runtime_state" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "agent_wakeup_requests" (
+CREATE TABLE IF NOT EXISTS "agent_wakeup_requests" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"agent_id" uuid NOT NULL,
@@ -37,7 +37,7 @@ CREATE TABLE "agent_wakeup_requests" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "heartbeat_run_events" (
+CREATE TABLE IF NOT EXISTS "heartbeat_run_events" (
 	"id" bigserial PRIMARY KEY NOT NULL,
 	"company_id" uuid NOT NULL,
 	"run_id" uuid NOT NULL,

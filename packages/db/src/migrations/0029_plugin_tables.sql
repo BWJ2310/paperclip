@@ -31,7 +31,7 @@
 --   DROP TABLE IF EXISTS "plugin_config";
 --   DROP TABLE IF EXISTS "plugins";
 
-CREATE TABLE "plugins" (
+CREATE TABLE IF NOT EXISTS "plugins" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"plugin_key" text NOT NULL,
 	"package_name" text NOT NULL,
@@ -47,7 +47,7 @@ CREATE TABLE "plugins" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "plugin_config" (
+CREATE TABLE IF NOT EXISTS "plugin_config" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"plugin_id" uuid NOT NULL,
 	"config_json" jsonb DEFAULT '{}'::jsonb NOT NULL,
@@ -56,7 +56,7 @@ CREATE TABLE "plugin_config" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "plugin_state" (
+CREATE TABLE IF NOT EXISTS "plugin_state" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"plugin_id" uuid NOT NULL,
 	"scope_kind" text NOT NULL,
@@ -68,7 +68,7 @@ CREATE TABLE "plugin_state" (
 	CONSTRAINT "plugin_state_unique_entry_idx" UNIQUE NULLS NOT DISTINCT("plugin_id","scope_kind","scope_id","namespace","state_key")
 );
 --> statement-breakpoint
-CREATE TABLE "plugin_entities" (
+CREATE TABLE IF NOT EXISTS "plugin_entities" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"plugin_id" uuid NOT NULL,
 	"entity_type" text NOT NULL,
@@ -82,7 +82,7 @@ CREATE TABLE "plugin_entities" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "plugin_jobs" (
+CREATE TABLE IF NOT EXISTS "plugin_jobs" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"plugin_id" uuid NOT NULL,
 	"job_key" text NOT NULL,
@@ -94,7 +94,7 @@ CREATE TABLE "plugin_jobs" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "plugin_job_runs" (
+CREATE TABLE IF NOT EXISTS "plugin_job_runs" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"job_id" uuid NOT NULL,
 	"plugin_id" uuid NOT NULL,
@@ -108,7 +108,7 @@ CREATE TABLE "plugin_job_runs" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "plugin_webhook_deliveries" (
+CREATE TABLE IF NOT EXISTS "plugin_webhook_deliveries" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"plugin_id" uuid NOT NULL,
 	"webhook_key" text NOT NULL,
@@ -123,7 +123,7 @@ CREATE TABLE "plugin_webhook_deliveries" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "plugin_company_settings" (
+CREATE TABLE IF NOT EXISTS "plugin_company_settings" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"plugin_id" uuid NOT NULL,
@@ -134,7 +134,7 @@ CREATE TABLE "plugin_company_settings" (
 	"enabled" boolean DEFAULT true NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "plugin_logs" (
+CREATE TABLE IF NOT EXISTS "plugin_logs" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"plugin_id" uuid NOT NULL,
 	"level" text NOT NULL DEFAULT 'info',

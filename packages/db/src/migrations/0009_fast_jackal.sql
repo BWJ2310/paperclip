@@ -1,4 +1,4 @@
-CREATE TABLE "company_secret_versions" (
+CREATE TABLE IF NOT EXISTS "company_secret_versions" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"secret_id" uuid NOT NULL,
 	"version" integer NOT NULL,
@@ -10,7 +10,7 @@ CREATE TABLE "company_secret_versions" (
 	"revoked_at" timestamp with time zone
 );
 --> statement-breakpoint
-CREATE TABLE "company_secrets" (
+CREATE TABLE IF NOT EXISTS "company_secrets" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"name" text NOT NULL,

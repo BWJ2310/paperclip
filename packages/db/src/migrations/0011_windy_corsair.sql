@@ -1,4 +1,4 @@
-CREATE TABLE "project_goals" (
+CREATE TABLE IF NOT EXISTS "project_goals" (
 	"project_id" uuid NOT NULL,
 	"goal_id" uuid NOT NULL,
 	"company_id" uuid NOT NULL,

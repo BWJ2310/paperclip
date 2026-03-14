@@ -1,4 +1,4 @@
-CREATE TABLE "budget_incidents" (
+CREATE TABLE IF NOT EXISTS "budget_incidents" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"policy_id" uuid NOT NULL,
@@ -18,7 +18,7 @@ CREATE TABLE "budget_incidents" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "budget_policies" (
+CREATE TABLE IF NOT EXISTS "budget_policies" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"scope_type" text NOT NULL,

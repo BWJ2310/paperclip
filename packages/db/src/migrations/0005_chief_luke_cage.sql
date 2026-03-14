@@ -1,4 +1,4 @@
-CREATE TABLE "approval_comments" (
+CREATE TABLE IF NOT EXISTS "approval_comments" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"approval_id" uuid NOT NULL,

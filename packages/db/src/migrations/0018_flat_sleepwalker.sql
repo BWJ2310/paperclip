@@ -1,4 +1,4 @@
-CREATE TABLE "issue_labels" (
+CREATE TABLE IF NOT EXISTS "issue_labels" (
 	"issue_id" uuid NOT NULL,
 	"label_id" uuid NOT NULL,
 	"company_id" uuid NOT NULL,
@@ -6,7 +6,7 @@ CREATE TABLE "issue_labels" (
 	CONSTRAINT "issue_labels_pk" PRIMARY KEY("issue_id","label_id")
 );
 --> statement-breakpoint
-CREATE TABLE "labels" (
+CREATE TABLE IF NOT EXISTS "labels" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"name" text NOT NULL,

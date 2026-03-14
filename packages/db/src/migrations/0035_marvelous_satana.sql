@@ -1,4 +1,4 @@
-CREATE TABLE "execution_workspaces" (
+CREATE TABLE IF NOT EXISTS "execution_workspaces" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"project_id" uuid NOT NULL,
@@ -25,7 +25,7 @@ CREATE TABLE "execution_workspaces" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "issue_work_products" (
+CREATE TABLE IF NOT EXISTS "issue_work_products" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"project_id" uuid,

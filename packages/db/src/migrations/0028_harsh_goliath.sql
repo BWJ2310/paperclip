@@ -1,4 +1,4 @@
-CREATE TABLE "document_revisions" (
+CREATE TABLE IF NOT EXISTS "document_revisions" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"document_id" uuid NOT NULL,
@@ -10,7 +10,7 @@ CREATE TABLE "document_revisions" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "documents" (
+CREATE TABLE IF NOT EXISTS "documents" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"title" text,
@@ -26,7 +26,7 @@ CREATE TABLE "documents" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "issue_documents" (
+CREATE TABLE IF NOT EXISTS "issue_documents" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"issue_id" uuid NOT NULL,

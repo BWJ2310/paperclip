@@ -1,4 +1,4 @@
-CREATE TABLE "agent_task_sessions" (
+CREATE TABLE IF NOT EXISTS "agent_task_sessions" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"agent_id" uuid NOT NULL,

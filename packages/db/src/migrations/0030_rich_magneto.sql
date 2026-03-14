@@ -1,4 +1,4 @@
-CREATE TABLE "company_logos" (
+CREATE TABLE IF NOT EXISTS "company_logos" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"asset_id" uuid NOT NULL,

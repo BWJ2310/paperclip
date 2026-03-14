@@ -12,6 +12,7 @@ interface CompanyPatternIconProps {
   companyName: string;
   logoUrl?: string | null;
   brandColor?: string | null;
+  imageUrl?: string | null;
   className?: string;
 }
 
@@ -160,21 +161,17 @@ function makeCompanyPatternDataUrl(seed: string, brandColor?: string | null, log
   return canvas.toDataURL("image/png");
 }
 
-export function CompanyPatternIcon({
-  companyName,
-  logoUrl,
-  brandColor,
-  className,
-}: CompanyPatternIconProps) {
+export function CompanyPatternIcon({ companyName, logoUrl, brandColor, imageUrl, className }: CompanyPatternIconProps) {
   const initial = companyName.trim().charAt(0).toUpperCase() || "?";
   const [imageError, setImageError] = useState(false);
-  const logo = !imageError && typeof logoUrl === "string" && logoUrl.trim().length > 0 ? logoUrl : null;
+  const displayUrl = imageUrl ?? logoUrl ?? null;
   useEffect(() => {
     setImageError(false);
-  }, [logoUrl]);
+  }, [displayUrl]);
+  const logo = !imageError && typeof displayUrl === "string" && displayUrl.trim().length > 0 ? displayUrl : null;
   const patternDataUrl = useMemo(
-    () => makeCompanyPatternDataUrl(companyName.trim().toLowerCase(), brandColor),
-    [companyName, brandColor],
+    () => (logo ? "" : makeCompanyPatternDataUrl(companyName.trim().toLowerCase(), brandColor)),
+    [companyName, brandColor, logo],
   );
 
   return (
@@ -187,7 +184,7 @@ export function CompanyPatternIcon({
       {logo ? (
         <img
           src={logo}
-          alt={`${companyName} logo`}
+          alt={companyName}
           onError={() => setImageError(true)}
           className="absolute inset-0 h-full w-full object-cover"
         />

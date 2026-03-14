@@ -1,4 +1,4 @@
-CREATE TABLE "agent_config_revisions" (
+CREATE TABLE IF NOT EXISTS "agent_config_revisions" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"agent_id" uuid NOT NULL,
@@ -12,7 +12,7 @@ CREATE TABLE "agent_config_revisions" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "issue_approvals" (
+CREATE TABLE IF NOT EXISTS "issue_approvals" (
 	"company_id" uuid NOT NULL,
 	"issue_id" uuid NOT NULL,
 	"approval_id" uuid NOT NULL,

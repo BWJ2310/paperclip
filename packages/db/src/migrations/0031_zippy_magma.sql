@@ -1,4 +1,4 @@
-CREATE TABLE "finance_events" (
+CREATE TABLE IF NOT EXISTS "finance_events" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"agent_id" uuid,
