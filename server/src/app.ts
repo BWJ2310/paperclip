@@ -272,8 +272,12 @@ export async function createApp(
     const uiRoot = path.resolve(__dirname, "../../ui");
     const hmrPort = resolveViteHmrPort(opts.serverPort);
     const { createServer: createViteServer } = await import("vite");
+    // Detect TLS-terminating reverse proxy: must be private hostname gate
+    // with a real domain name (not an IP or localhost). LAN users accessing
+    // via IP (e.g., 192.168.1.50:3100) keep the default HMR behavior.
+    const isDomain = (h: string) => /^[a-z].*\.[a-z]/i.test(h);
     const proxyHostname = privateHostnameGateEnabled
-      ? Array.from(privateHostnameAllowSet).find(h => h !== "localhost" && h !== "127.0.0.1")
+      ? Array.from(privateHostnameAllowSet).find(h => isDomain(h))
       : null;
     const hmrConfig = proxyHostname
       ? { host: proxyHostname, port: hmrPort, clientPort: 443, protocol: "wss" as const }
