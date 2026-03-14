@@ -78,6 +78,7 @@ export async function createApp(
     emailService?: EmailService;
     betterAuthHandler?: express.RequestHandler;
     resolveSession?: (req: ExpressRequest) => Promise<BetterAuthSessionResult | null>;
+    httpServer?: import("node:http").Server;
   },
 ) {
   const app = express();
@@ -279,8 +280,8 @@ export async function createApp(
     const proxyHostname = privateHostnameGateEnabled
       ? Array.from(privateHostnameAllowSet).find(h => isDomain(h))
       : null;
-    const hmrConfig = proxyHostname
-      ? { host: proxyHostname, port: hmrPort, clientPort: 443, protocol: "wss" as const }
+    const hmrConfig = proxyHostname && opts.httpServer
+      ? { server: opts.httpServer, clientPort: 443, protocol: "wss" as const }
       : { host: opts.bindHost, port: hmrPort, clientPort: hmrPort };
     const vite = await createViteServer({
       root: uiRoot,
