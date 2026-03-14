@@ -24,7 +24,6 @@ import { queryKeys } from "../lib/queryKeys";
 import { useInboxBadge } from "../hooks/useInboxBadge";
 import { Button } from "@/components/ui/button";
 import { PluginSlotOutlet } from "@/plugins/slots";
-import { UserMenu } from "./UserMenu";
 import { useMyPermissions } from "../hooks/useMyPermissions";
 
 export function Sidebar() {
@@ -128,9 +127,6 @@ export function Sidebar() {
           missingBehavior="placeholder"
         />
       </nav>
-      <div className="shrink-0 border-t border-border px-3 py-2">
-        <UserMenu />
-      </div>
     </aside>
   );
 }
