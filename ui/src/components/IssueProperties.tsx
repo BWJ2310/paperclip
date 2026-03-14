@@ -495,6 +495,21 @@ export function IssueProperties({ issue, onUpdate, inline }: IssuePropertiesProp
         >
           No assignee
         </button>
+        {currentUserId && (
+          <button
+            className={cn(
+              "flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50",
+              issue.assigneeUserId === currentUserId && !issue.assigneeAgentId && "bg-accent",
+            )}
+            onClick={() => {
+              onUpdate({ assigneeAgentId: null, assigneeUserId: currentUserId });
+              setAssigneeOpen(false);
+            }}
+          >
+            <User className="h-3 w-3 shrink-0 text-muted-foreground" />
+            Assign to me
+          </button>
+        )}
         {filteredPeople.length > 0 && (
           <>
             <div className="px-2 py-1 text-xs text-muted-foreground uppercase tracking-wide">Team Members</div>

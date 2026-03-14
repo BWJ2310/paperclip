@@ -1,9 +1,10 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AdapterEnvironmentTestResult } from "@paperclipai/shared";
-import { useLocation, useNavigate, useParams } from "@/lib/router";
+import { useNavigate } from "@/lib/router";
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
+import { api } from "../api/client";
 import { companiesApi } from "../api/companies";
 import { goalsApi } from "../api/goals";
 import { agentsApi } from "../api/agents";
@@ -17,20 +18,15 @@ import {
 } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { cn } from "../lib/utils";
-import {
-  extractModelName,
-  extractProviderIdWithFallback
-} from "../lib/model-utils";
+import { extractModelName, extractProviderIdWithFallback } from "../lib/model-utils";
 import { getUIAdapter } from "../adapters";
 import { defaultCreateValues } from "./agent-config-defaults";
-import { parseOnboardingGoalInput } from "../lib/onboarding-goal";
 import {
   DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
   DEFAULT_CODEX_LOCAL_MODEL
 } from "@paperclipai/adapter-codex-local";
 import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
 import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
-import { resolveRouteOnboardingOptions } from "../lib/onboarding-route";
 import { AsciiArtAnimation } from "./AsciiArtAnimation";
 import { OpenCodeLogoIcon } from "./OpenCodeLogoIcon";
 import {
@@ -49,11 +45,10 @@ import {
   Loader2,
   ChevronDown,
   X,
-  Users,
   Mail
 } from "lucide-react";
 
-type Step = 1 | 2 | 3 | 4 | 5;
+type Step = 1 | 2 | 3 | 4;
 type AdapterType =
   | "claude_local"
   | "codex_local"
@@ -64,37 +59,19 @@ type AdapterType =
   | "http"
   | "openclaw_gateway";
 
-const DEFAULT_TASK_DESCRIPTION = `You are the CEO. You set the direction for the company.
+const DEFAULT_TASK_DESCRIPTION = `Setup yourself as the CEO. Use the ceo persona found here: [https://github.com/paperclipai/companies/blob/main/default/ceo/AGENTS.md](https://github.com/paperclipai/companies/blob/main/default/ceo/AGENTS.md)
 
-- hire a founding engineer
-- write a hiring plan
-- break the roadmap into concrete tasks and start delegating work`;
+Ensure you have a folder agents/ceo and then download this AGENTS.md as well as the sibling HEARTBEAT.md, SOUL.md, and TOOLS.md. and set that AGENTS.md as the path to your agents instruction file
+
+And after you've finished that, hire yourself a Founding Engineer agent`;
 
 export function OnboardingWizard() {
   const { onboardingOpen, onboardingOptions, closeOnboarding } = useDialog();
-  const { companies, setSelectedCompanyId, loading: companiesLoading } = useCompany();
+  const { companies, setSelectedCompanyId } = useCompany();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const location = useLocation();
-  const { companyPrefix } = useParams<{ companyPrefix?: string }>();
-  const [routeDismissed, setRouteDismissed] = useState(false);
-
-  const routeOnboardingOptions =
-    companyPrefix && companiesLoading
-      ? null
-      : resolveRouteOnboardingOptions({
-          pathname: location.pathname,
-          companyPrefix,
-          companies,
-        });
-  const effectiveOnboardingOpen =
-    onboardingOpen || (routeOnboardingOptions !== null && !routeDismissed);
-  const effectiveOnboardingOptions = onboardingOpen
-    ? onboardingOptions
-    : routeOnboardingOptions ?? {};
-
-  const initialStep = effectiveOnboardingOptions.initialStep ?? 1;
-  const existingCompanyId = effectiveOnboardingOptions.companyId;
+  const initialStep = onboardingOptions.initialStep ?? 1;
+  const existingCompanyId = onboardingOptions.companyId;
 
   const [step, setStep] = useState<Step>(initialStep);
   const [loading, setLoading] = useState(false);
@@ -120,18 +97,17 @@ export function OnboardingWizard() {
   const [forceUnsetAnthropicApiKey, setForceUnsetAnthropicApiKey] =
     useState(false);
   const [unsetAnthropicLoading, setUnsetAnthropicLoading] = useState(false);
-  const [showMoreAdapters, setShowMoreAdapters] = useState(false);
 
   // Step 3
   const [taskTitle, setTaskTitle] = useState(
-    "Hire your first engineer and create a hiring plan"
+    "Create your CEO HEARTBEAT.md"
   );
   const [taskDescription, setTaskDescription] = useState(
     DEFAULT_TASK_DESCRIPTION
   );
 
-  // Step 5 — Team & Email (optional)
-  const [teamModeEnabled, setTeamModeEnabled] = useState(false);
+  // Step 4 — Email (optional)
+  const [emailEnabled, setEmailEnabled] = useState(false);
   const [resendApiKey, setResendApiKey] = useState("");
   const [resendFromAddress, setResendFromAddress] = useState("");
 
@@ -154,31 +130,27 @@ export function OnboardingWizard() {
   const [createdAgentId, setCreatedAgentId] = useState<string | null>(null);
   const [createdIssueRef, setCreatedIssueRef] = useState<string | null>(null);
 
-  useEffect(() => {
-    setRouteDismissed(false);
-  }, [location.pathname]);
-
   // Sync step and company when onboarding opens with options.
   // Keep this independent from company-list refreshes so Step 1 completion
   // doesn't get reset after creating a company.
   useEffect(() => {
-    if (!effectiveOnboardingOpen) return;
-    const cId = effectiveOnboardingOptions.companyId ?? null;
-    setStep(effectiveOnboardingOptions.initialStep ?? 1);
+    if (!onboardingOpen) return;
+    const cId = onboardingOptions.companyId ?? null;
+    setStep(onboardingOptions.initialStep ?? 1);
     setCreatedCompanyId(cId);
     setCreatedCompanyPrefix(null);
   }, [
-    effectiveOnboardingOpen,
-    effectiveOnboardingOptions.companyId,
-    effectiveOnboardingOptions.initialStep
+    onboardingOpen,
+    onboardingOptions.companyId,
+    onboardingOptions.initialStep
   ]);
 
   // Backfill issue prefix for an existing company once companies are loaded.
   useEffect(() => {
-    if (!effectiveOnboardingOpen || !createdCompanyId || createdCompanyPrefix) return;
+    if (!onboardingOpen || !createdCompanyId || createdCompanyPrefix) return;
     const company = companies.find((c) => c.id === createdCompanyId);
     if (company) setCreatedCompanyPrefix(company.issuePrefix);
-  }, [effectiveOnboardingOpen, createdCompanyId, createdCompanyPrefix, companies]);
+  }, [onboardingOpen, createdCompanyId, createdCompanyPrefix, companies]);
 
   // Resize textarea when step 3 is shown or description changes
   useEffect(() => {
@@ -189,13 +161,14 @@ export function OnboardingWizard() {
     data: adapterModels,
     error: adapterModelsError,
     isLoading: adapterModelsLoading,
-    isFetching: adapterModelsFetching
+    isFetching: adapterModelsFetching,
   } = useQuery({
-    queryKey: createdCompanyId
-      ? queryKeys.agents.adapterModels(createdCompanyId, adapterType)
-      : ["agents", "none", "adapter-models", adapterType],
+    queryKey:
+      createdCompanyId
+        ? queryKeys.agents.adapterModels(createdCompanyId, adapterType)
+        : ["agents", "none", "adapter-models", adapterType],
     queryFn: () => agentsApi.adapterModels(createdCompanyId!, adapterType),
-    enabled: Boolean(createdCompanyId) && effectiveOnboardingOpen && step === 2
+    enabled: Boolean(createdCompanyId) && onboardingOpen && step === 2
   });
   const isLocalAdapter =
     adapterType === "claude_local" ||
@@ -210,10 +183,10 @@ export function OnboardingWizard() {
       : adapterType === "gemini_local"
         ? "gemini"
       : adapterType === "cursor"
-      ? "agent"
-      : adapterType === "opencode_local"
-      ? "opencode"
-      : "claude");
+        ? "agent"
+        : adapterType === "opencode_local"
+          ? "opencode"
+          : "claude");
 
   useEffect(() => {
     if (step !== 2) return;
@@ -248,8 +221,8 @@ export function OnboardingWizard() {
       return [
         {
           provider: "models",
-          entries: [...filteredModels].sort((a, b) => a.id.localeCompare(b.id))
-        }
+          entries: [...filteredModels].sort((a, b) => a.id.localeCompare(b.id)),
+        },
       ];
     }
     const groups = new Map<string, Array<{ id: string; label: string }>>();
@@ -263,7 +236,7 @@ export function OnboardingWizard() {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([provider, entries]) => ({
         provider,
-        entries: [...entries].sort((a, b) => a.id.localeCompare(b.id))
+        entries: [...entries].sort((a, b) => a.id.localeCompare(b.id)),
       }));
   }, [filteredModels, adapterType]);
 
@@ -284,12 +257,15 @@ export function OnboardingWizard() {
     setAdapterEnvLoading(false);
     setForceUnsetAnthropicApiKey(false);
     setUnsetAnthropicLoading(false);
-    setTaskTitle("Hire your first engineer and create a hiring plan");
+    setTaskTitle("Create your CEO HEARTBEAT.md");
     setTaskDescription(DEFAULT_TASK_DESCRIPTION);
     setCreatedCompanyId(null);
     setCreatedCompanyPrefix(null);
     setCreatedAgentId(null);
     setCreatedIssueRef(null);
+    setEmailEnabled(false);
+    setResendApiKey("");
+    setResendFromAddress("");
   }
 
   function handleClose() {
@@ -308,7 +284,7 @@ export function OnboardingWizard() {
           : adapterType === "gemini_local"
             ? model || DEFAULT_GEMINI_LOCAL_MODEL
           : adapterType === "cursor"
-          ? model || DEFAULT_CURSOR_LOCAL_MODEL
+            ? model || DEFAULT_CURSOR_LOCAL_MODEL
           : model,
       command,
       args,
@@ -374,12 +350,8 @@ export function OnboardingWizard() {
       queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
 
       if (companyGoal.trim()) {
-        const parsedGoal = parseOnboardingGoalInput(companyGoal);
         await goalsApi.create(company.id, {
-          title: parsedGoal.title,
-          ...(parsedGoal.description
-            ? { description: parsedGoal.description }
-            : {}),
+          title: companyGoal.trim(),
           level: "company",
           status: "active"
         });
@@ -404,23 +376,19 @@ export function OnboardingWizard() {
       if (adapterType === "opencode_local") {
         const selectedModelId = model.trim();
         if (!selectedModelId) {
-          setError(
-            "OpenCode requires an explicit model in provider/model format."
-          );
+          setError("OpenCode requires an explicit model in provider/model format.");
           return;
         }
         if (adapterModelsError) {
           setError(
             adapterModelsError instanceof Error
               ? adapterModelsError.message
-              : "Failed to load OpenCode models."
+              : "Failed to load OpenCode models.",
           );
           return;
         }
         if (adapterModelsLoading || adapterModelsFetching) {
-          setError(
-            "OpenCode models are still loading. Please wait and try again."
-          );
+          setError("OpenCode models are still loading. Please wait and try again.");
           return;
         }
         const discoveredModels = adapterModels ?? [];
@@ -428,7 +396,7 @@ export function OnboardingWizard() {
           setError(
             discoveredModels.length === 0
               ? "No OpenCode models discovered. Run `opencode models` and authenticate providers."
-              : `Configured OpenCode model is unavailable: ${selectedModelId}`
+              : `Configured OpenCode model is unavailable: ${selectedModelId}`,
           );
           return;
         }
@@ -517,40 +485,22 @@ export function OnboardingWizard() {
 
   async function handleStep3Next() {
     if (!createdCompanyId || !createdAgentId) return;
-    setError(null);
-    setStep(4);
-  }
-
-  async function handleLaunch() {
-    if (!createdCompanyId || !createdAgentId) return;
     setLoading(true);
     setError(null);
     try {
-      let issueRef = createdIssueRef;
-      if (!issueRef) {
-        const issue = await issuesApi.create(createdCompanyId, {
-          title: taskTitle.trim(),
-          ...(taskDescription.trim()
-            ? { description: taskDescription.trim() }
-            : {}),
-          assigneeAgentId: createdAgentId,
-          status: "todo"
-        });
-        issueRef = issue.identifier ?? issue.id;
-        setCreatedIssueRef(issueRef);
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.issues.list(createdCompanyId)
-        });
-      }
-
-      setSelectedCompanyId(createdCompanyId);
-      reset();
-      closeOnboarding();
-      navigate(
-        createdCompanyPrefix
-          ? `/${createdCompanyPrefix}/issues/${issueRef}`
-          : `/issues/${issueRef}`
-      );
+      const issue = await issuesApi.create(createdCompanyId, {
+        title: taskTitle.trim(),
+        ...(taskDescription.trim()
+          ? { description: taskDescription.trim() }
+          : {}),
+        assigneeAgentId: createdAgentId,
+        status: "todo"
+      });
+      setCreatedIssueRef(issue.identifier ?? issue.id);
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.issues.list(createdCompanyId)
+      });
+      setStep(4);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create task");
     } finally {
@@ -560,7 +510,21 @@ export function OnboardingWizard() {
 
   async function handleLaunch() {
     if (!createdAgentId) return;
-    setStep(5);
+    setLoading(true);
+    setError(null);
+    if (emailEnabled && resendApiKey.trim()) {
+      try {
+        await api.patch("/admin/config/email", {
+          provider: "resend",
+          resendApiKey: resendApiKey.trim(),
+          fromAddress: resendFromAddress.trim() || undefined,
+        });
+      } catch (err) {
+        console.warn("Email config save failed (non-blocking):", err);
+      }
+    }
+    setLoading(false);
+    finishOnboarding();
   }
 
   function finishOnboarding() {
@@ -573,33 +537,6 @@ export function OnboardingWizard() {
     navigate("/dashboard");
   }
 
-  async function handleStep5Finish() {
-    if (teamModeEnabled && resendApiKey.trim()) {
-      setLoading(true);
-      setError(null);
-      try {
-        const resp = await fetch("/api/admin/config/email", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            provider: "resend",
-            resendApiKey: resendApiKey.trim(),
-            fromAddress: resendFromAddress.trim() || undefined,
-          }),
-        });
-        if (!resp.ok) {
-          const body = await resp.json().catch(() => ({}));
-          throw new Error((body as { error?: string }).error ?? "Failed to save email config");
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to save email config");
-        setLoading(false);
-        return;
-      }
-      setLoading(false);
-    }
-    finishOnboarding();
-  }
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
@@ -607,20 +544,16 @@ export function OnboardingWizard() {
       else if (step === 2 && agentName.trim()) handleStep2Next();
       else if (step === 3 && taskTitle.trim()) handleStep3Next();
       else if (step === 4) handleLaunch();
-      else if (step === 5) handleStep5Finish();
     }
   }
 
-  if (!effectiveOnboardingOpen) return null;
+  if (!onboardingOpen) return null;
 
   return (
     <Dialog
-      open={effectiveOnboardingOpen}
+      open={onboardingOpen}
       onOpenChange={(open) => {
-        if (!open) {
-          setRouteDismissed(true);
-          handleClose();
-        }
+        if (!open) handleClose();
       }}
     >
       <DialogPortal>
@@ -639,22 +572,17 @@ export function OnboardingWizard() {
           </button>
 
           {/* Left half — form */}
-          <div
-            className={cn(
-              "w-full flex flex-col overflow-y-auto transition-[width] duration-500 ease-in-out",
-              step === 1 ? "md:w-1/2" : "md:w-full"
-            )}
-          >
+          <div className="w-full md:w-1/2 flex flex-col overflow-y-auto">
             <div className="w-full max-w-md mx-auto my-auto px-8 py-12 shrink-0">
               {/* Progress indicators */}
               <div className="flex items-center gap-2 mb-8">
                 <Sparkles className="h-4 w-4 text-muted-foreground" />
                 <span className="text-sm font-medium">Get Started</span>
                 <span className="text-sm text-muted-foreground/60">
-                  Step {step} of 5
+                  Step {step} of 4
                 </span>
                 <div className="flex items-center gap-1.5 ml-auto">
-                  {[1, 2, 3, 4, 5].map((s) => (
+                  {[1, 2, 3, 4].map((s) => (
                     <div
                       key={s}
                       className={cn(
@@ -684,15 +612,8 @@ export function OnboardingWizard() {
                       </p>
                     </div>
                   </div>
-                  <div className="mt-3 group">
-                    <label
-                      className={cn(
-                        "text-xs mb-1 block transition-colors",
-                        companyName.trim()
-                          ? "text-foreground"
-                          : "text-muted-foreground group-focus-within:text-foreground"
-                      )}
-                    >
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">
                       Company name
                     </label>
                     <input
@@ -703,15 +624,8 @@ export function OnboardingWizard() {
                       autoFocus
                     />
                   </div>
-                  <div className="group">
-                    <label
-                      className={cn(
-                        "text-xs mb-1 block transition-colors",
-                        companyGoal.trim()
-                          ? "text-foreground"
-                          : "text-muted-foreground group-focus-within:text-foreground"
-                      )}
-                    >
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">
                       Mission / goal (optional)
                     </label>
                     <textarea
@@ -770,25 +684,69 @@ export function OnboardingWizard() {
                           icon: Code,
                           desc: "Local Codex agent",
                           recommended: true
+                        },
+                        {
+                          value: "gemini_local" as const,
+                          label: "Gemini CLI",
+                          icon: Gem,
+                          desc: "Local Gemini agent"
+                        },
+                        {
+                          value: "opencode_local" as const,
+                          label: "OpenCode",
+                          icon: OpenCodeLogoIcon,
+                          desc: "Local multi-provider agent"
+                        },
+                        {
+                          value: "pi_local" as const,
+                          label: "Pi",
+                          icon: Terminal,
+                          desc: "Local Pi agent"
+                        },
+                        {
+                          value: "openclaw_gateway" as const,
+                          label: "OpenClaw Gateway",
+                          icon: Bot,
+                          desc: "Invoke OpenClaw via gateway protocol",
+                          comingSoon: true,
+                          disabledLabel: "Configure OpenClaw within the App"
+                        },
+                        {
+                          value: "cursor" as const,
+                          label: "Cursor",
+                          icon: MousePointer2,
+                          desc: "Local Cursor agent"
                         }
                       ].map((opt) => (
                         <button
                           key={opt.value}
+                          disabled={!!opt.comingSoon}
                           className={cn(
                             "flex flex-col items-center gap-1.5 rounded-md border p-3 text-xs transition-colors relative",
-                            adapterType === opt.value
-                              ? "border-foreground bg-accent"
-                              : "border-border hover:bg-accent/50"
+                            opt.comingSoon
+                              ? "border-border opacity-40 cursor-not-allowed"
+                              : adapterType === opt.value
+                                ? "border-foreground bg-accent"
+                                : "border-border hover:bg-accent/50"
                           )}
                           onClick={() => {
+                            if (opt.comingSoon) return;
                             const nextType = opt.value as AdapterType;
                             setAdapterType(nextType);
                             if (nextType === "codex_local" && !model) {
                               setModel(DEFAULT_CODEX_LOCAL_MODEL);
+                            } else if (nextType === "gemini_local" && !model) {
+                              setModel(DEFAULT_GEMINI_LOCAL_MODEL);
+                            } else if (nextType === "cursor" && !model) {
+                              setModel(DEFAULT_CURSOR_LOCAL_MODEL);
                             }
-                            if (nextType !== "codex_local") {
-                              setModel("");
+                            if (nextType === "opencode_local") {
+                              if (!model.includes("/")) {
+                                setModel("");
+                              }
+                              return;
                             }
+                            setModel("");
                           }}
                         >
                           {opt.recommended && (
@@ -799,105 +757,14 @@ export function OnboardingWizard() {
                           <opt.icon className="h-4 w-4" />
                           <span className="font-medium">{opt.label}</span>
                           <span className="text-muted-foreground text-[10px]">
-                            {opt.desc}
+                            {opt.comingSoon
+                              ? (opt as { disabledLabel?: string }).disabledLabel ??
+                                "Coming soon"
+                              : opt.desc}
                           </span>
                         </button>
                       ))}
                     </div>
-
-                    <button
-                      className="flex items-center gap-1.5 mt-3 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                      onClick={() => setShowMoreAdapters((v) => !v)}
-                    >
-                      <ChevronDown
-                        className={cn(
-                          "h-3 w-3 transition-transform",
-                          showMoreAdapters ? "rotate-0" : "-rotate-90"
-                        )}
-                      />
-                      More Agent Adapter Types
-                    </button>
-
-                    {showMoreAdapters && (
-                      <div className="grid grid-cols-2 gap-2 mt-2">
-                        {[
-                          {
-                            value: "gemini_local" as const,
-                            label: "Gemini CLI",
-                            icon: Gem,
-                            desc: "Local Gemini agent"
-                          },
-                          {
-                            value: "opencode_local" as const,
-                            label: "OpenCode",
-                            icon: OpenCodeLogoIcon,
-                            desc: "Local multi-provider agent"
-                          },
-                          {
-                            value: "pi_local" as const,
-                            label: "Pi",
-                            icon: Terminal,
-                            desc: "Local Pi agent"
-                          },
-                          {
-                            value: "cursor" as const,
-                            label: "Cursor",
-                            icon: MousePointer2,
-                            desc: "Local Cursor agent"
-                          },
-                          {
-                            value: "openclaw_gateway" as const,
-                            label: "OpenClaw Gateway",
-                            icon: Bot,
-                            desc: "Invoke OpenClaw via gateway protocol",
-                            comingSoon: true,
-                            disabledLabel: "Configure OpenClaw within the App"
-                          }
-                        ].map((opt) => (
-                          <button
-                            key={opt.value}
-                            disabled={!!opt.comingSoon}
-                            className={cn(
-                              "flex flex-col items-center gap-1.5 rounded-md border p-3 text-xs transition-colors relative",
-                              opt.comingSoon
-                                ? "border-border opacity-40 cursor-not-allowed"
-                                : adapterType === opt.value
-                                ? "border-foreground bg-accent"
-                                : "border-border hover:bg-accent/50"
-                            )}
-                            onClick={() => {
-                              if (opt.comingSoon) return;
-                              const nextType = opt.value as AdapterType;
-                              setAdapterType(nextType);
-                              if (nextType === "gemini_local" && !model) {
-                                setModel(DEFAULT_GEMINI_LOCAL_MODEL);
-                                return;
-                              }
-                              if (nextType === "cursor" && !model) {
-                                setModel(DEFAULT_CURSOR_LOCAL_MODEL);
-                                return;
-                              }
-                              if (nextType === "opencode_local") {
-                                if (!model.includes("/")) {
-                                  setModel("");
-                                }
-                                return;
-                              }
-                              setModel("");
-                            }}
-                          >
-                            <opt.icon className="h-4 w-4" />
-                            <span className="font-medium">{opt.label}</span>
-                            <span className="text-muted-foreground text-[10px]">
-                              {opt.comingSoon
-                                ? (opt as { disabledLabel?: string })
-                                    .disabledLabel ?? "Coming soon"
-                                : opt.desc}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
                   </div>
 
                   {/* Conditional adapter fields */}
@@ -958,15 +825,12 @@ export function OnboardingWizard() {
                                   setModelOpen(false);
                                 }}
                               >
-                                Default
-                              </button>
+                                  Default
+                                </button>
                             )}
                             <div className="max-h-[240px] overflow-y-auto">
                               {groupedModels.map((group) => (
-                                <div
-                                  key={group.provider}
-                                  className="mb-1 last:mb-0"
-                                >
+                                <div key={group.provider} className="mb-1 last:mb-0">
                                   {adapterType === "opencode_local" && (
                                     <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
                                       {group.provider} ({group.entries.length})
@@ -984,13 +848,8 @@ export function OnboardingWizard() {
                                         setModelOpen(false);
                                       }}
                                     >
-                                      <span
-                                        className="block w-full text-left truncate"
-                                        title={m.id}
-                                      >
-                                        {adapterType === "opencode_local"
-                                          ? extractModelName(m.id)
-                                          : m.label}
+                                      <span className="block w-full text-left truncate" title={m.id}>
+                                        {adapterType === "opencode_local" ? extractModelName(m.id) : m.label}
                                       </span>
                                     </button>
                                   ))}
@@ -1037,110 +896,113 @@ export function OnboardingWizard() {
                         </div>
                       )}
 
-                      {adapterEnvResult &&
-                      adapterEnvResult.status === "pass" ? (
-                        <div className="flex items-center gap-2 rounded-md border border-green-300 dark:border-green-500/40 bg-green-50 dark:bg-green-500/10 px-3 py-2 text-xs text-green-700 dark:text-green-300 animate-in fade-in slide-in-from-bottom-1 duration-300">
-                          <Check className="h-3.5 w-3.5 shrink-0" />
-                          <span className="font-medium">Passed</span>
-                        </div>
-                      ) : adapterEnvResult ? (
+                      {adapterEnvResult && (
                         <AdapterEnvironmentResult result={adapterEnvResult} />
-                      ) : null}
+                      )}
 
                       {shouldSuggestUnsetAnthropicApiKey && (
                         <div className="rounded-md border border-amber-300/60 bg-amber-50/40 px-2.5 py-2 space-y-2">
                           <p className="text-[11px] text-amber-900/90 leading-relaxed">
-                            Claude failed while{" "}
-                            <span className="font-mono">ANTHROPIC_API_KEY</span>{" "}
-                            is set. You can clear it in this CEO adapter config
-                            and retry the probe.
+                            Claude failed while <span className="font-mono">ANTHROPIC_API_KEY</span> is set.
+                            You can clear it in this CEO adapter config and retry the probe.
                           </p>
                           <Button
                             size="sm"
                             variant="outline"
                             className="h-7 px-2.5 text-xs"
-                            disabled={
-                              adapterEnvLoading || unsetAnthropicLoading
-                            }
+                            disabled={adapterEnvLoading || unsetAnthropicLoading}
                             onClick={() => void handleUnsetAnthropicApiKey()}
                           >
-                            {unsetAnthropicLoading
-                              ? "Retrying..."
-                              : "Unset ANTHROPIC_API_KEY"}
+                            {unsetAnthropicLoading ? "Retrying..." : "Unset ANTHROPIC_API_KEY"}
                           </Button>
                         </div>
                       )}
 
-                      {adapterEnvResult && adapterEnvResult.status === "fail" && (
-                        <div className="rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-[11px] space-y-1.5">
-                          <p className="font-medium">Manual debug</p>
-                          <p className="text-muted-foreground font-mono break-all">
-                            {adapterType === "cursor"
-                              ? `${effectiveAdapterCommand} -p --mode ask --output-format json \"Respond with hello.\"`
-                              : adapterType === "codex_local"
-                              ? `${effectiveAdapterCommand} exec --json -`
-                              : adapterType === "gemini_local"
-                                ? `${effectiveAdapterCommand} --output-format json "Respond with hello."`
-                              : adapterType === "opencode_local"
-                                ? `${effectiveAdapterCommand} run --format json "Respond with hello."`
-                              : `${effectiveAdapterCommand} --print - --output-format stream-json --verbose`}
-                          </p>
+                      <div className="rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-[11px] space-y-1.5">
+                        <p className="font-medium">Manual debug</p>
+                        <p className="text-muted-foreground font-mono break-all">
+                          {adapterType === "cursor"
+                            ? `${effectiveAdapterCommand} -p --mode ask --output-format json \"Respond with hello.\"`
+                            : adapterType === "codex_local"
+                            ? `${effectiveAdapterCommand} exec --json -`
+                            : adapterType === "gemini_local"
+                              ? `${effectiveAdapterCommand} --output-format json \"Respond with hello.\"`
+                            : adapterType === "opencode_local"
+                              ? `${effectiveAdapterCommand} run --format json "Respond with hello."`
+                            : `${effectiveAdapterCommand} --print - --output-format stream-json --verbose`}
+                        </p>
+                        <p className="text-muted-foreground">
+                          Prompt:{" "}
+                          <span className="font-mono">Respond with hello.</span>
+                        </p>
+                        {adapterType === "cursor" || adapterType === "codex_local" || adapterType === "gemini_local" || adapterType === "opencode_local" ? (
                           <p className="text-muted-foreground">
-                            Prompt:{" "}
-                            <span className="font-mono">Respond with hello.</span>
-                          </p>
-                          {adapterType === "cursor" ||
-                          adapterType === "codex_local" ||
-                          adapterType === "gemini_local" ||
-                          adapterType === "opencode_local" ? (
-                            <p className="text-muted-foreground">
-                              If auth fails, set{" "}
-                              <span className="font-mono">
-                                {adapterType === "cursor"
-                                  ? "CURSOR_API_KEY"
+                            If auth fails, set{" "}
+                            <span className="font-mono">
+                              {adapterType === "cursor"
+                                ? "CURSOR_API_KEY"
+                                : adapterType === "gemini_local"
+                                  ? "GEMINI_API_KEY"
+                                  : "OPENAI_API_KEY"}
+                            </span>{" "}
+                            in
+                            env or run{" "}
+                            <span className="font-mono">
+                              {adapterType === "cursor"
+                                ? "agent login"
+                                : adapterType === "codex_local"
+                                  ? "codex login"
                                   : adapterType === "gemini_local"
-                                    ? "GEMINI_API_KEY"
-                                    : "OPENAI_API_KEY"}
-                              </span>{" "}
-                              in env or run{" "}
-                              <span className="font-mono">
-                                {adapterType === "cursor"
-                                  ? "agent login"
-                                  : adapterType === "codex_local"
-                                    ? "codex login"
-                                    : adapterType === "gemini_local"
-                                      ? "gemini auth"
-                                      : "opencode auth login"}
-                              </span>
-                              .
-                            </p>
-                          ) : (
-                            <p className="text-muted-foreground">
-                              If login is required, run{" "}
-                              <span className="font-mono">claude login</span>{" "}
-                              and retry.
-                            </p>
-                          )}
-                        </div>
-                      )}
+                                    ? "gemini auth"
+                                  : "opencode auth login"}
+                            </span>.
+                          </p>
+                        ) : (
+                          <p className="text-muted-foreground">
+                            If login is required, run{" "}
+                            <span className="font-mono">claude login</span> and
+                            retry.
+                          </p>
+                        )}
+                      </div>
                     </div>
                   )}
 
-                  {(adapterType === "http" ||
-                    adapterType === "openclaw_gateway") && (
+                  {adapterType === "process" && (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs text-muted-foreground mb-1 block">
+                          Command
+                        </label>
+                        <input
+                          className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm font-mono outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
+                          placeholder="e.g. node, python"
+                          value={command}
+                          onChange={(e) => setCommand(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted-foreground mb-1 block">
+                          Args (comma-separated)
+                        </label>
+                        <input
+                          className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm font-mono outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
+                          placeholder="e.g. script.js, --flag"
+                          value={args}
+                          onChange={(e) => setArgs(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {(adapterType === "http" || adapterType === "openclaw_gateway") && (
                     <div>
                       <label className="text-xs text-muted-foreground mb-1 block">
-                        {adapterType === "openclaw_gateway"
-                          ? "Gateway URL"
-                          : "Webhook URL"}
+                        {adapterType === "openclaw_gateway" ? "Gateway URL" : "Webhook URL"}
                       </label>
                       <input
                         className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm font-mono outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
-                        placeholder={
-                          adapterType === "openclaw_gateway"
-                            ? "ws://127.0.0.1:18789"
-                            : "https://..."
-                        }
+                        placeholder={adapterType === "openclaw_gateway" ? "ws://127.0.0.1:18789" : "https://..."}
                         value={url}
                         onChange={(e) => setUrl(e.target.value)}
                       />
@@ -1199,8 +1061,8 @@ export function OnboardingWizard() {
                     <div>
                       <h3 className="font-medium">Ready to launch</h3>
                       <p className="text-xs text-muted-foreground">
-                        Everything is set up. Launching now will create the
-                        starter task, wake the agent, and open the issue.
+                        Everything is set up. Your assigned task already woke
+                        the agent, so you can jump straight to the issue.
                       </p>
                     </div>
                   </div>
@@ -1238,52 +1100,33 @@ export function OnboardingWizard() {
                       <Check className="h-4 w-4 text-green-500 shrink-0" />
                     </div>
                   </div>
-                </div>
-              )}
 
-              {step === 5 && (
-                <div className="space-y-5">
-                  <div className="flex items-center gap-3 mb-1">
-                    <div className="bg-muted/50 p-2">
-                      <Users className="h-5 w-5 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <h3 className="font-medium">Invite your team (optional)</h3>
-                      <p className="text-xs text-muted-foreground">
-                        Enable team mode to let other humans join this Paperclip instance.
-                      </p>
-                    </div>
-                  </div>
+                  {/* Email notifications (optional) */}
                   <div className="flex items-center gap-3 rounded-md border border-border px-3 py-2.5">
-                    <label className="text-sm font-medium flex-1">Enable team mode</label>
+                    <Mail className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <label className="text-sm font-medium flex-1">Enable email notifications</label>
                     <button
                       type="button"
                       role="switch"
-                      aria-checked={teamModeEnabled}
-                      onClick={() => setTeamModeEnabled(!teamModeEnabled)}
+                      aria-checked={emailEnabled}
+                      onClick={() => setEmailEnabled(!emailEnabled)}
                       className={cn(
                         "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
-                        teamModeEnabled ? "bg-primary" : "bg-muted"
+                        emailEnabled ? "bg-primary" : "bg-muted"
                       )}
                     >
                       <span
                         className={cn(
                           "pointer-events-none inline-block h-4 w-4 transform rounded-full bg-background shadow-sm ring-0 transition-transform",
-                          teamModeEnabled ? "translate-x-4" : "translate-x-0"
+                          emailEnabled ? "translate-x-4" : "translate-x-0"
                         )}
                       />
                     </button>
                   </div>
-                  {teamModeEnabled && (
+                  {emailEnabled && (
                     <div className="space-y-4 border border-border rounded-md px-4 py-4">
-                      <div className="flex items-center gap-2 mb-2">
-                        <Mail className="h-4 w-4 text-muted-foreground" />
-                        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                          Email Notifications (optional)
-                        </span>
-                      </div>
                       <p className="text-xs text-muted-foreground">
-                        Send invite and notification emails via Resend.
+                        Send notification emails via Resend.
                       </p>
                       <div>
                         <label className="text-xs text-muted-foreground mb-1 block">
@@ -1382,29 +1225,13 @@ export function OnboardingWizard() {
                   )}
                   {step === 4 && (
                     <Button size="sm" disabled={loading} onClick={handleLaunch}>
-                      <ArrowRight className="h-3.5 w-3.5 mr-1" />
-                      Next
+                      {loading ? (
+                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                      ) : (
+                        <Rocket className="h-3.5 w-3.5 mr-1" />
+                      )}
+                      {loading ? "Launching..." : "Launch"}
                     </Button>
-                  )}
-                  {step === 5 && (
-                    <>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={loading}
-                        onClick={finishOnboarding}
-                      >
-                        Skip
-                      </Button>
-                      <Button size="sm" disabled={loading} onClick={handleStep5Finish}>
-                        {loading ? (
-                          <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                        ) : (
-                          <Check className="h-3.5 w-3.5 mr-1" />
-                        )}
-                        {loading ? "Saving..." : "Finish"}
-                      </Button>
-                    </>
                   )}
                 </div>
               </div>
@@ -1412,12 +1239,7 @@ export function OnboardingWizard() {
           </div>
 
           {/* Right half — ASCII art (hidden on mobile) */}
-          <div
-            className={cn(
-              "hidden md:block overflow-hidden bg-[#1d1d1d] transition-[width,opacity] duration-500 ease-in-out",
-              step === 1 ? "w-1/2 opacity-100" : "w-0 opacity-0"
-            )}
-          >
+          <div className="hidden md:block w-1/2 overflow-hidden">
             <AsciiArtAnimation />
           </div>
         </div>
@@ -1435,14 +1257,14 @@ function AdapterEnvironmentResult({
     result.status === "pass"
       ? "Passed"
       : result.status === "warn"
-      ? "Warnings"
-      : "Failed";
+        ? "Warnings"
+        : "Failed";
   const statusClass =
     result.status === "pass"
       ? "text-green-700 dark:text-green-300 border-green-300 dark:border-green-500/40 bg-green-50 dark:bg-green-500/10"
       : result.status === "warn"
-      ? "text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/10"
-      : "text-red-700 dark:text-red-300 border-red-300 dark:border-red-500/40 bg-red-50 dark:bg-red-500/10";
+        ? "text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/10"
+        : "text-red-700 dark:text-red-300 border-red-300 dark:border-red-500/40 bg-red-50 dark:bg-red-500/10";
 
   return (
     <div className={`rounded-md border px-2.5 py-2 text-[11px] ${statusClass}`}>
