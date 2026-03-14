@@ -2,7 +2,8 @@ import express, { Router, type Request as ExpressRequest } from "express";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { Db } from "@paperclipai/db";
+import { eq } from "drizzle-orm";
+import { type Db, authUsers } from "@paperclipai/db";
 import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 import type { StorageService } from "./storage/types.js";
 import type { EmailService } from "./services/email.js";
@@ -109,21 +110,30 @@ export async function createApp(
       resolveSession: opts.resolveSession,
     }),
   );
-  app.get("/api/auth/get-session", (req, res) => {
+  app.get("/api/auth/get-session", async (req, res) => {
     if (req.actor.type !== "board" || !req.actor.userId) {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
+    const userId = req.actor.userId;
+    let name: string | null = req.actor.source === "local_implicit" ? "Local Board" : null;
+    let email: string | null = null;
+    let image: string | null = null;
+    if (req.actor.source !== "local_implicit") {
+      const [row] = await db.select({ name: authUsers.name, email: authUsers.email, image: authUsers.image })
+        .from(authUsers).where(eq(authUsers.id, userId)).limit(1);
+      if (row) {
+        name = row.name;
+        email = row.email;
+        image = row.image ?? null;
+      }
+    }
     res.json({
       session: {
-        id: `paperclip:${req.actor.source}:${req.actor.userId}`,
-        userId: req.actor.userId,
+        id: `paperclip:${req.actor.source}:${userId}`,
+        userId,
       },
-      user: {
-        id: req.actor.userId,
-        email: null,
-        name: req.actor.source === "local_implicit" ? "Local Board" : null,
-      },
+      user: { id: userId, email, name, image },
     });
   });
   if (opts.betterAuthHandler) {
