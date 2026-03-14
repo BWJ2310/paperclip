@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { api } from "../api/client";
 import { queryKeys } from "../lib/queryKeys";
+import { AvatarCropDialog } from "../components/AvatarCropDialog";
 
 type UserProfile = {
   id: string;
@@ -51,6 +52,9 @@ function parseUserAgent(ua: string | null): string {
 export function Account() {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Avatar crop state
+  const [cropFile, setCropFile] = useState<File | null>(null);
 
   // Profile state
   const [editName, setEditName] = useState<string | null>(null);
@@ -158,7 +162,15 @@ export function Account() {
 
   function handleAvatarChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (file) uploadAvatar.mutate(file);
+    if (file) setCropFile(file);
+    // Reset input so the same file can be selected again after crop/cancel
+    e.target.value = "";
+  }
+
+  function handleCropConfirm(blob: Blob) {
+    const file = new File([blob], "avatar.png", { type: "image/png" });
+    uploadAvatar.mutate(file);
+    setCropFile(null);
   }
 
   if (profileQuery.isLoading) {
@@ -349,6 +361,13 @@ export function Account() {
           )}
         </div>
       </div>
+
+      {/* Avatar crop dialog */}
+      <AvatarCropDialog
+        file={cropFile}
+        onConfirm={handleCropConfirm}
+        onCancel={() => setCropFile(null)}
+      />
 
       {/* Company Memberships section */}
       {profile?.memberships && profile.memberships.length > 0 && (
