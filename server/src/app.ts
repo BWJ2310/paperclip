@@ -286,7 +286,7 @@ export async function createApp(
             : null;
           return proxyHost
             ? { port: hmrPort, clientPort: 443, path: "/__vite_hmr", protocol: "wss" as const }
-            : { host: opts.bindHost, port: hmrPort, clientPort: hmrPort };
+            : { port: hmrPort, clientPort: hmrPort };
         })(),
         allowedHosts: privateHostnameGateEnabled ? Array.from(privateHostnameAllowSet) : undefined,
       },
