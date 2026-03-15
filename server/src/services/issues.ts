@@ -750,6 +750,7 @@ export function issueService(db: Db) {
           and(
             eq(activityLog.entityType, sql`'issue'`),
             eq(activityLog.entityId, sql<string>`${issues.id}::text`),
+            eq(issues.companyId, companyId),
           ),
         )
         .leftJoin(

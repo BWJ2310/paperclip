@@ -38,7 +38,6 @@ import { forbidden, HttpError, unauthorized } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { shouldWakeAssigneeOnCheckout } from "./issues-checkout-wakeup.js";
 import { isAllowedContentType, MAX_ATTACHMENT_BYTES } from "../attachment-types.js";
-import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
 
 const MAX_ISSUE_COMMENT_LIMIT = 500;
 
@@ -840,55 +839,42 @@ export function issueRoutes(db: Db, storage: StorageService) {
       details: { title: issue.title, identifier: issue.identifier },
     });
 
-    void queueIssueAssignmentWakeup({
-      heartbeat,
-      issue,
-      reason: "issue_assigned",
-      mutation: "create",
-      contextSource: "issue.create",
-      requestedByActorType: actor.actorType,
-      requestedByActorId: actor.actorId,
-    });
+    const wakeups = new Map<string, Parameters<typeof heartbeat.wakeup>[1]>();
+    if (issue.assigneeAgentId && issue.status !== "backlog") {
+      wakeups.set(issue.assigneeAgentId, {
+        source: "assignment",
+        triggerDetail: "system",
+        reason: "issue_assigned",
+        payload: { issueId: issue.id, mutation: "create" },
+        requestedByActorType: actor.actorType,
+        requestedByActorId: actor.actorId,
+        contextSnapshot: { issueId: issue.id, source: "issue.create" },
+      });
+    }
 
+    if (issue.description?.trim()) {
+      await svc.processMentionNotifications({
+        companyId: issue.companyId,
+        issueId: issue.id,
+        issueTitle: issue.title,
+        issueIdentifier: issue.identifier,
+        body: issue.description,
+        baseUrl: `${req.protocol}://${req.get("host")}`,
+        actor,
+        emailService: req.app.locals.emailService as EmailService | undefined,
+        wakeups,
+        contextSource: "issue.create.mention",
+      });
+    }
+
+    res.status(201).json(issue);
     void (async () => {
-      const wakeups = new Map<string, Parameters<typeof heartbeat.wakeup>[1]>();
-
-      if (issue.assigneeAgentId && issue.status !== "backlog") {
-        wakeups.set(issue.assigneeAgentId, {
-          source: "assignment",
-          triggerDetail: "system",
-          reason: "issue_assigned",
-          payload: { issueId: issue.id, mutation: "create" },
-          requestedByActorType: actor.actorType,
-          requestedByActorId: actor.actorId,
-          contextSnapshot: { issueId: issue.id, source: "issue.create" },
-        });
-      }
-
-      if (issue.description?.trim()) {
-        await svc.processMentionNotifications({
-          companyId: issue.companyId,
-          issueId: issue.id,
-          issueTitle: issue.title,
-          issueIdentifier: issue.identifier,
-          body: issue.description,
-          baseUrl: `${req.protocol}://${req.get("host")}`,
-          actor,
-          emailService: req.app.locals.emailService as EmailService | undefined,
-          wakeups,
-          contextSource: "issue.create.mention",
-        });
-      }
-
       for (const [agentId, wakeup] of wakeups.entries()) {
-        if (agentId === issue.assigneeAgentId) continue;
         heartbeat
           .wakeup(agentId, wakeup)
           .catch((err) => logger.warn({ err, issueId: issue.id, agentId }, "failed to wake agent on issue create"));
       }
-    })();
-
-    res.status(201).json(issue);
+    })().catch((err) => logger.warn({ err, issueId: issue.id }, "heartbeat wakeup loop failed on issue create"));
   });
 
   router.patch("/issues/:id", validate(updateIssueSchema), async (req, res) => {
