@@ -277,14 +277,18 @@ export async function createApp(
       appType: "custom",
       server: {
         middlewareMode: true,
-        hmr: (() => {
-          const proxyHost = privateHostnameGateEnabled
-            ? Array.from(privateHostnameAllowSet).find(h => /^[a-z].*\.[a-z]/i.test(h))
-            : null;
-          return proxyHost
-            ? { port: hmrPort, clientPort: 443, path: "/__vite_hmr", protocol: "wss" as const }
-            : { host: opts.bindHost, port: hmrPort, clientPort: hmrPort };
-        })(),
+        hmr: process.env.PAPERCLIP_HMR_CLIENT_PORT
+          ? {
+              port: hmrPort,
+              clientPort: Number(process.env.PAPERCLIP_HMR_CLIENT_PORT),
+              ...(process.env.PAPERCLIP_HMR_PATH ? { path: process.env.PAPERCLIP_HMR_PATH } : {}),
+              ...(process.env.PAPERCLIP_HMR_PROTOCOL ? { protocol: process.env.PAPERCLIP_HMR_PROTOCOL as "ws" | "wss" } : {}),
+            }
+          : {
+              host: opts.bindHost,
+              port: hmrPort,
+              clientPort: hmrPort,
+            },
         allowedHosts: privateHostnameGateEnabled ? Array.from(privateHostnameAllowSet) : undefined,
       },
     });
