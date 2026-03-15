@@ -208,6 +208,10 @@ export function shouldShowInboxSection({
   return showOnAll;
 }
 
+export function getUnreadMentions<T extends { isUnread: boolean }>(mentions: T[]): T[] {
+  return mentions.filter((mention) => mention.isUnread);
+}
+
 export function computeInboxBadgeData({
   approvals,
   joinRequests,

@@ -6,6 +6,7 @@ import {
   computeInboxBadgeData,
   getApprovalsForTab,
   getInboxWorkItems,
+  getUnreadMentions,
   getRecentTouchedIssues,
   getUnreadTouchedIssues,
   loadLastInboxTab,
@@ -339,6 +340,19 @@ describe("inbox helpers", () => {
 
     expect(recentIssues).toHaveLength(RECENT_ISSUES_LIMIT);
     expect(getUnreadTouchedIssues(recentIssues).map((issue) => issue.id)).toEqual(["1", "2", "3"]);
+  });
+
+  it("filters mentions down to unread entries only", () => {
+    const mentions = [
+      { issueId: "issue-1", isUnread: true },
+      { issueId: "issue-2", isUnread: false },
+      { issueId: "issue-3", isUnread: true },
+    ];
+
+    expect(getUnreadMentions(mentions).map((mention) => mention.issueId)).toEqual([
+      "issue-1",
+      "issue-3",
+    ]);
   });
 
   it("defaults the remembered inbox tab to recent and persists all", () => {

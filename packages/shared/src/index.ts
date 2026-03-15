@@ -248,6 +248,7 @@ export type {
   LiveEvent,
   DashboardSummary,
   ActivityEvent,
+  MentionEntry,
   SidebarBadges,
   CompanyMembership,
   PrincipalPermissionGrant,

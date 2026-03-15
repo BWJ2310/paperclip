@@ -487,6 +487,7 @@ export function IssueDetail() {
       if (selectedCompanyId) {
         queryClient.invalidateQueries({ queryKey: queryKeys.issues.listTouchedByMe(selectedCompanyId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.issues.listUnreadTouchedByMe(selectedCompanyId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.mentions(selectedCompanyId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(selectedCompanyId) });
       }
     },
