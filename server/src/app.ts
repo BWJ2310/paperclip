@@ -280,7 +280,8 @@ export async function createApp(
         hmr: {
           host: opts.bindHost,
           port: hmrPort,
-          clientPort: hmrPort,
+          clientPort: privateHostnameGateEnabled ? 443 : hmrPort,
+          ...(privateHostnameGateEnabled ? { path: "/__vite_hmr", protocol: "wss" } : {}),
         },
         allowedHosts: privateHostnameGateEnabled ? Array.from(privateHostnameAllowSet) : undefined,
       },
