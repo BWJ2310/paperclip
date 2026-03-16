@@ -1,4 +1,5 @@
 import type {
+  AssetImage,
   Company,
   CompanyPortabilityExportPreviewResult,
   CompanyPortabilityExportResult,
@@ -36,7 +37,7 @@ export const companiesApi = {
   uploadLogo: (companyId: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return api.postForm<{ logoUrl: string }>(`/companies/${companyId}/logo`, form);
+    return api.postForm<AssetImage>(`/companies/${companyId}/logo`, form);
   },
   archive: (companyId: string) => api.post<Company>(`/companies/${companyId}/archive`, {}),
   remove: (companyId: string) => api.delete<{ ok: true }>(`/companies/${companyId}`),
