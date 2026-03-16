@@ -657,9 +657,29 @@ export async function inspectMigrations(url: string): Promise<MigrationState> {
   }
 }
 
+async function assertMigrationStateConsistent(url: string, state: MigrationState): Promise<void> {
+  if (state.status !== "needsMigrations" || state.reason !== "pending-migrations") return;
+  if (state.appliedMigrations.length === 0) return;
+
+  const sql = createUtilitySql(url);
+  try {
+    const hasCompaniesTable = await tableExists(sql, "companies");
+    if (hasCompaniesTable) return;
+
+    throw new Error(
+      "Migration journal exists but core Paperclip table `public.companies` is missing. " +
+      "This usually means DATABASE_URL points at the wrong database or the database was restored " +
+      "with migration history but without the full Paperclip schema.",
+    );
+  } finally {
+    await sql.end();
+  }
+}
+
 export async function applyPendingMigrations(url: string): Promise<void> {
   const initialState = await inspectMigrations(url);
   if (initialState.status === "upToDate") return;
+  await assertMigrationStateConsistent(url, initialState);
 
   if (initialState.reason === "no-migration-journal-empty-db") {
     const sql = createUtilitySql(url);
