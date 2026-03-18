@@ -188,6 +188,17 @@ pnpm dev
 
 This starts the API server at `http://localhost:3100`. An embedded PostgreSQL database is created automatically — no setup required.
 
+If you run Paperclip in `authenticated` mode and want to create the first admin user, generate a bootstrap invite:
+
+```bash
+pnpm paperclipai onboard
+pnpm paperclipai auth bootstrap-ceo --base-url http://localhost:3100
+# hosted example:
+pnpm paperclipai auth bootstrap-ceo --base-url https://your-domain.com
+```
+
+Public user sign-up can be enabled separately, but the first admin still comes from this bootstrap flow.
+
 > **Requirements:** Node.js 20+, pnpm 9.15+
 
 <br/>

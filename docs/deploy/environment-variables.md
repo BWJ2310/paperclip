@@ -35,12 +35,15 @@ These are set automatically by the server when invoking agents:
 | `PAPERCLIP_API_URL` | Paperclip API base URL |
 | `PAPERCLIP_API_KEY` | Short-lived JWT for API auth |
 | `PAPERCLIP_RUN_ID` | Current heartbeat run ID |
-| `PAPERCLIP_TASK_ID` | Issue that triggered this wake |
+| `PAPERCLIP_TASK_KEY` | Canonical task scope for this run, such as `issue:<issueId>` or `conversation:<conversationId>` |
+| `PAPERCLIP_TASK_ID` | Legacy issue-only compatibility alias for `PAPERCLIP_TASK_KEY`; present only on true issue-scoped runs during migration |
 | `PAPERCLIP_WAKE_REASON` | Wake trigger reason |
 | `PAPERCLIP_WAKE_COMMENT_ID` | Comment that triggered this wake |
 | `PAPERCLIP_APPROVAL_ID` | Resolved approval ID |
 | `PAPERCLIP_APPROVAL_STATUS` | Approval decision |
 | `PAPERCLIP_LINKED_ISSUE_IDS` | Comma-separated linked issue IDs |
+
+Forward contract: scope-aware agent code should read `PAPERCLIP_TASK_KEY`. `PAPERCLIP_TASK_ID` may still appear on issue-scoped runs during migration, but it is not guaranteed for conversation-scoped or other non-issue runs.
 
 ## LLM Provider Keys (for adapters)
 
