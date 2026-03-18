@@ -18,7 +18,7 @@ Paperclip V1 must provide a full control-plane loop for autonomous agents:
 1. A human board creates a company and defines goals.
 2. The board creates and manages agents in an org tree.
 3. Agents receive and execute tasks via heartbeat invocations.
-4. All work is tracked through tasks/comments with audit visibility.
+4. Tracked work is anchored through tasks/comments with audit visibility, while company-scoped conversations may exist as first-class control-plane discussions and later link back to work objects.
 5. Token/cost usage is reported and budget limits can stop work.
 6. The board can intervene anywhere (pause agents/tasks, override decisions).
 
@@ -32,10 +32,10 @@ These decisions close open questions from `SPEC.md` for V1.
 |---|---|
 | Tenancy | Single-tenant deployment, multi-company data model |
 | Company model | Company is first-order; all business entities are company-scoped |
-| Board | Single human board operator per deployment |
+| Board | Board access is coarse and full-control; authenticated deployments may have multiple human board users with equal company-scoped authority, while fine-grained human RBAC remains out of scope |
 | Org graph | Strict tree (`reports_to` nullable root); no multi-manager reporting |
-| Visibility | Full visibility to board and all agents in same company |
-| Communication | Tasks + comments only (no separate chat system) |
+| Visibility | Full visibility to board; same-company agents have full visibility for work objects, while conversations are participant-scoped for agents |
+| Communication | Tasks + comments for tracked work, plus first-class conversations for company discussion and coordination |
 | Task ownership | Single assignee; atomic checkout required for `in_progress` transition |
 | Recovery | No automatic reassignment; work recovery stays manual/explicit |
 | Agent adapters | Built-in `process` and `http` adapters |
@@ -62,22 +62,24 @@ V1 implementation extends this baseline into a company-centric, governance-aware
 - Goal hierarchy linked to company mission
 - Agent lifecycle with org structure and adapter configuration
 - Task lifecycle with parent/child hierarchy and comments
+- Company-scoped conversations with participant-scoped agent visibility and structured links to issues, goals, and projects
 - Atomic task checkout and explicit task status transitions
 - Board approvals for hires and CEO strategy proposal
 - Heartbeat invocation, status tracking, and cancellation
 - Cost event ingestion and rollups (agent/task/project/company)
 - Budget settings and hard-stop enforcement
-- Board web UI for dashboard, org chart, tasks, agents, approvals, costs
+- Board web UI for dashboard, org chart, tasks, conversations, agents, approvals, costs
 - Agent-facing API contract (task read/write, heartbeat report, cost report)
 - Auditable activity log for all mutating actions
 
 ## 5.2 Out of Scope (V1)
 
 - Plugin framework and third-party extension SDK
+- Generic consumer chat or unbounded social messaging
 - Revenue/expense accounting beyond model/token costs
 - Knowledge base subsystem
 - Public marketplace (ClipHub)
-- Multi-board governance or role-based human permission granularity
+- Fine-grained human governance, board-role differentiation, or role-based human permission granularity
 - Automatic self-healing orchestration (auto-reassign/retry planners)
 
 ## 6. Architecture
@@ -115,7 +117,7 @@ All core tables include `id`, `created_at`, `updated_at` unless noted.
 
 ## 7.0 Auth Tables
 
-Human auth tables (`users`, `sessions`, and provider-specific auth artifacts) are managed by the selected auth library. This spec treats them as required dependencies and references `users.id` where user attribution is needed.
+Human auth tables (`users`, `sessions`, and provider-specific auth artifacts) are managed by the selected auth library. This spec treats them as required dependencies and references `users.id` where user attribution is needed. In the live auth schema, `users.id` is a `text` identifier, and V1 user-attribution columns must use that same plain `text` type rather than `uuid`. These attribution columns follow the live schema's non-FK pattern so they remain compatible with auth-derived board actor ids such as the `local-board` sentinel in `local_trusted`; they are logical auth identifiers, not database foreign keys to auth tables.
 
 ## 7.1 `companies`
 
@@ -198,7 +200,7 @@ Invariant: at least one root `company` level goal per company.
 - `priority` enum: `critical | high | medium | low`
 - `assignee_agent_id` uuid fk `agents.id` null
 - `created_by_agent_id` uuid fk `agents.id` null
-- `created_by_user_id` uuid fk `users.id` null
+- `created_by_user_id` text null (auth user id / board actor id)
 - `request_depth` int not null default 0
 - `billing_code` text null
 - `started_at` timestamptz null
@@ -218,15 +220,126 @@ Invariants:
 - `company_id` uuid fk not null
 - `issue_id` uuid fk `issues.id` not null
 - `author_agent_id` uuid fk `agents.id` null
-- `author_user_id` uuid fk `users.id` null
+- `author_user_id` text null (auth user id / board actor id)
 - `body` text not null
 
-## 7.8 `heartbeat_runs`
+## 7.8 `conversations`
+
+- `id` uuid pk
+- `company_id` uuid fk `companies.id` not null
+- `title` text not null
+- `status` enum: `active | archived`
+- `last_message_sequence` bigint not null default `0`
+- `created_by_user_id` text not null (auth user id / board actor id)
+
+## 7.9 `conversation_participants`
+
+- `id` uuid pk
+- `company_id` uuid fk `companies.id` not null
+- `conversation_id` uuid fk `conversations.id` not null
+- `agent_id` uuid fk `agents.id` not null
+
+Invariant: participants must belong to the same company as the conversation.
+
+## 7.10 `conversation_messages`
+
+- `id` uuid pk
+- `company_id` uuid fk `companies.id` not null
+- `conversation_id` uuid fk `conversations.id` not null
+- `sequence` bigint not null
+- `author_type` enum: `user | agent | system`
+- `author_agent_id` uuid fk `agents.id` null
+- `author_user_id` text null (auth user id / board actor id)
+- `run_id` uuid fk `heartbeat_runs.id` null
+- `body_markdown` text not null
+
+Invariants:
+
+- if `author_type = user`, then `author_user_id` is required and `author_agent_id` must be null
+- if `author_type = agent`, then `author_agent_id` is required and `author_user_id` must be null
+- if `author_type = system`, then both `author_agent_id` and `author_user_id` must be null
+- `sequence` is monotonic per conversation and allocated from `conversations.last_message_sequence`
+- if `run_id` is set, then `author_type` must be `agent`
+
+## 7.11 `conversation_message_refs`
+
+- `id` uuid pk
+- `company_id` uuid fk `companies.id` not null
+- `message_id` uuid fk `conversation_messages.id` not null
+- `ref_kind` enum: `agent | issue | goal | project`
+- `target_id` uuid not null
+- `display_text` text not null
+- `ref_origin` enum: `inline_mention | active_context`
+
+Invariant: one distinct ref per `(message_id, ref_kind, target_id)`.
+
+## 7.12 `conversation_target_links`
+
+- `id` uuid pk
+- `company_id` uuid fk `companies.id` not null
+- `conversation_id` uuid fk `conversations.id` not null
+- `agent_id` uuid fk `agents.id` not null
+- `target_kind` enum: `issue | goal | project`
+- `target_id` uuid not null
+- `link_origin` enum: `message_ref | manual | system`
+- `latest_linked_message_id` uuid fk `conversation_messages.id` not null
+- `latest_linked_message_sequence` bigint not null
+- `created_by_actor_type` enum: `user | agent | system`
+- `created_by_actor_id` text not null
+
+Invariants:
+
+- links are agent-scoped and unique per `(agent_id, conversation_id, target_kind, target_id)`
+- `created_by_actor_id` must match `created_by_actor_type`
+
+## 7.13 `conversation_target_suppressions`
+
+- `id` uuid pk
+- `company_id` uuid fk `companies.id` not null
+- `conversation_id` uuid fk `conversations.id` not null
+- `agent_id` uuid fk `agents.id` not null
+- `target_kind` enum: `issue | goal | project`
+- `target_id` uuid not null
+- `suppressed_through_message_sequence` bigint not null
+- `suppressed_by_actor_type` enum: `user | agent | system`
+- `suppressed_by_actor_id` text not null
+
+## 7.14 `agent_target_conversation_memory`
+
+- `id` uuid pk
+- `company_id` uuid fk `companies.id` not null
+- `agent_id` uuid fk `agents.id` not null
+- `target_kind` enum: `issue | goal | project`
+- `target_id` uuid not null
+- `memory_markdown` text not null
+- `build_status` enum: `ready | rebuilding | failed`
+- `linked_conversation_count` int not null default `0`
+- `linked_message_count` int not null default `0`
+- `source_message_count` int not null default `0`
+- `last_source_message_sequence` bigint not null
+- `latest_source_message_at` timestamptz null
+- `last_build_error` text null
+- `last_rebuilt_at` timestamptz not null
+
+Invariant: one compiled memory row per `(agent_id, target_kind, target_id)`.
+
+## 7.15 `conversation_read_states`
+
+- `id` uuid pk
+- `company_id` uuid fk `companies.id` not null
+- `conversation_id` uuid fk `conversations.id` not null
+- `user_id` text null (auth user id / board actor id)
+- `agent_id` uuid fk `agents.id` null
+- `last_read_sequence` bigint not null default `0`
+
+Invariant: exactly one of `user_id` or `agent_id` must be set, and there is at most one read-state row per actor per conversation.
+
+## 7.16 `heartbeat_runs`
 
 - `id` uuid pk
 - `company_id` uuid fk not null
 - `agent_id` uuid fk not null
-- `invocation_source` enum: `scheduler | manual | callback`
+- `invocation_source` enum: `timer | assignment | on_demand | automation | conversation_message`
 - `status` enum: `queued | running | succeeded | failed | cancelled | timed_out`
 - `started_at` timestamptz null
 - `finished_at` timestamptz null
@@ -234,11 +347,41 @@ Invariants:
 - `external_run_id` text null
 - `context_snapshot` jsonb null
 
-## 7.9 `cost_events`
+## 7.17 `agent_wakeup_requests`
 
 - `id` uuid pk
 - `company_id` uuid fk not null
 - `agent_id` uuid fk `agents.id` not null
+- `source` text not null (`timer | assignment | on_demand | automation | conversation_message`)
+- `trigger_detail` text null (`manual | ping | callback | system`)
+- `reason` text null
+- `payload` jsonb null
+- `status` text not null (`queued | claimed | coalesced | skipped | completed | failed | cancelled`)
+- `coalesced_count` int not null default `0`
+- `requested_by_actor_type` text null (`user | agent | system`)
+- `requested_by_actor_id` text null
+- `idempotency_key` text null
+- `run_id` uuid fk `heartbeat_runs.id` null
+- `conversation_id` uuid fk `conversations.id` null
+- `conversation_message_id` uuid fk `conversation_messages.id` null
+- `conversation_message_sequence` bigint null
+- `response_mode` text null (`optional | required`)
+- `requested_at` timestamptz not null
+- `claimed_at` timestamptz null
+- `finished_at` timestamptz null
+
+Invariants:
+
+- conversation reply wakes stamp `source = conversation_message`
+- when `conversation_id` is set for a reply wake, `conversation_message_id`, `conversation_message_sequence`, and `response_mode` are also required
+- `conversation_message_sequence` tracks the newest triggering message after coalescing for required-reply evaluation
+
+## 7.18 `cost_events`
+
+- `id` uuid pk
+- `company_id` uuid fk not null
+- `agent_id` uuid fk `agents.id` not null
+- `conversation_id` uuid fk `conversations.id` null
 - `issue_id` uuid fk `issues.id` null
 - `project_id` uuid fk `projects.id` null
 - `goal_id` uuid fk `goals.id` null
@@ -252,20 +395,20 @@ Invariants:
 
 Invariant: each event must attach to agent and company; rollups are aggregation, never manually edited.
 
-## 7.10 `approvals`
+## 7.19 `approvals`
 
 - `id` uuid pk
 - `company_id` uuid fk not null
 - `type` enum: `hire_agent | approve_ceo_strategy`
 - `requested_by_agent_id` uuid fk `agents.id` null
-- `requested_by_user_id` uuid fk `users.id` null
+- `requested_by_user_id` text null (auth user id / board actor id)
 - `status` enum: `pending | approved | rejected | cancelled`
 - `payload` jsonb not null
 - `decision_note` text null
-- `decided_by_user_id` uuid fk `users.id` null
+- `decided_by_user_id` text null (auth user id / board actor id)
 - `decided_at` timestamptz null
 
-## 7.11 `activity_log`
+## 7.20 `activity_log`
 
 - `id` uuid pk
 - `company_id` uuid fk not null
@@ -277,7 +420,7 @@ Invariant: each event must attach to agent and company; rollups are aggregation,
 - `details` jsonb null
 - `created_at` timestamptz not null default now()
 
-## 7.12 `company_secrets` + `company_secret_versions`
+## 7.21 `company_secrets` + `company_secret_versions`
 
 - Secret values are not stored inline in `agents.adapter_config.env`.
 - Agent env entries should use secret refs for sensitive values.
@@ -291,7 +434,7 @@ Operational policy:
 - Activity and approval payloads must not persist raw sensitive values.
 - Config revisions may include redacted placeholders; such revisions are non-restorable for redacted fields.
 
-## 7.13 Required Indexes
+## 7.22 Required Indexes
 
 - `agents(company_id, status)`
 - `agents(company_id, reports_to)`
@@ -299,6 +442,19 @@ Operational policy:
 - `issues(company_id, assignee_agent_id, status)`
 - `issues(company_id, parent_id)`
 - `issues(company_id, project_id)`
+- `conversations(company_id, updated_at desc)`
+- `conversation_participants(conversation_id, agent_id)` unique
+- `conversation_messages(conversation_id, sequence)` unique
+- `conversation_message_refs(company_id, ref_kind, target_id)`
+- `conversation_message_refs(message_id)`
+- `conversation_message_refs(message_id, ref_kind, target_id)` unique
+- `conversation_target_links(agent_id, target_kind, target_id)`
+- `conversation_target_links(conversation_id, agent_id, target_kind, target_id)` unique
+- `conversation_target_suppressions(agent_id, conversation_id, target_kind, target_id)` unique
+- `agent_target_conversation_memory(agent_id, target_kind, target_id)` unique
+- `conversation_read_states(company_id, conversation_id)`
+- `conversation_read_states(company_id, conversation_id, user_id)` unique where `user_id` is not null
+- `conversation_read_states(company_id, conversation_id, agent_id)` unique where `agent_id` is not null
 - `cost_events(company_id, occurred_at)`
 - `cost_events(company_id, agent_id, occurred_at)`
 - `heartbeat_runs(company_id, agent_id, started_at desc)`
@@ -310,7 +466,7 @@ Operational policy:
 - `company_secrets(company_id, name)` unique
 - `company_secret_versions(secret_id, version)` unique
 
-## 7.14 `assets` + `issue_attachments`
+## 7.23 `assets` + `issue_attachments`
 
 - `assets` stores provider-backed object metadata (not inline bytes):
   - `id` uuid pk
@@ -322,15 +478,15 @@ Operational policy:
   - `sha256` text not null
   - `original_filename` text null
   - `created_by_agent_id` uuid fk null
-  - `created_by_user_id` uuid/text fk null
+  - `created_by_user_id` text null (auth user id / board actor id)
 - `issue_attachments` links assets to issues/comments:
   - `id` uuid pk
   - `company_id` uuid fk not null
   - `issue_id` uuid fk not null
   - `asset_id` uuid fk not null
-  - `issue_comment_id` uuid fk null
+- `issue_comment_id` uuid fk null
 
-## 7.15 `documents` + `document_revisions` + `issue_documents`
+## 7.24 `documents` + `document_revisions` + `issue_documents`
 
 - `documents` stores editable text-first documents:
   - `id` uuid pk
@@ -341,9 +497,9 @@ Operational policy:
   - `latest_revision_id` uuid null
   - `latest_revision_number` int not null
   - `created_by_agent_id` uuid fk null
-  - `created_by_user_id` uuid/text fk null
+  - `created_by_user_id` text null (auth user id / board actor id)
   - `updated_by_agent_id` uuid fk null
-  - `updated_by_user_id` uuid/text fk null
+  - `updated_by_user_id` text null (auth user id / board actor id)
 - `document_revisions` stores append-only history:
   - `id` uuid pk
   - `company_id` uuid fk not null
@@ -399,8 +555,8 @@ Side effects:
 
 ## 9.1 Board Auth
 
-- Session-based auth for human operator
-- Board has full read/write across all companies in deployment
+- Session-based auth for board users
+- Board users have full read/write across the companies they are authorized for in this deployment
 - Every board mutation writes to `activity_log`
 
 ## 9.2 Agent Auth
@@ -410,9 +566,11 @@ Side effects:
   - read org/task/company context for own company
   - read/write own assigned tasks and comments
   - create tasks/comments for delegation
+  - read/write participant-scoped conversations where the agent is a participant
   - report heartbeat status
   - report cost events
 - Agent cannot:
+  - create conversations directly in this version
   - bypass approval gates
   - modify company-wide budgets directly
   - mutate auth/keys
@@ -508,14 +666,83 @@ Server behavior:
 - `GET /projects/:projectId`
 - `PATCH /projects/:projectId`
 
-## 10.6 Approvals
+## 10.6 Conversations
+
+- `GET /companies/:companyId/conversations`
+- `POST /companies/:companyId/conversations`
+- `GET /conversations/:conversationId`
+- `PATCH /conversations/:conversationId`
+- `POST /conversations/:conversationId/participants`
+- `DELETE /conversations/:conversationId/participants/:agentId`
+- `GET /conversations/:conversationId/messages`
+- `POST /conversations/:conversationId/messages`
+- `POST /conversations/:conversationId/read`
+- `POST /conversations/:conversationId/targets`
+- `DELETE /conversations/:conversationId/targets`
+- `GET /issues/:issueId/linked-conversations`
+- `GET /goals/:goalId/linked-conversations`
+- `GET /projects/:projectId/linked-conversations`
+
+Conversation REST contract notes:
+
+- conversation list/create remain company-scoped under `/companies/:companyId/...`
+- `GET /companies/:companyId/conversations` base query contract is:
+  - `status?: "active" | "archived" | "all"`
+  - `limit?: number`
+  - default `status = "active"`
+  - default `limit = 50`
+  - maximum `limit = 100`
+  - results ordered by latest activity descending using:
+    - primary sort `updated_at desc`
+    - tie-break `id desc`
+- conversation summary rows must include the list fields the board UI depends on:
+  - `id`
+  - `companyId`
+  - `title`
+  - `status`
+  - `participants`
+  - `latestMessageSequence`
+  - `latestMessageAt`
+  - `unreadCount`
+  - `createdAt`
+  - `updatedAt`
+- `unreadCount` is the unread visible-message count for the requesting actor, not a boolean unread flag
+- `unreadCount` is derived from the actor-scoped conversation read state using message sequences greater than that actor's `last_read_sequence`
+- direct conversation routes remain object-addressed and must enforce company access plus participant-scoped agent visibility
+- `GET /conversations/:conversationId` returns conversation detail and embeds:
+  - `viewerReadState`
+  - `costSummary`
+- embedded `costSummary` includes:
+  - `spendCents`
+  - `inputTokens`
+  - `outputTokens`
+  - `runCount`
+  - `lastOccurredAt`
+- `GET /conversations/:conversationId/messages` base query contract is:
+  - `beforeSequence?: number`
+  - `limit?: number`
+  - default `limit = 50`
+  - maximum `limit = 100`
+  - `beforeSequence` is an exclusive upper bound for backward pagination
+  - when `beforeSequence` is absent, return the latest visible window of up to `limit` messages
+  - returned messages are sorted by `sequence asc`
+- the base message-page response includes:
+  - `conversationId`
+  - `messages`
+  - `hasMoreBefore`
+  - `hasMoreAfter`
+- deep-inspection message query modes such as text search, target filtering, and around-message retrieval are additional public contract surface and must be added to this section in the same change when they are introduced
+- agent-facing linked-conversation target routes must enforce both conversation visibility and agent-scoped link ownership
+- no separate `/conversations/:conversationId/costs` route is added in this version
+
+## 10.7 Approvals
 
 - `GET /companies/:companyId/approvals?status=pending`
 - `POST /companies/:companyId/approvals`
 - `POST /approvals/:approvalId/approve`
 - `POST /approvals/:approvalId/reject`
 
-## 10.7 Cost and Budgets
+## 10.8 Cost and Budgets
 
 - `POST /companies/:companyId/cost-events`
 - `GET /companies/:companyId/costs/summary`
@@ -524,7 +751,7 @@ Server behavior:
 - `PATCH /companies/:companyId/budgets`
 - `PATCH /agents/:agentId/budgets`
 
-## 10.8 Activity and Dashboard
+## 10.9 Activity and Dashboard
 
 - `GET /companies/:companyId/activity`
 - `GET /companies/:companyId/dashboard`
@@ -536,7 +763,7 @@ Dashboard payload must include:
 - month-to-date spend and budget utilization
 - pending approvals count
 
-## 10.9 Error Semantics
+## 10.10 Error Semantics
 
 - `400` validation error
 - `401` unauthenticated
@@ -697,16 +924,34 @@ Materialized rollups can be added later if query latency exceeds targets.
 
 ## 14. UI Requirements (Board App)
 
-V1 UI routes:
+V1 board pages mount under the company-prefixed route tree.
+Company selection also exists in UI state, but the canonical board URL contract is:
 
-- `/` dashboard
-- `/companies` company list/create
-- `/companies/:id/org` org chart and agent status
-- `/companies/:id/tasks` task list/kanban
-- `/companies/:id/agents/:agentId` agent detail
-- `/companies/:id/costs` cost and budget dashboard
-- `/companies/:id/approvals` pending/history approvals
-- `/companies/:id/activity` audit/event stream
+- `/` redirects into the selected company board route
+- `/:companyPrefix/dashboard`
+- `/:companyPrefix/inbox`
+- `/:companyPrefix/inbox/recent`
+- `/:companyPrefix/inbox/unread`
+- `/:companyPrefix/inbox/all`
+- `/:companyPrefix/issues`
+- `/:companyPrefix/issues/:issueId`
+- `/:companyPrefix/projects`
+- `/:companyPrefix/projects/:projectId`
+- `/:companyPrefix/projects/:projectId/issues`
+- `/:companyPrefix/goals`
+- `/:companyPrefix/goals/:goalId`
+- `/:companyPrefix/conversations`
+- `/:companyPrefix/conversations/:conversationId`
+- `/:companyPrefix/org`
+- `/:companyPrefix/agents`
+- `/:companyPrefix/agents/:agentId`
+- `/:companyPrefix/approvals`
+- `/:companyPrefix/approvals/pending`
+- `/:companyPrefix/approvals/all`
+- `/:companyPrefix/costs`
+- `/:companyPrefix/activity`
+
+If older unprefixed board URLs are retained during transition, they are redirect-only compatibility shims, not the primary route contract.
 
 Required UX behaviors:
 
@@ -858,10 +1103,12 @@ V1 supports company import/export using a portable package contract:
 
 Export/import behavior in V1:
 
+- export includes company metadata and/or agents based on selection
 - export emits a clean vendor-neutral markdown package plus `.paperclip.yaml`
 - projects and starter tasks are opt-in export content rather than default package content
 - export strips environment-specific paths (`cwd`, local instruction file paths, inline prompt duplication)
-- export never includes secret values; env inputs are reported as portable declarations instead
+- export never includes secret values; secret requirements are reported as portable declarations
+- export/import intentionally excludes first-class conversations and conversation-derived operational state in V1, including participants, messages, refs, target links, suppressions, derived memory, read states, conversation-scoped wakeups, and conversation-scoped cost data
 - import supports target modes:
   - create a new company
   - import into an existing company

@@ -4,6 +4,7 @@ summary: Step-by-step heartbeat procedure for agents
 ---
 
 Every agent follows the same heartbeat procedure on each wake. This is the core contract between agents and Paperclip.
+The task-handling steps below describe the issue-scoped path. The canonical run-scope signal is `PAPERCLIP_TASK_KEY`; the issue-specific steps apply when it resolves to `issue:<issueId>` (or when the legacy issue-only alias `PAPERCLIP_TASK_ID` is still present during migration).
 
 ## The Steps
 
@@ -40,7 +41,7 @@ Results are sorted by priority. This is your inbox.
 
 - Work on `in_progress` tasks first, then `todo`
 - Skip `blocked` unless you can unblock it
-- If `PAPERCLIP_TASK_ID` is set and assigned to you, prioritize it
+- If `PAPERCLIP_TASK_KEY` resolves to `issue:<issueId>` (or the legacy `PAPERCLIP_TASK_ID` alias is set) and that issue is assigned to you, prioritize it
 - If woken by a comment mention, read that comment thread first
 
 ### Step 5: Checkout

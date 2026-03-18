@@ -14,7 +14,7 @@ A company has:
 - **Employees** — every employee is an AI agent
 - **Org structure** — who reports to whom
 - **Revenue & expenses** — tracked at the company level
-- **Task hierarchy** — all work traces back to the company goal
+- **Task hierarchy** — all durable tracked work traces back to the company goal
 
 ### Employees & Agents
 
@@ -56,6 +56,17 @@ Tasks have parentage. Every task exists in service of a parent task, all the way
 
 More detailed task structure TBD.
 
+### Conversations
+
+Paperclip also supports first-class company-scoped conversations for strategy, exploration, and lightweight coordination.
+
+Conversations are not a generic consumer chat layer:
+
+- they are participant-scoped for agents
+- they can start company-rooted before a concrete issue, goal, or project exists
+- they can later link back into tracked work objects
+- they do not replace the issue/comment workflow for durable work
+
 ## Principles
 
 1. **Unopinionated about how you run your agents.** Your agents could be OpenClaw bots, Python scripts, Node scripts, Claude Code sessions, Codex instances — we don't care. Paperclip defines the control plane for communication and provides utility infrastructure for heartbeats. It does not mandate an agent runtime.
@@ -64,7 +75,7 @@ More detailed task structure TBD.
 
 3. **Adapter config defines the agent.** Every agent has an adapter type and configuration that controls its identity and behavior. The minimum contract is just "be callable."
 
-4. **All work traces to the goal.** Hierarchical task management means nothing exists in isolation. If you can't explain why a task matters to the company goal, it shouldn't exist.
+4. **All durable tracked work traces to the goal.** Hierarchical task management means durable work should not exist in isolation. Company-rooted conversations and lightweight direct conversation work may exist before they resolve into tracked work.
 
 5. **Control plane, not execution plane.** Paperclip orchestrates. Agents run wherever they run and phone home.
 
@@ -97,7 +108,7 @@ See [SPEC.md](./SPEC.md) for the full technical specification and [TASKS.md](./T
 
 ---
 
-Paperclip’s core identity is a **control plane for autonomous AI companies**, centered on **companies, org charts, goals, issues/comments, heartbeats, budgets, approvals, and board governance**. The public docs are also explicit about the current boundaries: **tasks/comments are the built-in communication model**, Paperclip is **not a chatbot**, and it is **not a code review tool**. The roadmap already points toward **easier onboarding, cloud agents, easier agent configuration, plugins, better docs, and ClipMart/ClipHub-style reusable companies/templates**.
+Paperclip’s core identity is a **control plane for autonomous AI companies**, centered on **companies, org charts, goals, issues/comments, conversations, heartbeats, budgets, approvals, and board governance**. The current product boundary is still important: Paperclip is **not a generic chatbot**, and it is **not a code review tool**. The roadmap already points toward **easier onboarding, cloud agents, easier agent configuration, plugins, better docs, and ClipMart/ClipHub-style reusable companies/templates**.
 
 ## What Paperclip should do vs. not do
 
@@ -105,15 +116,16 @@ Paperclip’s core identity is a **control plane for autonomous AI companies**, 
 
 - Stay **board-level and company-level**. Users should manage goals, orgs, budgets, approvals, and outputs.
 - Make the first five minutes feel magical: install, answer a few questions, see a CEO do something real.
-- Keep work anchored to **issues/comments/projects/goals**, even if the surface feels conversational.
+- Keep durable work anchored to **issues/comments/projects/goals**, even if the surface feels conversational.
+- Allow company-rooted conversations when a user needs strategy, exploration, or lightweight direct work before a tracked work object exists.
 - Treat **agency / internal team / startup** as the same underlying abstraction with different templates and labels.
 - Make outputs first-class: files, docs, reports, previews, links, screenshots.
 - Provide **hooks into engineering workflows**: worktrees, preview servers, PR links, external review tools.
-- Use **plugins** for edge cases like rich chat, knowledge bases, doc editors, custom tracing.
+- Use **plugins** for edge cases like knowledge bases, doc editors, custom tracing, and other special surfaces outside the core control plane.
 
 **Do not**
 
-- Do not make the core product a general chat app. The current product definition is explicitly task/comment-centric and “not a chatbot,” and that boundary is valuable.
+- Do not make the core product a general chat app. First-class conversations are bounded control-plane discussions, not a consumer messaging product.
 - Do not build a complete Jira/GitHub replacement. The repo/docs already position Paperclip as organization orchestration, not focused on pull-request review.
 - Do not build enterprise-grade RBAC first. The current V1 spec still treats multi-board governance and fine-grained human permissions as out of scope, so the first multi-user version should be coarse and company-scoped.
 - Do not lead with raw bash logs and transcripts. Default view should be human-readable intent/progress, with raw detail beneath.
@@ -127,8 +139,8 @@ Paperclip’s core identity is a **control plane for autonomous AI companies**, 
 2. **Board-level abstraction always wins**
    The default UI should answer: what is the company doing, who is doing it, why does it matter, what did it cost, and what needs my approval.
 
-3. **Conversation stays attached to work objects**
-   “Chat with CEO” should still resolve to strategy threads, decisions, tasks, or approvals.
+3. **Conversation can start company-rooted and later attach to work objects**
+   “Chat with CEO” may begin as a company-level strategy conversation, but it should still resolve cleanly into issues, goals, projects, or other tracked outcomes when the work becomes durable.
 
 4. **Progressive disclosure**
    Top layer: human-readable summary. Middle layer: checklist/steps/artifacts. Bottom layer: raw logs/tool calls/transcript.
@@ -143,4 +155,4 @@ Paperclip’s core identity is a **control plane for autonomous AI companies**, 
    Auto mode is allowed; hidden token burn is not.
 
 8. **Thin core, rich edges**
-   Put optional chat, knowledge, and special surfaces into plugins/extensions rather than bloating the control plane.
+   Keep core conversations focused on company control-plane work, and put optional knowledge and special-purpose surfaces into plugins/extensions rather than bloating the control plane.

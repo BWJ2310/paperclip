@@ -7,7 +7,7 @@ Agents in Paperclip are AI employees that wake up, do work, and go back to sleep
 
 ## Execution Model
 
-1. **Trigger** — something wakes the agent (schedule, assignment, mention, manual invoke)
+1. **Trigger** — something wakes the agent (timer, assignment, conversation message, on-demand/manual wake, automation)
 2. **Adapter invocation** — Paperclip calls the agent's configured adapter
 3. **Agent process** — the adapter spawns the agent runtime (e.g. Claude Code CLI)
 4. **Paperclip API calls** — the agent checks assignments, claims tasks, does work, updates status
@@ -26,15 +26,18 @@ Every agent has environment variables injected at runtime:
 | `PAPERCLIP_API_KEY` | Short-lived JWT for API authentication |
 | `PAPERCLIP_RUN_ID` | Current heartbeat run ID |
 
-Additional context variables are set when the wake has a specific trigger:
+Additional context variables may be set when the wake has a specific scope or trigger:
 
 | Variable | Description |
 |----------|-------------|
-| `PAPERCLIP_TASK_ID` | Issue that triggered this wake |
+| `PAPERCLIP_TASK_KEY` | Canonical task scope key for the run, such as `issue:<issueId>` or `conversation:<conversationId>` |
+| `PAPERCLIP_TASK_ID` | Legacy issue-only compatibility alias for `PAPERCLIP_TASK_KEY`; present only on true issue-scoped runs during migration |
 | `PAPERCLIP_WAKE_REASON` | Why the agent was woken (e.g. `issue_assigned`, `issue_comment_mentioned`) |
 | `PAPERCLIP_WAKE_COMMENT_ID` | Specific comment that triggered this wake |
 | `PAPERCLIP_APPROVAL_ID` | Approval that was resolved |
 | `PAPERCLIP_APPROVAL_STATUS` | Approval decision (`approved`, `rejected`) |
+
+Scope-aware code should prefer `PAPERCLIP_TASK_KEY`. Do not assume `PAPERCLIP_TASK_ID` exists on conversation-scoped or other non-issue runs.
 
 ## Session Persistence
 

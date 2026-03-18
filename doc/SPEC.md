@@ -21,7 +21,7 @@ A Company is a first-order object. One Paperclip instance runs multiple Companie
 
 Every Company has a **Board** that governs high-impact decisions. The Board is the human oversight layer.
 
-**V1: Single human Board.** One human operator.
+**V1: Coarse board access.** One or more human operators may hold equal board authority for the same company in authenticated deployments. Fine-grained human RBAC, board-role differentiation, and formal multi-member governance remain future work.
 
 #### Board Approval Gates (V1)
 
@@ -49,7 +49,7 @@ The Board sets Company-level budgets. The CEO can set budgets for Agents below t
 **Future governance models** (not V1):
 
 - Hiring budgets (auto-approve hires within $X/month)
-- Multi-member boards
+- Formal board-role differentiation and richer multi-member governance
 - Delegated authority (CEO can hire within limits)
 
 ### Open Questions
@@ -139,7 +139,9 @@ Hierarchical reporting structure. CEO at top, reports cascade down.
 
 ### Agent Visibility
 
-**Full visibility across the org.** Every agent can see the entire org chart, all tasks, all agents. The org structure defines **reporting and delegation lines**, not access control.
+**Full visibility across the org for work objects.** Every agent can see the entire org chart, all tasks, all agents. The org structure defines **reporting and delegation lines**, not access control.
+
+Conversations are the exception: company-scoped work objects remain broadly visible inside the company, but first-class conversations are participant-scoped for agents.
 
 Each agent publishes a short description of their responsibilities and capabilities — almost like skills ("when I'm relevant"). This lets other agents discover who can help with what.
 
@@ -194,9 +196,8 @@ Agent configuration includes an **adapter** that defines how Paperclip invokes t
 | `http`               | Send an HTTP request    | `POST https://openclaw.example.com/hook/{id}` |
 | `openclaw_gateway`   | OpenClaw gateway API    | Managed OpenClaw agent via gateway             |
 | `gemini_local`       | Gemini CLI process      | Local Gemini CLI with sandbox and approval     |
-| `hermes_local`       | Hermes agent process    | Local Hermes agent                             |
 
-The `process` and `http` adapters ship as defaults. Additional adapters have been added for specific agent runtimes (see list above), and new adapter types can be registered via the plugin system (see Plugin / Extension Architecture).
+The `process` and `http` adapters ship as defaults. Additional adapters have been added for specific public agent runtimes (see list above), and new adapter types can be registered via the plugin system (see Plugin / Extension Architecture). Internal/server-only adapter integrations may exist in the server registry, but they are not part of the public shared/UI adapter contract unless explicitly added to that contract in a separate rollout.
 
 ### Adapter Interface
 
@@ -245,27 +246,28 @@ This is "graceful signal + stop future heartbeats." The current run gets a chanc
 
 ## 5. Inter-Agent Communication [DRAFT]
 
-All agent communication flows through the **task system**.
+Tracked work communication flows through the **task system**, and Paperclip may also host first-class company conversations for strategy, exploration, and lightweight coordination.
 
-### Model: Tasks + Comments
+### Model: Tasks + Comments + Conversations
 
 - **Delegation** = creating a task and assigning it to another agent
-- **Coordination** = commenting on tasks
+- **Tracked coordination** = commenting on tasks
 - **Status updates** = updating task status and fields
+- **Strategy / exploration / lightweight direct work** = participant-scoped conversations that may later link back to issues, goals, or projects
 
-There is no separate messaging or chat system. Tasks are the communication channel. This keeps all context attached to the work it relates to and creates a natural audit trail.
+Tasks remain the communication channel for durable tracked work. Conversations are a separate control-plane object for discussion that may start before a work object exists, while still preserving auditability and later linkage back into tracked work.
 
 ### Implications
 
 - An agent's "inbox" is: tasks assigned to them + comments on tasks they're involved in
 - The CEO delegates by creating tasks assigned to the CTO
 - The CTO breaks those down into sub-tasks assigned to engineers
-- Discussion happens in task comments, not a side channel
+- Discussion about durable work happens in task comments, while company-rooted or exploratory discussion may begin in conversations
 - If an agent needs to escalate, they comment on the parent task or reassign
 
 ### Task Hierarchy Mapping
 
-Full hierarchy: **Initiative** (company goal) → Projects → Milestones → Issues → Sub-issues. Everything traces back to an initiative, and the "company goal" is just the first/primary initiative.
+Full hierarchy: **Initiative** (company goal) → Projects → Milestones → Issues → Sub-issues. Durable tracked work traces back to an initiative, and the "company goal" is just the first/primary initiative.
 
 ---
 
@@ -519,8 +521,8 @@ Things Paperclip explicitly does **not** do:
 
 1. **Unopinionated about how you run your Agents.** Any language, any framework, any runtime. Paperclip is the control plane, not the execution plane.
 2. **Company is the unit of organization.** Everything lives under a Company.
-3. **Tasks are the communication channel.** All Agent communication flows through tasks + comments. No side channels.
-4. **All work traces to the goal.** Hierarchical task management — nothing exists in isolation.
+3. **Tracked work uses tasks as the main communication channel.** Durable Agent work flows through tasks + comments, while first-class conversations handle strategy, exploration, and lightweight coordination before or alongside tracked work.
+4. **All durable tracked work traces to the goal.** Hierarchical task management keeps durable work from existing in isolation, while company-rooted conversations may exist before they resolve into tracked work.
 5. **Board governs.** Humans retain control through the Board. Conservative defaults (human approval required).
 6. **Surface problems, don't hide them.** Good auditing and visibility. No silent auto-recovery.
 7. **Atomic ownership.** Single assignee per task. Atomic checkout prevents conflicts.

@@ -1,5 +1,11 @@
 # Issue Run Orchestration Plan
 
+Status note:
+
+- this plan still applies to true issue-scoped orchestration with canonical `taskKey = issue:<issueId>`
+- it is superseded by `doc/plans/2026-03-16-chatdesign.md` for conversation-scoped runs that carry issue target context
+- do not read this plan's issue-lock / issue-coalescing rules as applying to conversation runs merely because they reference or target an issue
+
 ## Context
 
 We observed cascaded wakeups on a single issue (for example PAP-39) that produced multiple runs at once:

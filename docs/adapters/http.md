@@ -41,7 +41,7 @@ The webhook receives a JSON payload with:
   "agentId": "...",
   "companyId": "...",
   "context": {
-    "taskId": "...",
+    "taskKey": "...",
     "wakeReason": "...",
     "commentId": "..."
   }

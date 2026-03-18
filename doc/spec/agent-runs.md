@@ -30,7 +30,7 @@ The following intentions are explicitly preserved in this spec:
 11. Status changes must live-update across task and agent views via server push.
 12. Wakeup triggers should be centralized by a heartbeat/wakeup service with at least:
    - timer interval
-   - wake on task assignment
+   - a non-timer wake policy covering task assignment and conversation reply routing
    - explicit ping/request
 
 ## 3. Goals and Non-Goals
@@ -81,7 +81,7 @@ The subsystem introduces six cooperating components:
    - Exposes capability metadata and config validation.
 
 2. `Wakeup Coordinator`
-   - Single entrypoint for all wakeups (`timer`, `assignment`, `on_demand`, `automation`).
+   - Single entrypoint for all wakeups (`timer`, `assignment`, `on_demand`, `automation`, `conversation_message`).
    - Applies dedupe/coalescing and queue rules.
 
 3. `Run Executor`
@@ -104,7 +104,7 @@ The subsystem introduces six cooperating components:
 
 Control flow (happy path):
 
-1. Trigger arrives (`timer`, `assignment`, `on_demand`, or `automation`).
+1. Trigger arrives (`timer`, `assignment`, `on_demand`, `automation`, or `conversation_message`).
 2. Wakeup coordinator enqueues/merges wake request.
 3. Executor claims request, creates run row, marks agent `running`.
 4. Adapter executes, emits status/log/usage events.
@@ -132,7 +132,7 @@ interface AdapterInvokeInput {
   companyId: string;
   agentId: string;
   runId: string;
-  wakeupSource: "timer" | "assignment" | "on_demand" | "automation";
+  wakeupSource: "timer" | "assignment" | "on_demand" | "automation" | "conversation_message";
   triggerDetail?: "manual" | "ping" | "callback" | "system";
   cwd: string;
   prompt: string;
@@ -337,6 +337,7 @@ Supported sources:
 2. `assignment`: issue assigned/reassigned to agent.
 3. `on_demand`: explicit wake request path (board/manual click or API ping).
 4. `automation`: non-interactive wake path (external callback or internal system automation).
+5. `conversation_message`: conversation reply-routing wake path.
 
 ## 8.2 Central API
 
@@ -366,7 +367,7 @@ No source invokes adapters directly.
    - preserve latest reason/source metadata
 3. Queue is DB-backed for restart safety.
 4. Coordinator uses FIFO by `requested_at`, with optional priority:
-   - `on_demand` > `assignment` > `timer`/`automation`
+   - `conversation_message` / `on_demand` > `assignment` > `timer` / `automation`
 
 ## 8.4 Agent heartbeat policy fields
 
@@ -377,9 +378,7 @@ Agent-level control-plane settings (not adapter-specific):
   "heartbeat": {
     "enabled": true,
     "intervalSec": 300,
-    "wakeOnAssignment": true,
-    "wakeOnOnDemand": true,
-    "wakeOnAutomation": true,
+    "wakeOnSignal": true,
     "cooldownSec": 10
   }
 }
@@ -389,18 +388,17 @@ Defaults:
 
 - `enabled: true`
 - `intervalSec: null` (no timer until explicitly set) or product default `300` if desired globally
-- `wakeOnAssignment: true`
-- `wakeOnOnDemand: true`
-- `wakeOnAutomation: true`
+- `wakeOnSignal: true`
 
 ## 8.5 Trigger integration rules
 
 1. Timer checks run on server worker interval and enqueue due agents.
-2. Issue assignment mutation enqueues wakeup when assignee changes and target agent has `wakeOnAssignment=true`.
-3. On-demand endpoint enqueues wakeup with `source=on_demand` and `triggerDetail=manual|ping` when `wakeOnOnDemand=true`.
-4. Callback/system automations enqueue wakeup with `source=automation` and `triggerDetail=callback|system` when `wakeOnAutomation=true`.
-5. Paused/terminated agents do not receive new wakeups.
-6. Hard budget-stopped agents do not receive new wakeups.
+2. Issue assignment mutation enqueues wakeup when assignee changes and target agent has `wakeOnSignal=true`.
+3. On-demand endpoint enqueues wakeup with `source=on_demand` and `triggerDetail=manual|ping` when `wakeOnSignal=true`.
+4. Callback/system automations enqueue wakeup with `source=automation` and `triggerDetail=callback|system` when `wakeOnSignal=true`.
+5. Conversation reply routing enqueues wakeup with `source=conversation_message` when `wakeOnSignal=true`.
+6. Paused/terminated agents do not receive new wakeups.
+7. Hard budget-stopped agents do not receive new wakeups.
 
 ## 9. Persistence Model
 
@@ -412,9 +410,8 @@ All tables remain company-scoped.
 2. Keep `adapter_config` as adapter-owned config (CLI flags, cwd, prompt templates, env overrides).
 3. Add `runtime_config` jsonb for control-plane scheduling policy:
    - heartbeat enable/interval
-   - wake-on-assignment
-   - wake-on-on-demand
-   - wake-on-automation
+   - one non-timer wake policy flag: `wakeOnSignal`
+   - `wakeOnSignal` governs assignment, on-demand, automation, and conversation-message wakes
    - cooldown
 
 This separation keeps adapter config runtime-agnostic while allowing the heartbeat service to apply consistent scheduling logic.
@@ -464,7 +461,7 @@ Queue + audit for wakeups.
 - `id` uuid pk
 - `company_id` uuid fk not null
 - `agent_id` uuid fk not null
-- `source` text not null (`timer|assignment|on_demand|automation`)
+- `source` text not null (`timer|assignment|on_demand|automation|conversation_message`)
 - `trigger_detail` text null (`manual|ping|callback|system`)
 - `reason` text null
 - `payload` jsonb null
@@ -474,9 +471,18 @@ Queue + audit for wakeups.
 - `requested_by_actor_id` text null
 - `idempotency_key` text null
 - `run_id` uuid fk `heartbeat_runs.id` null
+- `conversation_id` uuid fk `conversations.id` null
+- `conversation_message_id` uuid fk `conversation_messages.id` null
+- `conversation_message_sequence` bigint null
+- `response_mode` text null (`optional|required`)
 - `requested_at` timestamptz not null
 - `claimed_at` timestamptz null
 - `finished_at` timestamptz null
+
+Conversation-wake rule:
+
+- when `source = conversation_message`, the persisted wake row carries `conversation_id`, `conversation_message_id`, `conversation_message_sequence`, and `response_mode`
+- after coalescing, `conversation_message_sequence` on the surviving wake row advances to the newest triggering message used for required-reply evaluation
 - `error` text null
 
 ## 9.3 New table: `heartbeat_run_events`
@@ -592,39 +598,69 @@ Primary transport: websocket channel per company.
 
 - Endpoint: `GET /api/companies/:companyId/events/ws`
 - Auth: board session or agent API key (company-bound)
+- Delivery is actor-aware even though the websocket is company-scoped:
+  - board viewers may receive all same-company company-visible events
+  - participant-scoped conversation events are filtered by the connected actor before delivery
 
 ## 11.2 Event envelope
 
 ```json
 {
-  "eventId": "uuid-or-monotonic-id",
+  "id": 123,
   "companyId": "uuid",
-  "type": "heartbeat.run.status",
-  "entityType": "heartbeat_run",
-  "entityId": "uuid",
-  "occurredAt": "2026-02-17T12:00:00Z",
+  "type": "conversation.message_posted",
+  "createdAt": "2026-02-17T12:00:00Z",
+  "audience": {
+    "scope": "conversationParticipants",
+    "conversationId": "uuid",
+    "participantAgentIds": ["agent-1", "agent-2"]
+  },
   "payload": {}
 }
 ```
 
+Envelope rules:
+
+- the base transport shape is `LiveEvent`
+- `audience.scope = "company" | "conversationParticipants"`
+- company-visible events use:
+  - `audience.scope = "company"`
+  - `audience.conversationId = null`
+  - `audience.participantAgentIds = null`
+- participant-scoped conversation events use:
+  - `audience.scope = "conversationParticipants"`
+  - `audience.conversationId = <conversationId>`
+  - `audience.participantAgentIds = [...]`
+
 ## 11.3 Required event types
 
-1. `agent.status.changed`
+1. `agent.status`
 2. `heartbeat.run.queued`
-3. `heartbeat.run.started`
-4. `heartbeat.run.status` (short color+message updates)
+3. `heartbeat.run.status`
+4. `heartbeat.run.event` (short run timeline/status updates)
 5. `heartbeat.run.log` (optional live chunk stream; full persistence handled by `RunLogStore`)
-6. `heartbeat.run.finished`
-7. `issue.updated`
-8. `issue.comment.created`
-9. `activity.appended`
+6. `activity.logged`
+7. `conversation.created`
+8. `conversation.updated`
+9. `conversation.participant_added`
+10. `conversation.participant_removed`
+11. `conversation.message_posted`
+12. `conversation.context_linked`
+13. `conversation.context_unlinked`
+
+Contract rules:
+
+- `conversation.*` is the primary realtime family for conversation list/detail views
+- filtered `activity.logged` remains the generic company activity-feed event, not the primary conversation message/participant/context-link contract
+- do not publish participant-scoped conversation updates under older generic names such as `activity.appended`
 
 ## 11.4 UI behavior
 
 1. Agent detail view updates run timeline live.
-2. Task board reflects assignment/status/comment changes from agent activity without refresh.
-3. Org/agent list reflects status changes live.
-4. If websocket disconnects, client falls back to short polling until reconnect.
+2. Conversation list and detail views react to dedicated `conversation.*` events without refresh.
+3. Task and activity surfaces reflect filtered company-visible updates without refresh.
+4. Org/agent list reflects status changes live.
+5. If websocket disconnects, client falls back to short polling until reconnect.
 
 ## 12. Error Handling and Diagnostics
 
@@ -742,7 +778,7 @@ All wakeup/run state mutations must create `activity_log` entries:
 1. Agent with `claude-local` or `codex-local` can run, exit, and persist run result.
 2. Session parameters are persisted per task scope and reused automatically for same-task resumes.
 3. Token usage is persisted per run and accumulated per agent runtime state.
-4. Timer, assignment, on-demand, and automation wakeups all enqueue through one coordinator.
+4. Timer, assignment, on-demand, automation, and conversation-message wakeups all enqueue through one coordinator.
 5. Pause/terminate interrupts running local process and prevents new wakeups.
 6. Browser receives live websocket updates for run status/logs and task/agent changes.
 7. Failed runs expose rich CLI diagnostics in UI with excerpts immediately available and full log retrievable via `RunLogStore`.

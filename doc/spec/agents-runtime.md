@@ -19,12 +19,13 @@ Each heartbeat:
 
 ## 2. When an agent wakes up
 
-An agent can be woken up in four ways:
+An agent can be woken up in five ways:
 
 - `timer`: scheduled interval (for example every 5 minutes)
 - `assignment`: when work is assigned/checked out to that agent
 - `on_demand`: manual wakeup (button/API)
 - `automation`: system-triggered wakeup for future automations
+- `conversation_message`: a conversation message that routes a reply wake to that agent
 
 If an agent is already running, new wakeups are merged (coalesced) instead of launching duplicate runs.
 
@@ -47,9 +48,7 @@ In agent runtime settings, configure heartbeat policy:
 
 - `enabled`: allow scheduled heartbeats
 - `intervalSec`: timer interval (0 = disabled)
-- `wakeOnAssignment`: wake when assigned work
-- `wakeOnOnDemand`: allow ping-style on-demand wakeups
-- `wakeOnAutomation`: allow system automation wakeups
+- `wakeOnSignal`: allow non-timer wakes such as assignments, on-demand wakes, automations, and conversation-message wakes
 
 ## 3.3 Working directory and execution limits
 
@@ -71,7 +70,7 @@ Templates support variables like `{{agent.id}}`, `{{agent.name}}`, and run conte
 ## 4. Session resume behavior
 
 Paperclip stores resumable session state per `(agent, taskKey, adapterType)`.
-`taskKey` is derived from wakeup context (`taskKey`, `taskId`, or `issueId`).
+`taskKey` is the explicit canonical scope key for the run, such as `issue:<issueId>` or `conversation:<conversationId>`.
 
 - A heartbeat for the same task key reuses the previous session for that task.
 - Different task keys for the same agent keep separate session state.
@@ -120,8 +119,8 @@ If the connection drops, the UI reconnects automatically.
 ## 7.2 Event-driven loop (less constant polling)
 
 1. Disable timer or set a long interval
-2. Keep wake-on-assignment enabled
-3. Use on-demand wakeups for manual nudges
+2. Keep `wakeOnSignal` enabled for non-timer wakes
+3. Use on-demand wakeups for manual nudges under `wakeOnSignal`
 
 ## 7.3 Safety-first loop
 

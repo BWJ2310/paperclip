@@ -49,7 +49,7 @@ Request body matches agent create shape:
     "heartbeat": {
       "enabled": true,
       "intervalSec": 300,
-      "wakeOnDemand": true
+      "wakeOnSignal": true
     }
   },
   "budgetMonthlyCents": 0,

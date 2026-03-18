@@ -55,7 +55,7 @@ Core fields: ...
 Key responsibilities:
 
 1. Read config using safe helpers (`asString`, `asNumber`, etc.)
-2. Build environment with `buildPaperclipEnv(agent)` plus context vars
+2. Build environment with `buildPaperclipEnv(agent)` plus canonical context vars such as structured `taskKey` and `PAPERCLIP_TASK_KEY`; during migration, true issue-scoped runs may also carry legacy `PAPERCLIP_TASK_ID` as a compatibility alias
 3. Resolve session state from `runtime.sessionParams`
 4. Render prompt with `renderTemplate(template, data)`
 5. Spawn the process with `runChildProcess()` or call via `fetch()`

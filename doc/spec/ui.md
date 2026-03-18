@@ -126,12 +126,14 @@ Section header: **Work** (collapsible, with a chevron toggle)
     Issues
     Projects
     Goals
+    Conversations
     Views
 ```
 
 - **Issues** — main task list for the selected company. This is the workhorse view.
 - **Projects** — project list. Projects group issues and link to goals.
 - **Goals** — company goal hierarchy.
+- **Conversations** — company-scoped discussion list for board users, with per-conversation unread message counts and linked context into issues, goals, and projects. This unread state does not feed the Inbox badge or any other global sidebar badge in this version.
 - **Views** — saved filter/sort configurations (e.g., "Critical bugs", "Unassigned tasks", "CEO's tasks"). Users can create, name, and pin custom views here.
 
 ### 3.4 Company Section
@@ -175,6 +177,7 @@ Each nav item has a distinctive icon (lucide-react):
 | Issues | `CircleDot` |
 | Projects | `Hexagon` |
 | Goals | `Target` |
+| Conversations | `MessageSquare` |
 | Views | `LayoutList` |
 | Dashboard | `LayoutDashboard` |
 | Org Chart | `GitBranch` |
@@ -646,7 +649,7 @@ Clicking a row navigates to agent detail.
 - Reports to: [clickable agent name]
 - Direct reports: list of agents
 
-**Heartbeats tab:** table of heartbeat runs — time, source (manual/scheduler), status, duration, error (if any). Invoke button at top.
+**Heartbeats tab:** table of heartbeat runs — time, source (`timer` / `assignment` / `on_demand` / `automation` / `conversation_message`), status, duration, error (if any). Invoke button at top.
 
 **Issues tab:** issues assigned to this agent.
 
@@ -834,6 +837,7 @@ Items are grouped by category, with the most actionable items first:
 - Approvals disappear from the inbox once approved/rejected (they move to the resolved state).
 - Alerts disappear when the underlying condition is resolved (agent resumed, budget increased).
 - The sidebar badge count reflects total unresolved inbox items.
+- Conversation unread state is separate from the inbox and does not change the sidebar badge count in this version.
 - Inbox is computed from live data (pending approvals query + alert conditions), not a separate notification table. This keeps it simple for V1.
 
 ---
@@ -936,30 +940,45 @@ Build on top of shadcn/ui components with these customizations:
 
 ## 21. URL Structure
 
-All routes are company-scoped after company selection (company context stored in React context, not URL):
+Board pages mount under the existing `/:companyPrefix/...` route tree.
+Company selection also remains available in React context, but the canonical board URL contract is company-prefixed:
+
+This table is the published board-route contract for the UI. Keep `ui/src/App.tsx` synced to it as routes land; do not regress the published conversation URLs to match older pre-conversation router state.
 
 ```
-/                           → redirects to /dashboard
-/dashboard                  → company dashboard
-/inbox                      → inbox / attention items
-/my-issues                  → board operator's issues
-/issues                     → issue list
-/issues/:issueId            → issue detail
-/projects                   → project list
-/projects/:projectId        → project detail (overview tab)
-/projects/:projectId/issues → project issues
-/goals                      → goal hierarchy
-/goals/:goalId              → goal detail
-/org                        → org chart
-/agents                     → agent list
-/agents/:agentId            → agent detail
-/approvals                  → approval list
-/approvals/:approvalId      → approval detail
-/costs                      → cost dashboard
-/activity                   → activity log
-/companies                  → company management (list/create)
-/settings                   → company settings
+/                           → redirects into the current company board route
+/:companyPrefix/dashboard                  → company dashboard
+/:companyPrefix/inbox                      → redirects to the last-used inbox tab
+/:companyPrefix/inbox/recent               → inbox / recent
+/:companyPrefix/inbox/unread               → inbox / unread
+/:companyPrefix/inbox/all                  → inbox / all
+/:companyPrefix/issues                     → issue list
+/:companyPrefix/issues/:issueId            → issue detail
+/:companyPrefix/projects                   → project list
+/:companyPrefix/projects/:projectId        → project detail (overview tab)
+/:companyPrefix/projects/:projectId/issues → project issues
+/:companyPrefix/goals                      → goal hierarchy
+/:companyPrefix/goals/:goalId              → goal detail
+/:companyPrefix/conversations              → conversation list
+/:companyPrefix/conversations/:conversationId → conversation detail
+/:companyPrefix/org                        → org chart
+/:companyPrefix/agents                     → redirects to `/:companyPrefix/agents/all`
+/:companyPrefix/agents/all                 → agent list
+/:companyPrefix/agents/active              → active agents
+/:companyPrefix/agents/paused              → paused agents
+/:companyPrefix/agents/error               → errored agents
+/:companyPrefix/agents/:agentId            → agent detail
+/:companyPrefix/approvals                  → redirects to `/:companyPrefix/approvals/pending`
+/:companyPrefix/approvals/pending          → approval list (pending)
+/:companyPrefix/approvals/all              → approval list (all)
+/:companyPrefix/approvals/:approvalId      → approval detail
+/:companyPrefix/costs                      → cost dashboard
+/:companyPrefix/activity                   → activity log
+/companies                                 → company management (list/create)
+/:companyPrefix/settings                   → company settings
 ```
+
+If unprefixed board routes remain in the app during transition, they are redirect helpers only and not the canonical route contract.
 
 ---
 

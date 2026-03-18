@@ -1,5 +1,7 @@
 # Agent Chat UI and Issue-Backed Conversations
 
+Status: Superseded for conversation architecture by `doc/plans/2026-03-16-chatdesign.md`
+
 ## Context
 
 `PAP-475` asks two related questions:

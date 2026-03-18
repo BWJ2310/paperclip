@@ -19,12 +19,13 @@ Each heartbeat:
 
 ## 2. When an agent wakes up
 
-An agent can be woken up in four ways:
+An agent can be woken up in five ways:
 
 - `timer`: scheduled interval (for example every 5 minutes)
 - `assignment`: when work is assigned/checked out to that agent
 - `on_demand`: manual wakeup (button/API)
 - `automation`: system-triggered wakeup for future automations
+- `conversation_message`: conversation-triggered wakeup from participant-scoped chat routing
 
 If an agent is already running, new wakeups are merged (coalesced) instead of launching duplicate runs.
 
@@ -47,9 +48,7 @@ In agent runtime settings, configure heartbeat policy:
 
 - `enabled`: allow scheduled heartbeats
 - `intervalSec`: timer interval (0 = disabled)
-- `wakeOnAssignment`: wake when assigned work
-- `wakeOnOnDemand`: allow ping-style on-demand wakeups
-- `wakeOnAutomation`: allow system automation wakeups
+- `wakeOnSignal`: allow non-timer wakes (`assignment`, `on_demand`, `automation`, and `conversation_message`)
 
 ## 3.3 Working directory and execution limits
 
@@ -69,13 +68,23 @@ You can set:
 
 Templates support variables like `{{agent.id}}`, `{{agent.name}}`, and run context values.
 
+## 3.5 Injected run context
+
+Adapters receive canonical run scope through structured `taskKey` context and, when env vars are used, `PAPERCLIP_TASK_KEY`.
+
+- Example task keys: `issue:<issueId>`, `conversation:<conversationId>`
+- During migration, true issue-scoped runs may also set `PAPERCLIP_TASK_ID=<issueId>` as a compatibility alias
+- Conversation-scoped runs do not set `PAPERCLIP_TASK_ID`
+
 ## 4. Session resume behavior
 
-Paperclip stores session IDs for resumable adapters.
+Paperclip stores resumable session state per `(agent, taskKey, adapterType)`.
+`taskKey` is the canonical scope key for the run, such as `issue:<issueId>` or `conversation:<conversationId>`.
 
-- Next heartbeat reuses the saved session automatically.
-- This gives continuity across heartbeats.
-- You can reset a session if context gets stale or confused.
+- A heartbeat for the same task key reuses the previous session for that task.
+- Different task keys for the same agent keep separate session state.
+- If restore fails, adapters should retry once with a fresh session and continue.
+- You can reset all sessions for an agent or reset one task session by task key.
 
 Use session reset when:
 
