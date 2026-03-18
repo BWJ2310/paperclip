@@ -355,6 +355,7 @@ The implementation also has additional cross-layer files on the critical path.
 They are listed here so the rollout does not depend on rediscovering hidden work.
 This checklist is intended to be exhaustive for the currently known rollout-critical files.
 Listing a file here means it is part of the rollout-critical scope and must stay aligned with the plan; it does not necessarily mean that file is still stale at the moment you read this.
+Some entries are planned new files rather than files that already exist in the repo; when that is the case, treat the checklist entry as “create this file in the named location as part of the rollout step that introduces it.”
 If implementation uncovers another producer, consumer, config surface, or doc that is still stale, or that becomes a new rollout-critical dependency, add it here before continuing the rollout.
 
 ### Shared cost and runtime types

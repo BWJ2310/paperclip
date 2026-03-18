@@ -731,7 +731,11 @@ Conversation REST contract notes:
   - `messages`
   - `hasMoreBefore`
   - `hasMoreAfter`
-- deep-inspection message query modes such as text search, target filtering, and around-message retrieval are additional public contract surface and must be added to this section in the same change when they are introduced
+- deep-inspection message query modes are now part of the public contract:
+  - `q?: string` searches visible message bodies
+  - `targetKind?: "issue" | "goal" | "project"` plus `targetId?: uuid` filters to messages with a matching persisted target ref
+  - `aroundMessageId?: uuid` with `before?: number` and `after?: number` returns an anchor-centered visible window for exact-context inspection
+  - `aroundMessageId` is a standalone retrieval mode and does not combine with `beforeSequence`, `q`, or target filtering
 - agent-facing linked-conversation target routes must enforce both conversation visibility and agent-scoped link ownership
 - no separate `/conversations/:conversationId/costs` route is added in this version
 

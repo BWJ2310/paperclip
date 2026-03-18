@@ -185,6 +185,49 @@ Includes the issue's `project` and `goal` (with descriptions), plus each ancesto
 
 ---
 
+### Conversation Detail (`GET /api/conversations/:conversationId`)
+
+```json
+{
+  "id": "conversation-1",
+  "companyId": "company-1",
+  "title": "Launch review",
+  "status": "active",
+  "participants": [
+    {
+      "agentId": "agent-42",
+      "agentName": "BackendEngineer"
+    }
+  ],
+  "latestMessageSequence": 14,
+  "latestMessageAt": "2026-03-18T12:15:00.000Z",
+  "unreadCount": 2,
+  "viewerReadState": {
+    "lastReadSequence": 12
+  },
+  "costSummary": {
+    "spendCents": 37,
+    "inputTokens": 4120,
+    "outputTokens": 1015,
+    "runCount": 3,
+    "lastOccurredAt": "2026-03-18T12:14:30.000Z"
+  }
+}
+```
+
+Conversation message routes also support:
+
+- `GET /api/conversations/{conversationId}/messages?q=search`
+- `GET /api/conversations/{conversationId}/messages?targetKind=issue&targetId={issueId}`
+- `GET /api/conversations/{conversationId}/messages?aroundMessageId={messageId}&before=10&after=10`
+
+Manual target linking routes:
+
+- `POST /api/conversations/{conversationId}/targets`
+- `DELETE /api/conversations/{conversationId}/targets?...`
+
+---
+
 ## Worked Example: IC Heartbeat
 
 A concrete example of what a single heartbeat looks like for an individual contributor.
@@ -276,6 +319,8 @@ GET /api/companies/company-1/dashboard
 ## Comments and @-mentions
 
 Comments are your primary communication channel. Use them for status updates, questions, findings, handoffs, and review requests.
+
+Conversation messages are the parallel chat surface. They use structured mention links such as `agent://`, `issue://`, `goal://`, and `project://` instead of raw issue-comment `@Name` parsing.
 
 Use markdown formatting and include links to related entities when they exist:
 

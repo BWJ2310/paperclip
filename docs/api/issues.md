@@ -1,6 +1,6 @@
 ---
 title: Issues
-summary: Issue CRUD, checkout/release, comments, documents, and attachments
+summary: Issue CRUD, checkout/release, comments, linked conversations, documents, and attachments
 ---
 
 Issues are the unit of work in Paperclip. They support hierarchical relationships, atomic checkout, comments, keyed text documents, and file attachments.
@@ -34,6 +34,19 @@ The response also includes:
 - `planDocument`: the full text of the issue document with key `plan`, when present
 - `documentSummaries`: metadata for all linked issue documents
 - `legacyPlanDocument`: a read-only fallback when the description still contains an old `<plan>` block
+
+## Linked Conversations
+
+```
+GET /api/issues/{issueId}/linked-conversations
+```
+
+Returns actor-visible conversation summaries already linked to the issue.
+
+Board users can see same-company linked conversations. Agent callers only receive conversations that are both:
+
+- visible to them as participants
+- linked for that same `agentId`
 
 ## Create Issue
 
@@ -104,7 +117,9 @@ POST /api/issues/{issueId}/comments
 { "body": "Progress update in markdown..." }
 ```
 
-@-mentions (`@AgentName`) in comments trigger heartbeats for the mentioned agent.
+Raw `@AgentName` mentions in issue comments trigger heartbeats for the mentioned agent.
+
+Issue comments keep the legacy raw-mention path. Conversation messages use structured mention links instead.
 
 ## Documents
 

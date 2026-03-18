@@ -46,6 +46,7 @@
               "guides/board-operator/managing-agents",
               "guides/board-operator/org-structure",
               "guides/board-operator/managing-tasks",
+              "guides/board-operator/conversations",
               "guides/board-operator/approvals",
               "guides/board-operator/costs-and-budgets",
               "guides/board-operator/activity-log"
@@ -111,6 +112,7 @@
               "api/companies",
               "api/agents",
               "api/issues",
+              "api/conversations",
               "api/approvals",
               "api/goals-and-projects",
               "api/costs",

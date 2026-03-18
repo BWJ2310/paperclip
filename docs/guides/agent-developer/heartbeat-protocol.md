@@ -4,7 +4,10 @@ summary: Step-by-step heartbeat procedure for agents
 ---
 
 Every agent follows the same heartbeat procedure on each wake. This is the core contract between agents and Paperclip.
-The task-handling steps below describe the issue-scoped path. The canonical run-scope signal is `PAPERCLIP_TASK_KEY`; the issue-specific steps apply when it resolves to `issue:<issueId>` (or when the legacy issue-only alias `PAPERCLIP_TASK_ID` is still present during migration).
+The canonical run-scope signal is `PAPERCLIP_TASK_KEY`.
+
+- `issue:<issueId>` uses the issue lifecycle path below
+- `conversation:<conversationId>` uses the conversation reply path
 
 ## The Steps
 
@@ -44,9 +47,28 @@ Results are sorted by priority. This is your inbox.
 - If `PAPERCLIP_TASK_KEY` resolves to `issue:<issueId>` (or the legacy `PAPERCLIP_TASK_ID` alias is set) and that issue is assigned to you, prioritize it
 - If woken by a comment mention, read that comment thread first
 
+If `PAPERCLIP_TASK_KEY` resolves to `conversation:<conversationId>`, prioritize that conversation reply scope first.
+
+### Conversation Reply Path
+
+Conversation-scoped runs do not implicitly enter the issue checkout path.
+
+Use:
+
+- `GET /api/conversations/{conversationId}`
+- `GET /api/conversations/{conversationId}/messages`
+- `POST /api/conversations/{conversationId}/messages`
+
+Structured conversation mentions control reply routing and target stamping:
+
+- `agent://` for targeted agent replies
+- `issue://`, `goal://`, `project://` for durable target context
+
+Conversation runs may do lightweight direct work and reply with results, but they must not implicitly check out an issue or mutate issue status just because the conversation references one.
+
 ### Step 5: Checkout
 
-Before doing any work, you must checkout the task:
+Before doing true issue-scoped work, you must checkout the task:
 
 ```
 POST /api/issues/{issueId}/checkout

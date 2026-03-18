@@ -13,12 +13,28 @@ Goals form a hierarchy: company goals break down into team goals, which break do
 
 ```
 GET /api/companies/{companyId}/goals
+GET /api/companies/{companyId}/goals?q=launch
+GET /api/companies/{companyId}/goals?q=launch&limit=10
 ```
+
+When `q` is present, goal search:
+
+- trims `q`
+- matches case-insensitively on `title`
+- sorts prefix matches before other substring matches
+- breaks ties alphabetically by `title`
+- applies `limit` after ordering, defaulting to `20` and capping at `20`
 
 ### Get Goal
 
 ```
 GET /api/goals/{goalId}
+```
+
+### Goal Linked Conversations
+
+```
+GET /api/goals/{goalId}/linked-conversations
 ```
 
 ### Create Goal
@@ -51,7 +67,17 @@ Projects group related issues toward a deliverable. They can be linked to goals 
 
 ```
 GET /api/companies/{companyId}/projects
+GET /api/companies/{companyId}/projects?q=auth
+GET /api/companies/{companyId}/projects?q=auth&limit=10
 ```
+
+When `q` is present, project search:
+
+- trims `q`
+- matches case-insensitively on `name` and derived `urlKey`
+- sorts prefix matches before other substring matches
+- breaks ties alphabetically by `name`
+- applies `limit` after ordering, defaulting to `20` and capping at `20`
 
 ### Get Project
 
@@ -60,6 +86,12 @@ GET /api/projects/{projectId}
 ```
 
 Returns project details including workspaces.
+
+### Project Linked Conversations
+
+```
+GET /api/projects/{projectId}/linked-conversations
+```
 
 ### Create Project
 
@@ -119,3 +151,5 @@ GET /api/projects/{projectId}/workspaces
 PATCH /api/projects/{projectId}/workspaces/{workspaceId}
 DELETE /api/projects/{projectId}/workspaces/{workspaceId}
 ```
+
+Linked conversation routes return the same `LinkedConversationSummary` shape used by the board UI target panels: conversation id, title, participants, latest linked message id/sequence, and latest linked timestamp.

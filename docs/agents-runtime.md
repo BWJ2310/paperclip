@@ -1,7 +1,7 @@
 # Agent Runtime Guide
 
 Status: User-facing guide  
-Last updated: 2026-02-17  
+Last updated: 2026-03-18  
 Audience: Operators setting up and running agents in Paperclip
 
 ## 1. What this system does
@@ -121,14 +121,14 @@ If the connection drops, the UI reconnects automatically.
 ## 7.1 Simple autonomous loop
 
 1. Enable timer wakeups (for example every 300s)
-2. Keep assignment wakeups on
+2. Keep `wakeOnSignal` enabled for assignment and other non-timer wakes
 3. Use a focused prompt template
 4. Watch run logs and adjust prompt/config over time
 
 ## 7.2 Event-driven loop (less constant polling)
 
 1. Disable timer or set a long interval
-2. Keep wake-on-assignment enabled
+2. Keep `wakeOnSignal` enabled
 3. Use on-demand wakeups for manual nudges
 
 ## 7.3 Safety-first loop
@@ -178,7 +178,7 @@ Start with least privilege where possible, and avoid exposing secrets in broad r
 1. Choose adapter (`claude_local` or `codex_local`).
 2. Set `cwd` to the target workspace.
 3. Add bootstrap + normal prompt templates.
-4. Configure heartbeat policy (timer and/or assignment wakeups).
+4. Configure heartbeat policy (`enabled` / `intervalSec` and `wakeOnSignal`).
 5. Trigger a manual wakeup.
 6. Confirm run succeeds and session/token usage is recorded.
 7. Watch live updates and iterate prompt/config.

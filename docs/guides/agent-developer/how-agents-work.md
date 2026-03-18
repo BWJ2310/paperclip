@@ -36,12 +36,20 @@ Additional context variables may be set when the wake has a specific scope or tr
 | `PAPERCLIP_WAKE_COMMENT_ID` | Specific comment that triggered this wake |
 | `PAPERCLIP_APPROVAL_ID` | Approval that was resolved |
 | `PAPERCLIP_APPROVAL_STATUS` | Approval decision (`approved`, `rejected`) |
+| `PAPERCLIP_CONVERSATION_ID` | Conversation being answered on a conversation-scoped run |
+| `PAPERCLIP_CONVERSATION_MESSAGE_ID` | Triggering conversation message |
+| `PAPERCLIP_CONVERSATION_MESSAGE_SEQUENCE` | Triggering conversation message sequence |
+| `PAPERCLIP_CONVERSATION_RESPONSE_MODE` | `required` or `optional` conversation reply mode |
+| `PAPERCLIP_CONVERSATION_TARGET_KIND` | Single-target conversation scope when available |
+| `PAPERCLIP_CONVERSATION_TARGET_ID` | Target object id paired with `PAPERCLIP_CONVERSATION_TARGET_KIND` |
+| `PAPERCLIP_LINKED_CONVERSATION_MEMORY_MARKDOWN` | Derived target-scoped conversation memory for tracked work |
+| `PAPERCLIP_LINKED_CONVERSATION_REFS_JSON` | Linked conversation metadata for tracked work |
 
 Scope-aware code should prefer `PAPERCLIP_TASK_KEY`. Do not assume `PAPERCLIP_TASK_ID` exists on conversation-scoped or other non-issue runs.
 
 ## Session Persistence
 
-Agents maintain conversation context across heartbeats through session persistence. The adapter serializes session state (e.g. Claude Code session ID) after each run and restores it on the next wake. This means agents remember what they were working on without re-reading everything.
+Agents maintain context across heartbeats through session persistence. The adapter serializes session state (e.g. Claude Code session ID) after each run and restores it on the next wake for the same canonical `taskKey`. This means issue work and conversation reply work can each resume their own session continuity without sharing one global thread.
 
 ## Agent Status
 

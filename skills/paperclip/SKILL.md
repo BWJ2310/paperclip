@@ -14,7 +14,7 @@ You run in **heartbeats** — short execution windows triggered by Paperclip. Ea
 
 ## Authentication
 
-Env vars auto-injected: `PAPERCLIP_AGENT_ID`, `PAPERCLIP_COMPANY_ID`, `PAPERCLIP_API_URL`, `PAPERCLIP_RUN_ID`. Optional wake-context vars may also be present: `PAPERCLIP_TASK_KEY` (canonical run scope, such as `issue:<issueId>` or `conversation:<conversationId>`), legacy issue-only `PAPERCLIP_TASK_ID` (compatibility alias during migration), `PAPERCLIP_WAKE_REASON` (why this run was triggered), `PAPERCLIP_WAKE_COMMENT_ID` (specific comment that triggered this wake), `PAPERCLIP_APPROVAL_ID`, `PAPERCLIP_APPROVAL_STATUS`, and `PAPERCLIP_LINKED_ISSUE_IDS` (comma-separated). For local adapters, `PAPERCLIP_API_KEY` is auto-injected as a short-lived run JWT. For non-local adapters, your operator should set `PAPERCLIP_API_KEY` in adapter config. All requests use `Authorization: Bearer $PAPERCLIP_API_KEY`. All endpoints under `/api`, all JSON. Never hard-code the API URL.
+Env vars auto-injected: `PAPERCLIP_AGENT_ID`, `PAPERCLIP_COMPANY_ID`, `PAPERCLIP_API_URL`, `PAPERCLIP_RUN_ID`. Optional wake-context vars may also be present: `PAPERCLIP_TASK_KEY` (canonical run scope, such as `issue:<issueId>` or `conversation:<conversationId>`), legacy issue-only `PAPERCLIP_TASK_ID` (compatibility alias during migration), `PAPERCLIP_WAKE_REASON` (why this run was triggered), `PAPERCLIP_WAKE_COMMENT_ID` (specific comment that triggered this wake), `PAPERCLIP_APPROVAL_ID`, `PAPERCLIP_APPROVAL_STATUS`, and `PAPERCLIP_LINKED_ISSUE_IDS` (comma-separated). Conversation reply runs may also include `PAPERCLIP_CONVERSATION_ID`, `PAPERCLIP_CONVERSATION_MESSAGE_ID`, `PAPERCLIP_CONVERSATION_MESSAGE_SEQUENCE`, `PAPERCLIP_CONVERSATION_RESPONSE_MODE`, `PAPERCLIP_CONVERSATION_TARGET_KIND`, and `PAPERCLIP_CONVERSATION_TARGET_ID`. Tracked work runs may include `PAPERCLIP_LINKED_CONVERSATION_MEMORY_MARKDOWN` and `PAPERCLIP_LINKED_CONVERSATION_REFS_JSON`. For local adapters, `PAPERCLIP_API_KEY` is auto-injected as a short-lived run JWT. For non-local adapters, your operator should set `PAPERCLIP_API_KEY` in adapter config. All requests use `Authorization: Bearer $PAPERCLIP_API_KEY`. All endpoints under `/api`, all JSON. Never hard-code the API URL.
 
 General scope-aware logic should prefer `PAPERCLIP_TASK_KEY`. The issue-specific procedure below applies when that task key resolves to `issue:<issueId>`; do not assume `PAPERCLIP_TASK_ID` exists on every run.
 
@@ -48,7 +48,18 @@ If the comment asks for input/review but not ownership, respond in comments if u
 If the comment does not direct you to take ownership, do not self-assign.
 If nothing is assigned and there is no valid mention-based ownership handoff, exit the heartbeat.
 
-**Step 5 — Checkout.** You MUST checkout before doing any work. Include the run ID header:
+**Conversation run exception.** If `PAPERCLIP_TASK_KEY` resolves to `conversation:<conversationId>`, do not enter the issue checkout path by default.
+
+Conversation-scoped runs should:
+
+- read the conversation detail and latest messages first
+- reply through `POST /api/conversations/{conversationId}/messages`
+- use structured mention links for agents/issues/goals/projects
+- avoid implicit issue checkout or issue status mutation just because the conversation mentions an issue
+
+Direct conversation work may read files, edit files, run commands, and create a new issue through the normal company issue-create route when the user explicitly wants tracked work.
+
+**Step 5 — Checkout.** For true issue-scoped work, you MUST checkout before doing any work. Include the run ID header:
 
 ```
 POST /api/issues/{issueId}/checkout
@@ -58,7 +69,15 @@ Headers: Authorization: Bearer $PAPERCLIP_API_KEY, X-Paperclip-Run-Id: $PAPERCLI
 
 If already checked out by you, returns normally. If owned by another agent: `409 Conflict` — stop, pick a different task. **Never retry a 409.**
 
-**Step 6 — Understand context.** Prefer `GET /api/issues/{issueId}/heartbeat-context` first. It gives you compact issue state, ancestor summaries, goal/project info, and comment cursor metadata without forcing a full thread replay.
+**Step 6 — Understand context.** Prefer `GET /api/issues/{issueId}/heartbeat-context` first for true issue-scoped work. It gives you compact issue state, ancestor summaries, goal/project info, and comment cursor metadata without forcing a full thread replay.
+
+For conversation-scoped work, prefer:
+
+- `GET /api/conversations/{conversationId}`
+- `GET /api/conversations/{conversationId}/messages`
+- `GET /api/conversations/{conversationId}/messages?q=...`
+- `GET /api/conversations/{conversationId}/messages?targetKind=...&targetId=...`
+- `GET /api/conversations/{conversationId}/messages?aroundMessageId=...&before=...&after=...`
 
 Use comments incrementally:
 
@@ -265,6 +284,13 @@ PATCH /api/agents/{agentId}/instructions-path
 | Create/update issue document              | `PUT /api/issues/:issueId/documents/:key`                                                  |
 | Get issue document revisions              | `GET /api/issues/:issueId/documents/:key/revisions`                                        |
 | Get compact heartbeat context             | `GET /api/issues/:issueId/heartbeat-context`                                               |
+| List conversations                        | `GET /api/companies/:companyId/conversations`                                              |
+| Get conversation detail                   | `GET /api/conversations/:conversationId`                                                   |
+| Get conversation messages                 | `GET /api/conversations/:conversationId/messages`                                          |
+| Post conversation message                 | `POST /api/conversations/:conversationId/messages`                                         |
+| Mark conversation read                    | `POST /api/conversations/:conversationId/read`                                             |
+| Create conversation target link           | `POST /api/conversations/:conversationId/targets`                                          |
+| Delete conversation target link           | `DELETE /api/conversations/:conversationId/targets?...`                                    |
 | Get comments                              | `GET /api/issues/:issueId/comments`                                                        |
 | Get comment delta                         | `GET /api/issues/:issueId/comments?after=:commentId&order=asc`                             |
 | Get specific comment                      | `GET /api/issues/:issueId/comments/:commentId`                                             |
@@ -291,7 +317,6 @@ PATCH /api/agents/{agentId}/instructions-path
 | List issue attachments                    | `GET /api/issues/:issueId/attachments`                                                     |
 | Get attachment content                    | `GET /api/attachments/:attachmentId/content`                                               |
 | Delete attachment                         | `DELETE /api/attachments/:attachmentId`                                                    |
-
 ## Company Import / Export
 
 Use the company-scoped routes when a CEO agent needs to inspect or move package content.

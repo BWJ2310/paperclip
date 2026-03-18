@@ -90,6 +90,34 @@ Add the adapter to all three registries:
 2. `ui/src/adapters/registry.ts`
 3. `cli/src/adapters/registry.ts`
 
+## Conversation And Task Scope Contract
+
+Adapters should treat canonical `taskKey` as the forward contract for run scope.
+
+- issue work: `issue:<issueId>`
+- conversation reply work: `conversation:<conversationId>`
+
+Conversation reply runs may also receive:
+
+- `PAPERCLIP_CONVERSATION_ID`
+- `PAPERCLIP_CONVERSATION_MESSAGE_ID`
+- `PAPERCLIP_CONVERSATION_MESSAGE_SEQUENCE`
+- `PAPERCLIP_CONVERSATION_RESPONSE_MODE`
+- `PAPERCLIP_CONVERSATION_TARGET_KIND`
+- `PAPERCLIP_CONVERSATION_TARGET_ID`
+
+Tracked work runs may receive linked conversation context through:
+
+- `PAPERCLIP_LINKED_CONVERSATION_MEMORY_MARKDOWN`
+- `PAPERCLIP_LINKED_CONVERSATION_REFS_JSON`
+
+Prompt assembly should keep this order:
+
+1. adapter bootstrap/instructions
+2. session handoff if present
+3. linked conversation memory if present
+4. the core task prompt
+
 ## Skills Injection
 
 Make Paperclip skills discoverable to your agent runtime without writing to the agent's working directory:
