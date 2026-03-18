@@ -88,6 +88,34 @@ export type {
   IssueLabel,
 } from "./issue.js";
 export type { Goal } from "./goal.js";
+export type {
+  CreateConversation,
+  UpdateConversation,
+  AddConversationParticipant,
+  RemoveConversationParticipantParams,
+  ConversationActiveContextTarget,
+  CreateConversationMessage,
+  MarkConversationRead,
+  CreateConversationTargetLink,
+  DeleteConversationTargetLinkQuery,
+  DeleteConversationParticipantResult,
+  DeleteConversationTargetLinkResult,
+  ConversationParticipant,
+  ConversationReadState,
+  ConversationMessageRef,
+  ConversationMessage,
+  ConversationTargetLink,
+  ConversationTargetSuppression,
+  AgentTargetConversationMemory,
+  LinkedConversationSummary,
+  ConversationCostSummary,
+  ConversationSummary,
+  ConversationDetail,
+  ConversationMessagePage,
+  ListConversationsQuery,
+  ListConversationMessagesQuery,
+  ConversationReplyContext,
+} from "./conversation.js";
 export type { Approval, ApprovalComment } from "./approval.js";
 export type {
   BudgetPolicy,
@@ -127,7 +155,15 @@ export type {
   AgentWakeupRequest,
   InstanceSchedulerHeartbeatAgent,
 } from "./heartbeat.js";
-export type { LiveEvent } from "./live.js";
+export type {
+  LiveEvent,
+  LiveEventAudience,
+  ConversationSummaryLiveEventPayload,
+  ConversationParticipantLiveEventPayload,
+  ConversationMessageLiveEventPayload,
+  ConversationContextLinkLiveEventPayload,
+  ConversationLiveEvent,
+} from "./live.js";
 export type { DashboardSummary } from "./dashboard.js";
 export type { ActivityEvent, MentionEntry } from "./activity.js";
 export type { SidebarBadges } from "./sidebar-badges.js";

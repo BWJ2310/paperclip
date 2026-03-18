@@ -48,6 +48,23 @@ describe("goalService", () => {
       const all = await svc().list(companyId);
       expect(all.length).toBe(2);
     });
+
+    it("uses title-only matching with prefix-first ordering and applies limit after sorting", async () => {
+      await svc().create(companyId, {
+        title: "Roadmap",
+        description: "launch mention in description only",
+      });
+      await svc().create(companyId, { title: "Relaunch Beta" });
+      await svc().create(companyId, { title: "launch tools" });
+      await svc().create(companyId, { title: "Launch Alpha" });
+
+      const rows = await svc().list(companyId, { q: "  launch  ", limit: 2 });
+
+      expect(rows.map((goal) => goal.title)).toEqual([
+        "Launch Alpha",
+        "launch tools",
+      ]);
+    });
   });
 
   // ── getById ───────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import {
   asStringArray,
   parseObject,
   buildPaperclipEnv,
+  readPaperclipInvokeContext,
   joinPromptSections,
   redactEnvForLogs,
   ensureAbsoluteDirectory,
@@ -68,7 +69,7 @@ async function ensurePiSkillsInjected(
   for (const skillName of removedSkills) {
     await onLog(
       "stderr",
-      `[paperclip] Removed maintainer-only Pi skill "${skillName}" from ${PI_AGENT_SKILLS_DIR}\n`,
+      `[paperclip] Removed maintainer-only Pi skill "${skillName}" from ${PI_AGENT_SKILLS_DIR}\n`
     );
   }
 
@@ -110,7 +111,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const promptTemplate = asString(
     config.promptTemplate,
-    "You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work.",
+    "You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work."
   );
   const command = asString(config.command, "pi");
   const model = asString(config.model, "").trim();
@@ -129,18 +130,22 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const agentHome = asString(workspaceContext.agentHome, "");
   const workspaceHints = Array.isArray(context.paperclipWorkspaces)
     ? context.paperclipWorkspaces.filter(
-        (value): value is Record<string, unknown> => typeof value === "object" && value !== null,
+        (value): value is Record<string, unknown> =>
+          typeof value === "object" && value !== null
       )
     : [];
   const configuredCwd = asString(config.cwd, "");
-  const useConfiguredInsteadOfAgentHome = workspaceSource === "agent_home" && configuredCwd.length > 0;
-  const effectiveWorkspaceCwd = useConfiguredInsteadOfAgentHome ? "" : workspaceCwd;
+  const useConfiguredInsteadOfAgentHome =
+    workspaceSource === "agent_home" && configuredCwd.length > 0;
+  const effectiveWorkspaceCwd = useConfiguredInsteadOfAgentHome
+    ? ""
+    : workspaceCwd;
   const cwd = effectiveWorkspaceCwd || configuredCwd || process.cwd();
   await ensureAbsoluteDirectory(cwd, { createIfMissing: true });
-  
+
   // Ensure sessions directory exists
   await ensureSessionsDir();
-  
+
   // Inject skills
   const piSkillEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
   const desiredPiSkillNames = resolvePaperclipDesiredSkillNames(config, piSkillEntries);
@@ -149,47 +154,22 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // Build environment
   const envConfig = parseObject(config.env);
   const hasExplicitApiKey =
-    typeof envConfig.PAPERCLIP_API_KEY === "string" && envConfig.PAPERCLIP_API_KEY.trim().length > 0;
-  const env: Record<string, string> = { ...buildPaperclipEnv(agent) };
-  env.PAPERCLIP_RUN_ID = runId;
-  
-  const wakeTaskId =
-    (typeof context.taskId === "string" && context.taskId.trim().length > 0 && context.taskId.trim()) ||
-    (typeof context.issueId === "string" && context.issueId.trim().length > 0 && context.issueId.trim()) ||
-    null;
-  const wakeReason =
-    typeof context.wakeReason === "string" && context.wakeReason.trim().length > 0
-      ? context.wakeReason.trim()
-      : null;
-  const wakeCommentId =
-    (typeof context.wakeCommentId === "string" && context.wakeCommentId.trim().length > 0 && context.wakeCommentId.trim()) ||
-    (typeof context.commentId === "string" && context.commentId.trim().length > 0 && context.commentId.trim()) ||
-    null;
-  const approvalId =
-    typeof context.approvalId === "string" && context.approvalId.trim().length > 0
-      ? context.approvalId.trim()
-      : null;
-  const approvalStatus =
-    typeof context.approvalStatus === "string" && context.approvalStatus.trim().length > 0
-      ? context.approvalStatus.trim()
-      : null;
-  const linkedIssueIds = Array.isArray(context.issueIds)
-    ? context.issueIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-    : [];
-    
-  if (wakeTaskId) env.PAPERCLIP_TASK_ID = wakeTaskId;
-  if (wakeReason) env.PAPERCLIP_WAKE_REASON = wakeReason;
-  if (wakeCommentId) env.PAPERCLIP_WAKE_COMMENT_ID = wakeCommentId;
-  if (approvalId) env.PAPERCLIP_APPROVAL_ID = approvalId;
-  if (approvalStatus) env.PAPERCLIP_APPROVAL_STATUS = approvalStatus;
-  if (linkedIssueIds.length > 0) env.PAPERCLIP_LINKED_ISSUE_IDS = linkedIssueIds.join(",");
+    typeof envConfig.PAPERCLIP_API_KEY === "string" &&
+    envConfig.PAPERCLIP_API_KEY.trim().length > 0;
+  const env: Record<string, string> = {
+    ...buildPaperclipEnv(agent, {
+      runId,
+      ...readPaperclipInvokeContext(context),
+    }),
+  };
   if (workspaceCwd) env.PAPERCLIP_WORKSPACE_CWD = workspaceCwd;
   if (workspaceSource) env.PAPERCLIP_WORKSPACE_SOURCE = workspaceSource;
   if (workspaceId) env.PAPERCLIP_WORKSPACE_ID = workspaceId;
   if (workspaceRepoUrl) env.PAPERCLIP_WORKSPACE_REPO_URL = workspaceRepoUrl;
   if (workspaceRepoRef) env.PAPERCLIP_WORKSPACE_REPO_REF = workspaceRepoRef;
   if (agentHome) env.AGENT_HOME = agentHome;
-  if (workspaceHints.length > 0) env.PAPERCLIP_WORKSPACES_JSON = JSON.stringify(workspaceHints);
+  if (workspaceHints.length > 0)
+    env.PAPERCLIP_WORKSPACES_JSON = JSON.stringify(workspaceHints);
 
   for (const [key, value] of Object.entries(envConfig)) {
     if (typeof value === "string") env[key] = value;
@@ -197,11 +177,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (!hasExplicitApiKey && authToken) {
     env.PAPERCLIP_API_KEY = authToken;
   }
-  
+
   const runtimeEnv = Object.fromEntries(
     Object.entries(ensurePathInEnv({ ...process.env, ...env })).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
+      (entry): entry is [string, string] => typeof entry[1] === "string"
+    )
   );
   await ensureCommandResolvable(command, cwd, runtimeEnv);
 
@@ -223,17 +203,23 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   // Handle session
   const runtimeSessionParams = parseObject(runtime.sessionParams);
-  const runtimeSessionId = asString(runtimeSessionParams.sessionId, runtime.sessionId ?? "");
+  const runtimeSessionId = asString(
+    runtimeSessionParams.sessionId,
+    runtime.sessionId ?? ""
+  );
   const runtimeSessionCwd = asString(runtimeSessionParams.cwd, "");
   const canResumeSession =
     runtimeSessionId.length > 0 &&
-    (runtimeSessionCwd.length === 0 || path.resolve(runtimeSessionCwd) === path.resolve(cwd));
-  const sessionPath = canResumeSession ? runtimeSessionId : buildSessionPath(agent.id, new Date().toISOString());
-  
+    (runtimeSessionCwd.length === 0 ||
+      path.resolve(runtimeSessionCwd) === path.resolve(cwd));
+  const sessionPath = canResumeSession
+    ? runtimeSessionId
+    : buildSessionPath(agent.id, new Date().toISOString());
+
   if (runtimeSessionId && !canResumeSession) {
     await onLog(
-      "stdout",
-      `[paperclip] Pi session "${runtimeSessionId}" was saved for cwd "${runtimeSessionCwd}" and will not be resumed in "${cwd}".\n`,
+      "stderr",
+      `[paperclip] Pi session "${runtimeSessionId}" was saved for cwd "${runtimeSessionCwd}" and will not be resumed in "${cwd}".\n`
     );
   }
 
@@ -254,28 +240,33 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const resolvedInstructionsFilePath = instructionsFilePath
     ? path.resolve(cwd, instructionsFilePath)
     : "";
-  const instructionsFileDir = instructionsFilePath ? `${path.dirname(instructionsFilePath)}/` : "";
-  
+  const instructionsFileDir = instructionsFilePath
+    ? `${path.dirname(instructionsFilePath)}/`
+    : "";
+
   let systemPromptExtension = "";
   let instructionsReadFailed = false;
   if (resolvedInstructionsFilePath) {
     try {
-      const instructionsContents = await fs.readFile(resolvedInstructionsFilePath, "utf8");
+      const instructionsContents = await fs.readFile(
+        resolvedInstructionsFilePath,
+        "utf8"
+      );
       systemPromptExtension =
         `${instructionsContents}\n\n` +
         `The above agent instructions were loaded from ${resolvedInstructionsFilePath}. ` +
         `Resolve any relative file references from ${instructionsFileDir}.\n\n` +
         `You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work.`;
       await onLog(
-        "stdout",
-        `[paperclip] Loaded agent instructions file: ${resolvedInstructionsFilePath}\n`,
+        "stderr",
+        `[paperclip] Loaded agent instructions file: ${resolvedInstructionsFilePath}\n`
       );
     } catch (err) {
       instructionsReadFailed = true;
       const reason = err instanceof Error ? err.message : String(err);
       await onLog(
-        "stdout",
-        `[paperclip] Warning: could not read agent instructions file "${resolvedInstructionsFilePath}": ${reason}\n`,
+        "stderr",
+        `[paperclip] Warning: could not read agent instructions file "${resolvedInstructionsFilePath}": ${reason}\n`
       );
       // Fall back to base prompt template
       systemPromptExtension = promptTemplate;
@@ -294,16 +285,27 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     run: { id: runId, source: "on_demand" },
     context,
   };
-  const renderedSystemPromptExtension = renderTemplate(systemPromptExtension, templateData);
+  const renderedSystemPromptExtension = renderTemplate(
+    systemPromptExtension,
+    templateData
+  );
   const renderedHeartbeatPrompt = renderTemplate(promptTemplate, templateData);
   const renderedBootstrapPrompt =
     !canResumeSession && bootstrapPromptTemplate.trim().length > 0
       ? renderTemplate(bootstrapPromptTemplate, templateData).trim()
       : "";
-  const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
+  const sessionHandoffNote = asString(
+    context.paperclipSessionHandoffMarkdown,
+    ""
+  ).trim();
+  const linkedConversationMemoryNote = asString(
+    context.paperclipLinkedConversationMemoryMarkdown,
+    ""
+  ).trim();
   const userPrompt = joinPromptSections([
     renderedBootstrapPrompt,
     sessionHandoffNote,
+    linkedConversationMemoryNote,
     renderedHeartbeatPrompt,
   ]);
   const promptMetrics = {
@@ -311,6 +313,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     promptChars: userPrompt.length,
     bootstrapPromptChars: renderedBootstrapPrompt.length,
     sessionHandoffChars: sessionHandoffNote.length,
+    linkedConversationMemoryChars: linkedConversationMemoryNote.length,
     heartbeatPromptChars: renderedHeartbeatPrompt.length,
   };
 
@@ -329,13 +332,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const buildArgs = (sessionFile: string): string[] => {
     const args: string[] = [];
-    
+
     // Use RPC mode for proper lifecycle management (waits for agent completion)
     args.push("--mode", "rpc");
-    
+
     // Use --append-system-prompt to extend Pi's default system prompt
     args.push("--append-system-prompt", renderedSystemPromptExtension);
-    
+
     if (provider) args.push("--provider", provider);
     if (modelId) args.push("--model", modelId);
     if (thinking) args.push("--thinking", thinking);
@@ -378,19 +381,22 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     // Buffer stdout by lines to handle partial JSON chunks
     let stdoutBuffer = "";
-    const bufferedOnLog = async (stream: "stdout" | "stderr", chunk: string) => {
+    const bufferedOnLog = async (
+      stream: "stdout" | "stderr",
+      chunk: string
+    ) => {
       if (stream === "stderr") {
         // Pass stderr through immediately (not JSONL)
         await onLog(stream, chunk);
         return;
       }
-      
+
       // Buffer stdout and emit only complete lines
       stdoutBuffer += chunk;
       const lines = stdoutBuffer.split("\n");
       // Keep the last (potentially incomplete) line in the buffer
       stdoutBuffer = lines.pop() || "";
-      
+
       // Emit complete lines
       for (const line of lines) {
         if (line) {
@@ -408,12 +414,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       onLog: bufferedOnLog,
       stdin: buildRpcStdin(),
     });
-    
+
     // Flush any remaining buffer content
     if (stdoutBuffer) {
       await onLog("stdout", stdoutBuffer);
     }
-    
+
     return {
       proc,
       rawStderr: proc.stderr,
@@ -423,11 +429,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const toResult = (
     attempt: {
-      proc: { exitCode: number | null; signal: string | null; timedOut: boolean; stdout: string; stderr: string };
+      proc: {
+        exitCode: number | null;
+        signal: string | null;
+        timedOut: boolean;
+        stdout: string;
+        stderr: string;
+      };
       rawStderr: string;
       parsed: ReturnType<typeof parsePiJsonl>;
     },
-    clearSessionOnMissingSession = false,
+    clearSessionOnMissingSession = false
   ): AdapterExecutionResult => {
     if (attempt.proc.timedOut) {
       return {
@@ -446,7 +458,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     const stderrLine = firstNonEmptyLine(attempt.proc.stderr);
     const rawExitCode = attempt.proc.exitCode;
-    const fallbackErrorMessage = stderrLine || `Pi exited with code ${rawExitCode ?? -1}`;
+    const fallbackErrorMessage =
+      stderrLine || `Pi exited with code ${rawExitCode ?? -1}`;
 
     return {
       exitCode: rawExitCode,
@@ -470,23 +483,26 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         stdout: attempt.proc.stdout,
         stderr: attempt.proc.stderr,
       },
-      summary: attempt.parsed.finalMessage ?? attempt.parsed.messages.join("\n\n").trim(),
+      summary:
+        attempt.parsed.finalMessage ??
+        attempt.parsed.messages.join("\n\n").trim(),
       clearSession: Boolean(clearSessionOnMissingSession),
     };
   };
 
   const initial = await runAttempt(sessionPath);
   const initialFailed =
-    !initial.proc.timedOut && ((initial.proc.exitCode ?? 0) !== 0 || initial.parsed.errors.length > 0);
-  
+    !initial.proc.timedOut &&
+    ((initial.proc.exitCode ?? 0) !== 0 || initial.parsed.errors.length > 0);
+
   if (
     canResumeSession &&
     initialFailed &&
     isPiUnknownSessionError(initial.proc.stdout, initial.rawStderr)
   ) {
     await onLog(
-      "stdout",
-      `[paperclip] Pi session "${runtimeSessionId}" is unavailable; retrying with a fresh session.\n`,
+      "stderr",
+      `[paperclip] Pi session "${runtimeSessionId}" is unavailable; retrying with a fresh session.\n`
     );
     const newSessionPath = buildSessionPath(agent.id, new Date().toISOString());
     try {

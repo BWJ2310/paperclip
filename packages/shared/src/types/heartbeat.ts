@@ -1,4 +1,5 @@
 import type {
+  ConversationResponseMode,
   AgentRole,
   AgentStatus,
   HeartbeatInvocationSource,
@@ -103,6 +104,10 @@ export interface AgentWakeupRequest {
   requestedByActorType: "user" | "agent" | "system" | null;
   requestedByActorId: string | null;
   idempotencyKey: string | null;
+  conversationId: string | null;
+  conversationMessageId: string | null;
+  conversationMessageSequence: number | null;
+  responseMode: ConversationResponseMode | null;
   runId: string | null;
   requestedAt: Date;
   claimedAt: Date | null;

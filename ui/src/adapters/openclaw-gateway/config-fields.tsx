@@ -10,6 +10,7 @@ import {
   PayloadTemplateJsonField,
   RuntimeServicesJsonField,
 } from "../runtime-json-fields";
+import { normalizeOpenClawSessionKeyStrategy } from "./session-key-strategy";
 
 const inputClass =
   "w-full rounded-md border border-border px-2.5 py-1.5 bg-transparent outline-none text-sm font-mono placeholder:text-muted-foreground/40";
@@ -90,10 +91,12 @@ export function OpenClawGatewayConfigFields({
     mark("adapterConfig", "headers", Object.keys(nextHeaders).length > 0 ? nextHeaders : undefined);
   };
 
-  const sessionStrategy = eff(
-    "adapterConfig",
-    "sessionKeyStrategy",
-    String(config.sessionKeyStrategy ?? "fixed"),
+  const sessionStrategy = normalizeOpenClawSessionKeyStrategy(
+    eff(
+      "adapterConfig",
+      "sessionKeyStrategy",
+      config.sessionKeyStrategy,
+    ),
   );
 
   return (
@@ -156,8 +159,8 @@ export function OpenClawGatewayConfigFields({
               onChange={(e) => mark("adapterConfig", "sessionKeyStrategy", e.target.value)}
               className={inputClass}
             >
+              <option value="task_key">Per task key</option>
               <option value="fixed">Fixed</option>
-              <option value="issue">Per issue</option>
               <option value="run">Per run</option>
             </select>
           </Field>

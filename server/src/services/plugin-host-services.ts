@@ -1,5 +1,8 @@
 import type { Db } from "@paperclipai/db";
-import { pluginLogs, agentTaskSessions as agentTaskSessionsTable } from "@paperclipai/db";
+import {
+  pluginLogs,
+  agentTaskSessions as agentTaskSessionsTable,
+} from "@paperclipai/db";
 import { eq, and, like, desc } from "drizzle-orm";
 import type {
   HostServices,
@@ -29,7 +32,10 @@ import { createPluginSecretsHandler } from "./plugin-secrets-handler.js";
 import { logActivity } from "./activity-log.js";
 import type { PluginEventBus } from "./plugin-event-bus.js";
 import { lookup as dnsLookup } from "node:dns/promises";
-import type { IncomingMessage, RequestOptions as HttpRequestOptions } from "node:http";
+import type {
+  IncomingMessage,
+  RequestOptions as HttpRequestOptions,
+} from "node:http";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
@@ -59,7 +65,9 @@ function isPrivateIP(ip: string): boolean {
   const lower = ip.toLowerCase();
 
   // Unwrap IPv4-mapped IPv6 addresses (::ffff:x.x.x.x) and re-check as IPv4
-  const v4MappedMatch = lower.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  const v4MappedMatch = lower.match(
+    /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/
+  );
   if (v4MappedMatch && v4MappedMatch[1]) return isPrivateIP(v4MappedMatch[1]);
 
   // IPv4 patterns
@@ -69,14 +77,14 @@ function isPrivateIP(ip: string): boolean {
     if (second >= 16 && second <= 31) return true;
   }
   if (ip.startsWith("192.168.")) return true;
-  if (ip.startsWith("127.")) return true;                   // loopback
-  if (ip.startsWith("169.254.")) return true;               // link-local
+  if (ip.startsWith("127.")) return true; // loopback
+  if (ip.startsWith("169.254.")) return true; // link-local
   if (ip === "0.0.0.0") return true;
 
   // IPv6 patterns
-  if (lower === "::1") return true;                          // loopback
+  if (lower === "::1") return true; // loopback
   if (lower.startsWith("fc") || lower.startsWith("fd")) return true; // ULA
-  if (lower.startsWith("fe80")) return true;                 // link-local
+  if (lower.startsWith("fe80")) return true; // link-local
   if (lower === "::") return true;
 
   return false;
@@ -106,7 +114,9 @@ interface ValidatedFetchTarget {
   useTls: boolean;
 }
 
-async function validateAndResolveFetchUrl(urlString: string): Promise<ValidatedFetchTarget> {
+async function validateAndResolveFetchUrl(
+  urlString: string
+): Promise<ValidatedFetchTarget> {
   let parsed: URL;
   try {
     parsed = new URL(urlString);
@@ -116,7 +126,7 @@ async function validateAndResolveFetchUrl(urlString: string): Promise<ValidatedF
 
   if (!ALLOWED_PROTOCOLS.has(parsed.protocol)) {
     throw new Error(
-      `Disallowed protocol "${parsed.protocol}" — only http: and https: are permitted`,
+      `Disallowed protocol "${parsed.protocol}" — only http: and https: are permitted`
     );
   }
 
@@ -131,15 +141,22 @@ async function validateAndResolveFetchUrl(urlString: string): Promise<ValidatedF
   const dnsPromise = dnsLookup(originalHostname, { all: true });
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(
-      () => reject(new Error(`DNS lookup timed out after ${DNS_LOOKUP_TIMEOUT_MS}ms for ${originalHostname}`)),
-      DNS_LOOKUP_TIMEOUT_MS,
+      () =>
+        reject(
+          new Error(
+            `DNS lookup timed out after ${DNS_LOOKUP_TIMEOUT_MS}ms for ${originalHostname}`
+          )
+        ),
+      DNS_LOOKUP_TIMEOUT_MS
     );
   });
 
   try {
     const results = await Promise.race([dnsPromise, timeoutPromise]);
     if (results.length === 0) {
-      throw new Error(`DNS resolution returned no results for ${originalHostname}`);
+      throw new Error(
+        `DNS resolution returned no results for ${originalHostname}`
+      );
     }
 
     // Filter to only non-private IPs instead of rejecting the entire request
@@ -148,7 +165,7 @@ async function validateAndResolveFetchUrl(urlString: string): Promise<ValidatedF
     const safeResults = results.filter((entry) => !isPrivateIP(entry.address));
     if (safeResults.length === 0) {
       throw new Error(
-        `All resolved IPs for ${originalHostname} are in private/reserved ranges`,
+        `All resolved IPs for ${originalHostname} are in private/reserved ranges`
       );
     }
 
@@ -157,43 +174,59 @@ async function validateAndResolveFetchUrl(urlString: string): Promise<ValidatedF
       parsedUrl: parsed,
       resolvedAddress: resolved.address,
       hostHeader,
-      tlsServername: parsed.protocol === "https:" && isIP(originalHostname) === 0
-        ? originalHostname
-        : undefined,
+      tlsServername:
+        parsed.protocol === "https:" && isIP(originalHostname) === 0
+          ? originalHostname
+          : undefined,
       useTls: parsed.protocol === "https:",
     };
   } catch (err) {
     // Re-throw our own errors; wrap DNS failures
-    if (err instanceof Error && (
-      err.message.startsWith("All resolved IPs") ||
-      err.message.startsWith("DNS resolution returned") ||
-      err.message.startsWith("DNS lookup timed out")
-    )) throw err;
-    throw new Error(`DNS resolution failed for ${originalHostname}: ${(err as Error).message}`);
+    if (
+      err instanceof Error &&
+      (err.message.startsWith("All resolved IPs") ||
+        err.message.startsWith("DNS resolution returned") ||
+        err.message.startsWith("DNS lookup timed out"))
+    )
+      throw err;
+    throw new Error(
+      `DNS resolution failed for ${originalHostname}: ${(err as Error).message}`
+    );
   }
 }
 
 function buildPinnedRequestOptions(
   target: ValidatedFetchTarget,
-  init?: RequestInit,
-): { options: HttpRequestOptions & { servername?: string }; body: string | undefined } {
+  init?: RequestInit
+): {
+  options: HttpRequestOptions & { servername?: string };
+  body: string | undefined;
+} {
   const headers = new Headers(init?.headers);
   const method = init?.method ?? "GET";
-  const body = init?.body === undefined || init?.body === null
-    ? undefined
-    : typeof init.body === "string"
+  const body =
+    init?.body === undefined || init?.body === null
+      ? undefined
+      : typeof init.body === "string"
       ? init.body
       : String(init.body);
 
   headers.set("Host", target.hostHeader);
-  if (body !== undefined && !headers.has("content-length") && !headers.has("transfer-encoding")) {
+  if (
+    body !== undefined &&
+    !headers.has("content-length") &&
+    !headers.has("transfer-encoding")
+  ) {
     headers.set("content-length", String(Buffer.byteLength(body)));
   }
 
   const pathname = `${target.parsedUrl.pathname}${target.parsedUrl.search}`;
-  const auth = target.parsedUrl.username || target.parsedUrl.password
-    ? `${decodeURIComponent(target.parsedUrl.username)}:${decodeURIComponent(target.parsedUrl.password)}`
-    : undefined;
+  const auth =
+    target.parsedUrl.username || target.parsedUrl.password
+      ? `${decodeURIComponent(target.parsedUrl.username)}:${decodeURIComponent(
+          target.parsedUrl.password
+        )}`
+      : undefined;
 
   return {
     options: {
@@ -202,8 +235,8 @@ function buildPinnedRequestOptions(
       port: target.parsedUrl.port
         ? Number(target.parsedUrl.port)
         : target.useTls
-          ? 443
-          : 80,
+        ? 443
+        : 80,
       path: pathname,
       method,
       headers: Object.fromEntries(headers.entries()),
@@ -217,8 +250,13 @@ function buildPinnedRequestOptions(
 async function executePinnedHttpRequest(
   target: ValidatedFetchTarget,
   init: RequestInit | undefined,
-  signal: AbortSignal,
-): Promise<{ status: number; statusText: string; headers: Record<string, string>; body: string }> {
+  signal: AbortSignal
+): Promise<{
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  body: string;
+}> {
   const { options, body } = buildPinnedRequestOptions(target, init);
 
   const response = await new Promise<IncomingMessage>((resolve, reject) => {
@@ -242,7 +280,9 @@ async function executePinnedHttpRequest(
       totalBytes += buf.length;
       if (totalBytes > MAX_RESPONSE_BODY_BYTES) {
         chunks.length = 0;
-        response.destroy(new Error(`Response body exceeded ${MAX_RESPONSE_BODY_BYTES} bytes`));
+        response.destroy(
+          new Error(`Response body exceeded ${MAX_RESPONSE_BODY_BYTES} bytes`)
+        );
         return;
       }
       chunks.push(buf);
@@ -268,16 +308,18 @@ async function executePinnedHttpRequest(
   };
 }
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PATH_LIKE_PATTERN = /[\\/]/;
 const WINDOWS_DRIVE_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 
 function looksLikePath(value: string): boolean {
   const normalized = value.trim();
   return (
-    PATH_LIKE_PATTERN.test(normalized)
-    || WINDOWS_DRIVE_PATH_PATTERN.test(normalized)
-  ) && !UUID_PATTERN.test(normalized);
+    (PATH_LIKE_PATTERN.test(normalized) ||
+      WINDOWS_DRIVE_PATH_PATTERN.test(normalized)) &&
+    !UUID_PATTERN.test(normalized)
+  );
 }
 
 function sanitizeWorkspaceText(value: string): string {
@@ -337,7 +379,9 @@ function truncStr(s: string, max: number): string {
 }
 
 /** Sanitise a plugin-supplied meta object: enforce size limit and strip reserved keys. */
-function sanitiseMeta(meta: Record<string, unknown> | null | undefined): Record<string, unknown> | null {
+function sanitiseMeta(
+  meta: Record<string, unknown> | null | undefined
+): Record<string, unknown> | null {
   if (meta == null) return null;
   // Strip pino reserved keys
   const cleaned: Record<string, unknown> = {};
@@ -354,7 +398,10 @@ function sanitiseMeta(meta: Record<string, unknown> | null | undefined): Record<
     return { _sanitised: true, _error: "meta was not JSON-serialisable" };
   }
   if (json.length > MAX_LOG_META_JSON_LENGTH) {
-    return { _sanitised: true, _error: `meta exceeded ${MAX_LOG_META_JSON_LENGTH} chars` };
+    return {
+      _sanitised: true,
+      _error: `meta exceeded ${MAX_LOG_META_JSON_LENGTH} chars`,
+    };
   }
   return cleaned;
 }
@@ -402,7 +449,10 @@ export async function flushPluginLogBuffer(): Promise<void> {
       await dbInstance.insert(pluginLogs).values(values);
     } catch (err) {
       try {
-        logger.warn({ err, count: values.length }, "Failed to batch-persist plugin logs to DB");
+        logger.warn(
+          { err, count: values.length },
+          "Failed to batch-persist plugin logs to DB"
+        );
       } catch {
         console.error("[plugin-host-services] Batch log flush failed:", err);
       }
@@ -441,7 +491,7 @@ export function buildHostServices(
   pluginId: string,
   pluginKey: string,
   eventBus: PluginEventBus,
-  notifyWorker?: (method: string, params: unknown) => void,
+  notifyWorker?: (method: string, params: unknown) => void
 ): HostServices & { dispose(): void } {
   const registry = pluginRegistryService(db);
   const stateStore = pluginStateStore(db);
@@ -459,7 +509,10 @@ export function buildHostServices(
   const scopedBus = eventBus.forPlugin(pluginKey);
 
   // Track active session event subscriptions for cleanup
-  const activeSubscriptions = new Set<{ unsubscribe: () => void; timer: ReturnType<typeof setTimeout> }>();
+  const activeSubscriptions = new Set<{
+    unsubscribe: () => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
   let disposed = false;
 
   const ensureCompanyId = (companyId?: string) => {
@@ -480,7 +533,10 @@ export function buildHostServices(
     return null;
   };
 
-  const applyWindow = <T>(rows: T[], params?: { limit?: unknown; offset?: unknown }): T[] => {
+  const applyWindow = <T>(
+    rows: T[],
+    params?: { limit?: unknown; offset?: unknown }
+  ): T[] => {
     const offset = parseWindowValue(params?.offset) ?? 0;
     const limit = parseWindowValue(params?.limit);
     if (limit == null) return rows.slice(offset);
@@ -496,13 +552,13 @@ export function buildHostServices(
 
   const inCompany = <T extends { companyId: string | null | undefined }>(
     record: T | null | undefined,
-    companyId: string,
+    companyId: string
   ): record is T => Boolean(record && record.companyId === companyId);
 
   const requireInCompany = <T extends { companyId: string | null | undefined }>(
     entityName: string,
     record: T | null | undefined,
-    companyId: string,
+    companyId: string
   ): T => {
     if (!inCompany(record, companyId)) {
       throw new Error(`${entityName} not found`);
@@ -520,10 +576,15 @@ export function buildHostServices(
 
     state: {
       async get(params) {
-        return stateStore.get(pluginId, params.scopeKind as any, params.stateKey, {
-          scopeId: params.scopeId,
-          namespace: params.namespace,
-        });
+        return stateStore.get(
+          pluginId,
+          params.scopeKind as any,
+          params.stateKey,
+          {
+            scopeId: params.scopeId,
+            namespace: params.namespace,
+          }
+        );
       },
       async set(params) {
         await stateStore.set(pluginId, {
@@ -535,10 +596,15 @@ export function buildHostServices(
         });
       },
       async delete(params) {
-        await stateStore.delete(pluginId, params.scopeKind as any, params.stateKey, {
-          scopeId: params.scopeId,
-          namespace: params.namespace,
-        });
+        await stateStore.delete(
+          pluginId,
+          params.scopeKind as any,
+          params.stateKey,
+          {
+            scopeId: params.scopeId,
+            namespace: params.namespace,
+          }
+        );
       },
     },
 
@@ -558,14 +624,23 @@ export function buildHostServices(
         }
         await scopedBus.emit(params.name, params.companyId, params.payload);
       },
-      async subscribe(params: { eventPattern: string; filter?: Record<string, unknown> | null }) {
-        const handler = async (event: import("@paperclipai/plugin-sdk").PluginEvent) => {
+      async subscribe(params: {
+        eventPattern: string;
+        filter?: Record<string, unknown> | null;
+      }) {
+        const handler = async (
+          event: import("@paperclipai/plugin-sdk").PluginEvent
+        ) => {
           if (notifyWorker) {
             notifyWorker("onEvent", { event });
           }
         };
         if (params.filter) {
-          scopedBus.subscribe(params.eventPattern as any, params.filter as any, handler);
+          scopedBus.subscribe(
+            params.eventPattern as any,
+            params.filter as any,
+            handler
+          );
         } else {
           scopedBus.subscribe(params.eventPattern as any, handler);
         }
@@ -579,11 +654,18 @@ export function buildHostServices(
         const target = await validateAndResolveFetchUrl(params.url);
 
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), PLUGIN_FETCH_TIMEOUT_MS);
+        const timeout = setTimeout(
+          () => controller.abort(),
+          PLUGIN_FETCH_TIMEOUT_MS
+        );
 
         try {
           const init = params.init as RequestInit | undefined;
-          return await executePinnedHttpRequest(target, init, controller.signal);
+          return await executePinnedHttpRequest(
+            target,
+            init,
+            controller.signal
+          );
         } finally {
           clearTimeout(timeout);
         }
@@ -614,8 +696,14 @@ export function buildHostServices(
 
     metrics: {
       async write(params) {
-        const safeName = truncStr(String(params.name ?? ""), MAX_METRIC_NAME_LENGTH);
-        logger.debug({ pluginId, name: safeName, value: params.value, tags: params.tags }, "Plugin metric write");
+        const safeName = truncStr(
+          String(params.name ?? ""),
+          MAX_METRIC_NAME_LENGTH
+        );
+        logger.debug(
+          { pluginId, name: safeName, value: params.value, tags: params.tags },
+          "Plugin metric write"
+        );
 
         // Persist metrics to plugin_logs via the batch buffer (same path as
         // logger.log) so they benefit from batched writes and are flushed
@@ -626,11 +714,17 @@ export function buildHostServices(
           pluginId,
           level: "metric",
           message: safeName,
-          meta: sanitiseMeta({ value: params.value, tags: params.tags ?? null }),
+          meta: sanitiseMeta({
+            value: params.value,
+            tags: params.tags ?? null,
+          }),
         });
         if (_logBuffer.length >= LOG_BUFFER_FLUSH_SIZE) {
           flushPluginLogBuffer().catch((err) => {
-            console.error("[plugin-host-services] Triggered metric flush failed:", err);
+            console.error(
+              "[plugin-host-services] Triggered metric flush failed:",
+              err
+            );
           });
         }
       },
@@ -639,18 +733,27 @@ export function buildHostServices(
     logger: {
       async log(params) {
         const { level, meta } = params;
-        const safeMessage = truncStr(String(params.message ?? ""), MAX_LOG_MESSAGE_LENGTH);
+        const safeMessage = truncStr(
+          String(params.message ?? ""),
+          MAX_LOG_MESSAGE_LENGTH
+        );
         const safeMeta = sanitiseMeta(meta);
-        const pluginLogger = logger.child({ service: "plugin-worker", pluginId });
+        const pluginLogger = logger.child({
+          service: "plugin-worker",
+          pluginId,
+        });
         const logFields = {
           ...safeMeta,
           pluginLogLevel: level,
           pluginTimestamp: new Date().toISOString(),
         };
 
-        if (level === "error") pluginLogger.error(logFields, `[plugin] ${safeMessage}`);
-        else if (level === "warn") pluginLogger.warn(logFields, `[plugin] ${safeMessage}`);
-        else if (level === "debug") pluginLogger.debug(logFields, `[plugin] ${safeMessage}`);
+        if (level === "error")
+          pluginLogger.error(logFields, `[plugin] ${safeMessage}`);
+        else if (level === "warn")
+          pluginLogger.warn(logFields, `[plugin] ${safeMessage}`);
+        else if (level === "debug")
+          pluginLogger.debug(logFields, `[plugin] ${safeMessage}`);
         else pluginLogger.info(logFields, `[plugin] ${safeMessage}`);
 
         // Persist to plugin_logs table via the module-level batch buffer (§26.1).
@@ -664,7 +767,10 @@ export function buildHostServices(
         });
         if (_logBuffer.length >= LOG_BUFFER_FLUSH_SIZE) {
           flushPluginLogBuffer().catch((err) => {
-            console.error("[plugin-host-services] Triggered log flush failed:", err);
+            console.error(
+              "[plugin-host-services] Triggered log flush failed:",
+              err
+            );
           });
         }
       },
@@ -684,13 +790,18 @@ export function buildHostServices(
       async list(params) {
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);
-        return applyWindow((await projects.list(companyId)) as Project[], params);
+        return applyWindow(
+          (await projects.list(companyId)) as Project[],
+          params
+        );
       },
       async get(params) {
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);
         const project = await projects.getById(params.projectId);
-        return (inCompany(project, companyId) ? project : null) as Project | null;
+        return (
+          inCompany(project, companyId) ? project : null
+        ) as Project | null;
       },
       async listWorkspaces(params) {
         const companyId = ensureCompanyId(params.companyId);
@@ -736,7 +847,9 @@ export function buildHostServices(
         await ensurePluginAvailableForCompany(companyId);
         const issue = await issues.getById(params.issueId);
         if (!inCompany(issue, companyId)) return null;
-        const projectId = (issue as Record<string, unknown>).projectId as string | null;
+        const projectId = (issue as Record<string, unknown>).projectId as
+          | string
+          | null;
         if (!projectId) return null;
         const project = await projects.getById(projectId);
         if (!inCompany(project, companyId)) return null;
@@ -759,7 +872,10 @@ export function buildHostServices(
       async list(params) {
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);
-        return applyWindow((await issues.list(companyId, params as any)) as Issue[], params);
+        return applyWindow(
+          (await issues.list(companyId, params as any)) as Issue[],
+          params
+        );
       },
       async get(params) {
         const companyId = ensureCompanyId(params.companyId);
@@ -775,23 +891,35 @@ export function buildHostServices(
       async update(params) {
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);
-        requireInCompany("Issue", await issues.getById(params.issueId), companyId);
-        return (await issues.update(params.issueId, params.patch as any)) as Issue;
+        requireInCompany(
+          "Issue",
+          await issues.getById(params.issueId),
+          companyId
+        );
+        return (await issues.update(
+          params.issueId,
+          params.patch as any
+        )) as Issue;
       },
       async listComments(params) {
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);
-        if (!inCompany(await issues.getById(params.issueId), companyId)) return [];
+        if (!inCompany(await issues.getById(params.issueId), companyId))
+          return [];
         return (await issues.listComments(params.issueId)) as IssueComment[];
       },
       async createComment(params) {
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);
-        requireInCompany("Issue", await issues.getById(params.issueId), companyId);
+        requireInCompany(
+          "Issue",
+          await issues.getById(params.issueId),
+          companyId
+        );
         return (await issues.addComment(
           params.issueId,
           params.body,
-          {},
+          {}
         )) as IssueComment;
       },
     },
@@ -839,8 +967,10 @@ export function buildHostServices(
         await ensurePluginAvailableForCompany(companyId);
         const rows = await agents.list(companyId);
         return applyWindow(
-          rows.filter((agent) => !params.status || agent.status === params.status) as Agent[],
-          params,
+          rows.filter(
+            (agent) => !params.status || agent.status === params.status
+          ) as Agent[],
+          params
         );
       },
       async get(params) {
@@ -876,7 +1006,8 @@ export function buildHostServices(
           requestedByActorType: "system",
           requestedByActorId: pluginId,
         });
-        if (!run) throw new Error("Agent wakeup was skipped by heartbeat policy");
+        if (!run)
+          throw new Error("Agent wakeup was skipped by heartbeat policy");
         return { runId: run.id };
       },
     },
@@ -887,11 +1018,12 @@ export function buildHostServices(
         await ensurePluginAvailableForCompany(companyId);
         const rows = await goals.list(companyId);
         return applyWindow(
-          rows.filter((goal) =>
-            (!params.level || goal.level === params.level) &&
-            (!params.status || goal.status === params.status),
+          rows.filter(
+            (goal) =>
+              (!params.level || goal.level === params.level) &&
+              (!params.status || goal.status === params.status)
           ) as Goal[],
-          params,
+          params
         );
       },
       async get(params) {
@@ -926,7 +1058,8 @@ export function buildHostServices(
         await ensurePluginAvailableForCompany(companyId);
         const agent = await agents.getById(params.agentId);
         requireInCompany("Agent", agent, companyId);
-        const taskKey = params.taskKey ?? `plugin:${pluginKey}:session:${randomUUID()}`;
+        const taskKey =
+          params.taskKey ?? `plugin:${pluginKey}:session:${randomUUID()}`;
 
         const row = await db
           .insert(agentTaskSessionsTable)
@@ -962,8 +1095,11 @@ export function buildHostServices(
             and(
               eq(agentTaskSessionsTable.agentId, params.agentId),
               eq(agentTaskSessionsTable.companyId, companyId),
-              like(agentTaskSessionsTable.taskKey, `plugin:${pluginKey}:session:%`),
-            ),
+              like(
+                agentTaskSessionsTable.taskKey,
+                `plugin:${pluginKey}:session:%`
+              )
+            )
           )
           .orderBy(desc(agentTaskSessionsTable.createdAt));
 
@@ -992,8 +1128,11 @@ export function buildHostServices(
             and(
               eq(agentTaskSessionsTable.id, params.sessionId),
               eq(agentTaskSessionsTable.companyId, companyId),
-              like(agentTaskSessionsTable.taskKey, `plugin:${pluginKey}:session:%`),
-            ),
+              like(
+                agentTaskSessionsTable.taskKey,
+                `plugin:${pluginKey}:session:%`
+              )
+            )
           )
           .then((rows) => rows[0] ?? null);
         if (!session) throw new Error(`Session not found: ${params.sessionId}`);
@@ -1011,13 +1150,19 @@ export function buildHostServices(
           requestedByActorType: "system",
           requestedByActorId: pluginId,
         });
-        if (!run) throw new Error("Agent wakeup was skipped by heartbeat policy");
+        if (!run)
+          throw new Error("Agent wakeup was skipped by heartbeat policy");
 
         // Subscribe to live events and forward to the plugin worker as notifications.
         // Track the subscription so it can be cleaned up on dispose() if the run
         // never reaches a terminal status (hang, crash, network partition).
         if (notifyWorker) {
-          const TERMINAL_STATUSES = new Set(["succeeded", "failed", "cancelled", "timed_out"]);
+          const TERMINAL_STATUSES = new Set([
+            "succeeded",
+            "failed",
+            "cancelled",
+            "timed_out",
+          ]);
 
           const cleanup = () => {
             unsubscribe();
@@ -1025,53 +1170,72 @@ export function buildHostServices(
             activeSubscriptions.delete(entry);
           };
 
-          const unsubscribe = subscribeCompanyLiveEvents(companyId, (event) => {
-            const payload = event.payload as Record<string, unknown> | undefined;
-            if (!payload || payload.runId !== run.id) return;
+          const unsubscribe = subscribeCompanyLiveEvents(
+            {
+              companyId,
+              actorType: "system",
+              actorId: pluginId,
+            },
+            (event) => {
+              const payload = event.payload as
+                | Record<string, unknown>
+                | undefined;
+              if (!payload || payload.runId !== run.id) return;
 
-            if (event.type === "heartbeat.run.log" || event.type === "heartbeat.run.event") {
-              notifyWorker("agents.sessions.event", {
-                sessionId: params.sessionId,
-                runId: run.id,
-                seq: (payload.seq as number) ?? 0,
-                eventType: "chunk",
-                stream: (payload.stream as string) ?? null,
-                message: (payload.chunk as string) ?? (payload.message as string) ?? null,
-                payload: payload,
-              });
-            } else if (event.type === "heartbeat.run.status") {
-              const status = payload.status as string;
-              if (TERMINAL_STATUSES.has(status)) {
+              if (
+                event.type === "heartbeat.run.log" ||
+                event.type === "heartbeat.run.event"
+              ) {
                 notifyWorker("agents.sessions.event", {
                   sessionId: params.sessionId,
                   runId: run.id,
-                  seq: 0,
-                  eventType: status === "succeeded" ? "done" : "error",
-                  stream: "system",
-                  message: status === "succeeded" ? "Run completed" : `Run ${status}`,
+                  seq: (payload.seq as number) ?? 0,
+                  eventType: "chunk",
+                  stream: (payload.stream as string) ?? null,
+                  message:
+                    (payload.chunk as string) ??
+                    (payload.message as string) ??
+                    null,
                   payload: payload,
                 });
-                cleanup();
               } else {
-                notifyWorker("agents.sessions.event", {
-                  sessionId: params.sessionId,
-                  runId: run.id,
-                  seq: 0,
-                  eventType: "status",
-                  stream: "system",
-                  message: `Run status: ${status}`,
-                  payload: payload,
-                });
+                if (event.type !== "heartbeat.run.status") return;
+                const status = payload.status as string;
+                if (TERMINAL_STATUSES.has(status)) {
+                  notifyWorker("agents.sessions.event", {
+                    sessionId: params.sessionId,
+                    runId: run.id,
+                    seq: 0,
+                    eventType: status === "succeeded" ? "done" : "error",
+                    stream: "system",
+                    message:
+                      status === "succeeded"
+                        ? "Run completed"
+                        : `Run ${status}`,
+                    payload: payload,
+                  });
+                  cleanup();
+                } else {
+                  notifyWorker("agents.sessions.event", {
+                    sessionId: params.sessionId,
+                    runId: run.id,
+                    seq: 0,
+                    eventType: "status",
+                    stream: "system",
+                    message: `Run status: ${status}`,
+                    payload: payload,
+                  });
+                }
               }
             }
-          });
+          );
 
           // Safety-net timeout: if the run never reaches a terminal status,
           // force-cleanup the subscription to prevent unbounded leaks.
           const timeoutTimer = setTimeout(() => {
             logger.warn(
               { pluginId, pluginKey, runId: run.id },
-              "session event subscription timed out — forcing cleanup",
+              "session event subscription timed out — forcing cleanup"
             );
             cleanup();
           }, SESSION_EVENT_SUBSCRIPTION_TIMEOUT_MS);
@@ -1092,12 +1256,16 @@ export function buildHostServices(
             and(
               eq(agentTaskSessionsTable.id, params.sessionId),
               eq(agentTaskSessionsTable.companyId, companyId),
-              like(agentTaskSessionsTable.taskKey, `plugin:${pluginKey}:session:%`),
-            ),
+              like(
+                agentTaskSessionsTable.taskKey,
+                `plugin:${pluginKey}:session:%`
+              )
+            )
           )
           .returning()
           .then((rows) => rows.length);
-        if (deleted === 0) throw new Error(`Session not found: ${params.sessionId}`);
+        if (deleted === 0)
+          throw new Error(`Session not found: ${params.sessionId}`);
       },
     },
 
@@ -1124,7 +1292,10 @@ export function buildHostServices(
 
       // Flush any buffered log entries synchronously-as-possible on dispose.
       flushPluginLogBuffer().catch((err) => {
-        console.error("[plugin-host-services] dispose() log flush failed:", err);
+        console.error(
+          "[plugin-host-services] dispose() log flush failed:",
+          err
+        );
       });
     },
   };

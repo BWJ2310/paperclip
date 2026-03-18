@@ -3,23 +3,37 @@ import type {
   AdapterExecutionResult,
   AdapterRuntimeServiceReport,
 } from "@paperclipai/adapter-utils";
-import { asNumber, asString, buildPaperclipEnv, parseObject } from "@paperclipai/adapter-utils/server-utils";
+import {
+  asNumber,
+  asString,
+  buildPaperclipEnv,
+  parseObject,
+  readPaperclipInvokeContext,
+} from "@paperclipai/adapter-utils/server-utils";
 import crypto, { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 
-type SessionKeyStrategy = "fixed" | "issue" | "run";
+type SessionKeyStrategy = "fixed" | "task_key" | "run";
 
 type WakePayload = {
   runId: string;
   agentId: string;
   companyId: string;
-  taskId: string | null;
+  taskKey: string | null;
   issueId: string | null;
   wakeReason: string | null;
   wakeCommentId: string | null;
   approvalId: string | null;
   approvalStatus: string | null;
   issueIds: string[];
+  conversationId: string | null;
+  conversationMessageId: string | null;
+  conversationMessageSequence: number | null;
+  conversationResponseMode: string | null;
+  conversationTargetKind: string | null;
+  conversationTargetId: string | null;
+  linkedConversationMemoryMarkdown: string | null;
+  linkedConversationRefs: Array<Record<string, unknown>>;
 };
 
 type GatewayDeviceIdentity = {
@@ -91,12 +105,15 @@ const SENSITIVE_LOG_KEY_PATTERN =
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 
 function asRecord(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return null;
   return value as Record<string, unknown>;
 }
 
 function nonEmpty(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
 }
 
 function parseOptionalPositiveInteger(value: unknown): number | null {
@@ -121,20 +138,23 @@ function parseBoolean(value: unknown, fallback = false): boolean {
 }
 
 function normalizeSessionKeyStrategy(value: unknown): SessionKeyStrategy {
-  const normalized = asString(value, "issue").trim().toLowerCase();
+  const normalized = asString(value, "task_key").trim().toLowerCase();
   if (normalized === "fixed" || normalized === "run") return normalized;
-  return "issue";
+  if (normalized === "task_key" || normalized === "issue") return "task_key";
+  return "task_key";
 }
 
 function resolveSessionKey(input: {
   strategy: SessionKeyStrategy;
   configuredSessionKey: string | null;
   runId: string;
-  issueId: string | null;
+  taskKey: string | null;
 }): string {
   const fallback = input.configuredSessionKey ?? "paperclip";
   if (input.strategy === "run") return `paperclip:run:${input.runId}`;
-  if (input.strategy === "issue" && input.issueId) return `paperclip:issue:${input.issueId}`;
+  if (input.strategy === "task_key" && input.taskKey) {
+    return `paperclip:${input.taskKey}`;
+  }
   return fallback;
 }
 
@@ -174,16 +194,28 @@ function normalizeScopes(value: unknown): string[] {
 }
 
 function uniqueScopes(scopes: string[]): string[] {
-  return Array.from(new Set(scopes.map((scope) => scope.trim()).filter(Boolean)));
+  return Array.from(
+    new Set(scopes.map((scope) => scope.trim()).filter(Boolean))
+  );
 }
 
-function headerMapGetIgnoreCase(headers: Record<string, string>, key: string): string | null {
-  const match = Object.entries(headers).find(([entryKey]) => entryKey.toLowerCase() === key.toLowerCase());
+function headerMapGetIgnoreCase(
+  headers: Record<string, string>,
+  key: string
+): string | null {
+  const match = Object.entries(headers).find(
+    ([entryKey]) => entryKey.toLowerCase() === key.toLowerCase()
+  );
   return match ? match[1] : null;
 }
 
-function headerMapHasIgnoreCase(headers: Record<string, string>, key: string): boolean {
-  return Object.keys(headers).some((entryKey) => entryKey.toLowerCase() === key.toLowerCase());
+function headerMapHasIgnoreCase(
+  headers: Record<string, string>,
+  key: string
+): boolean {
+  return Object.keys(headers).some(
+    (entryKey) => entryKey.toLowerCase() === key.toLowerCase()
+  );
 }
 
 function getGatewayErrorDetails(err: unknown): Record<string, unknown> | null {
@@ -215,7 +247,10 @@ function tokenFromAuthHeader(rawHeader: string | null): string | null {
   return match ? nonEmpty(match[1]) : trimmed;
 }
 
-function resolveAuthToken(config: Record<string, unknown>, headers: Record<string, string>): string | null {
+function resolveAuthToken(
+  config: Record<string, unknown>,
+  headers: Record<string, string>
+): string | null {
   const explicit = nonEmpty(config.authToken) ?? nonEmpty(config.token);
   if (explicit) return explicit;
 
@@ -242,21 +277,35 @@ function redactSecretForLog(value: string): string {
 
 function truncateForLog(value: string, maxChars = 320): string {
   if (value.length <= maxChars) return value;
-  return `${value.slice(0, maxChars)}... [truncated ${value.length - maxChars} chars]`;
+  return `${value.slice(0, maxChars)}... [truncated ${
+    value.length - maxChars
+  } chars]`;
 }
 
-function redactForLog(value: unknown, keyPath: string[] = [], depth = 0): unknown {
+function redactForLog(
+  value: unknown,
+  keyPath: string[] = [],
+  depth = 0
+): unknown {
   const currentKey = keyPath[keyPath.length - 1] ?? "";
   if (typeof value === "string") {
     if (isSensitiveLogKey(currentKey)) return redactSecretForLog(value);
     return truncateForLog(value);
   }
-  if (typeof value === "number" || typeof value === "boolean" || value == null) {
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    value == null
+  ) {
     return value;
   }
   if (Array.isArray(value)) {
     if (depth >= 6) return "[array-truncated]";
-    const out = value.slice(0, 20).map((entry, index) => redactForLog(entry, [...keyPath, `${index}`], depth + 1));
+    const out = value
+      .slice(0, 20)
+      .map((entry, index) =>
+        redactForLog(entry, [...keyPath, `${index}`], depth + 1)
+      );
     if (value.length > 20) out.push(`[+${value.length - 20} more items]`);
     return out;
   }
@@ -278,26 +327,34 @@ function redactForLog(value: unknown, keyPath: string[] = [], depth = 0): unknow
 function stringifyForLog(value: unknown, maxChars: number): string {
   const text = JSON.stringify(value);
   if (text.length <= maxChars) return text;
-  return `${text.slice(0, maxChars)}... [truncated ${text.length - maxChars} chars]`;
+  return `${text.slice(0, maxChars)}... [truncated ${
+    text.length - maxChars
+  } chars]`;
 }
 
 function buildWakePayload(ctx: AdapterExecutionContext): WakePayload {
-  const { runId, agent, context } = ctx;
+  const { runId, agent } = ctx;
+  const paperclipContext = readPaperclipInvokeContext(ctx.context);
   return {
     runId,
     agentId: agent.id,
     companyId: agent.companyId,
-    taskId: nonEmpty(context.taskId) ?? nonEmpty(context.issueId),
-    issueId: nonEmpty(context.issueId),
-    wakeReason: nonEmpty(context.wakeReason),
-    wakeCommentId: nonEmpty(context.wakeCommentId) ?? nonEmpty(context.commentId),
-    approvalId: nonEmpty(context.approvalId),
-    approvalStatus: nonEmpty(context.approvalStatus),
-    issueIds: Array.isArray(context.issueIds)
-      ? context.issueIds.filter(
-          (value): value is string => typeof value === "string" && value.trim().length > 0,
-        )
-      : [],
+    taskKey: paperclipContext.taskKey,
+    issueId: paperclipContext.issueId,
+    wakeReason: paperclipContext.wakeReason,
+    wakeCommentId: paperclipContext.wakeCommentId,
+    approvalId: paperclipContext.approvalId,
+    approvalStatus: paperclipContext.approvalStatus,
+    issueIds: paperclipContext.linkedIssueIds,
+    conversationId: paperclipContext.conversationId,
+    conversationMessageId: paperclipContext.conversationMessageId,
+    conversationMessageSequence: paperclipContext.conversationMessageSequence,
+    conversationResponseMode: paperclipContext.conversationResponseMode,
+    conversationTargetKind: paperclipContext.conversationTargetKind,
+    conversationTargetId: paperclipContext.conversationTargetId,
+    linkedConversationMemoryMarkdown:
+      paperclipContext.linkedConversationMemoryMarkdown,
+    linkedConversationRefs: paperclipContext.linkedConversationRefs,
   };
 }
 
@@ -306,43 +363,69 @@ function resolvePaperclipApiUrlOverride(value: unknown): string | null {
   if (!raw) return null;
   try {
     const parsed = new URL(raw);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+      return null;
     return parsed.toString();
   } catch {
     return null;
   }
 }
 
-function buildPaperclipEnvForWake(ctx: AdapterExecutionContext, wakePayload: WakePayload): Record<string, string> {
-  const paperclipApiUrlOverride = resolvePaperclipApiUrlOverride(ctx.config.paperclipApiUrl);
+function buildPaperclipEnvForWake(
+  ctx: AdapterExecutionContext,
+  wakePayload: WakePayload
+): Record<string, string> {
+  const paperclipApiUrlOverride = resolvePaperclipApiUrlOverride(
+    ctx.config.paperclipApiUrl
+  );
   const paperclipEnv: Record<string, string> = {
-    ...buildPaperclipEnv(ctx.agent),
-    PAPERCLIP_RUN_ID: ctx.runId,
+    ...buildPaperclipEnv(ctx.agent, {
+      runId: ctx.runId,
+      taskKey: wakePayload.taskKey,
+      issueId: wakePayload.issueId,
+      wakeReason: wakePayload.wakeReason,
+      wakeCommentId: wakePayload.wakeCommentId,
+      approvalId: wakePayload.approvalId,
+      approvalStatus: wakePayload.approvalStatus,
+      linkedIssueIds: wakePayload.issueIds,
+      conversationId: wakePayload.conversationId,
+      conversationMessageId: wakePayload.conversationMessageId,
+      conversationMessageSequence: wakePayload.conversationMessageSequence,
+      conversationResponseMode: wakePayload.conversationResponseMode,
+      conversationTargetKind: wakePayload.conversationTargetKind,
+      conversationTargetId: wakePayload.conversationTargetId,
+      linkedConversationMemoryMarkdown:
+        wakePayload.linkedConversationMemoryMarkdown,
+      linkedConversationRefs: wakePayload.linkedConversationRefs,
+    }),
   };
 
   if (paperclipApiUrlOverride) {
     paperclipEnv.PAPERCLIP_API_URL = paperclipApiUrlOverride;
   }
-  if (wakePayload.taskId) paperclipEnv.PAPERCLIP_TASK_ID = wakePayload.taskId;
-  if (wakePayload.wakeReason) paperclipEnv.PAPERCLIP_WAKE_REASON = wakePayload.wakeReason;
-  if (wakePayload.wakeCommentId) paperclipEnv.PAPERCLIP_WAKE_COMMENT_ID = wakePayload.wakeCommentId;
-  if (wakePayload.approvalId) paperclipEnv.PAPERCLIP_APPROVAL_ID = wakePayload.approvalId;
-  if (wakePayload.approvalStatus) paperclipEnv.PAPERCLIP_APPROVAL_STATUS = wakePayload.approvalStatus;
-  if (wakePayload.issueIds.length > 0) {
-    paperclipEnv.PAPERCLIP_LINKED_ISSUE_IDS = wakePayload.issueIds.join(",");
-  }
 
   return paperclipEnv;
 }
 
-function buildWakeText(payload: WakePayload, paperclipEnv: Record<string, string>): string {
-  const claimedApiKeyPath = "~/.openclaw/workspace/paperclip-claimed-api-key.json";
+function buildWakeText(
+  payload: WakePayload,
+  paperclipEnv: Record<string, string>
+): string {
+  const claimedApiKeyPath =
+    "~/.openclaw/workspace/paperclip-claimed-api-key.json";
   const orderedKeys = [
     "PAPERCLIP_RUN_ID",
     "PAPERCLIP_AGENT_ID",
     "PAPERCLIP_COMPANY_ID",
     "PAPERCLIP_API_URL",
+    "PAPERCLIP_TASK_KEY",
     "PAPERCLIP_TASK_ID",
+    "PAPERCLIP_CONVERSATION_ID",
+    "PAPERCLIP_CONVERSATION_MESSAGE_ID",
+    "PAPERCLIP_CONVERSATION_MESSAGE_SEQUENCE",
+    "PAPERCLIP_CONVERSATION_RESPONSE_MODE",
+    "PAPERCLIP_CONVERSATION_TARGET_KIND",
+    "PAPERCLIP_CONVERSATION_TARGET_ID",
     "PAPERCLIP_WAKE_REASON",
     "PAPERCLIP_WAKE_COMMENT_ID",
     "PAPERCLIP_APPROVAL_ID",
@@ -357,8 +440,38 @@ function buildWakeText(payload: WakePayload, paperclipEnv: Record<string, string
     envLines.push(`${key}=${value}`);
   }
 
-  const issueIdHint = payload.taskId ?? payload.issueId ?? "";
-  const apiBaseHint = paperclipEnv.PAPERCLIP_API_URL ?? "<set PAPERCLIP_API_URL>";
+  const taskKeyHint = payload.taskKey ?? "";
+  const issueIdHint = payload.issueId ?? "";
+  const conversationIdHint = payload.conversationId ?? "";
+  const conversationTargetKindHint = payload.conversationTargetKind ?? "";
+  const conversationTargetIdHint = payload.conversationTargetId ?? "";
+  const apiBaseHint =
+    paperclipEnv.PAPERCLIP_API_URL ?? "<set PAPERCLIP_API_URL>";
+  const taskScopeKind = payload.taskKey?.split(":")[0] ?? null;
+  const conversationWorkflowLines =
+    taskScopeKind === "conversation"
+      ? [
+          "4) If task scope starts with conversation:",
+          `   - conversationId = PAPERCLIP_CONVERSATION_ID if present, otherwise ${conversationIdHint}.`,
+          "   - GET /api/conversations/{conversationId}",
+          "   - GET /api/conversations/{conversationId}/messages",
+          "   - Use PAPERCLIP_CONVERSATION_TARGET_KIND / PAPERCLIP_CONVERSATION_TARGET_ID only as extra target context for this conversation run.",
+          `   - Current promoted target context: kind=${conversationTargetKindHint} id=${conversationTargetIdHint}`,
+          "   - Do lightweight direct work when appropriate.",
+          "   - Do NOT checkout issues or mutate issue status unless PAPERCLIP_TASK_KEY itself starts with issue:.",
+          '   - Reply with POST /api/conversations/{conversationId}/messages using {"bodyMarkdown":"...","activeContextTargets":[]}.',
+          "   - If you create a new issue, use POST /api/companies/{companyId}/issues and include a structured issue mention in the follow-up conversation reply.",
+        ]
+      : [
+          "4) If task scope starts with issue:",
+          `   - issueId = PAPERCLIP_TASK_ID if present, otherwise issue_id (${issueIdHint}).`,
+          '   - POST /api/issues/{issueId}/checkout with {"agentId":"$PAPERCLIP_AGENT_ID","expectedStatuses":["todo","backlog","blocked"]}',
+          "   - GET /api/issues/{issueId}",
+          "   - GET /api/issues/{issueId}/comments",
+          "   - Execute the issue instructions exactly.",
+          '   - If instructions require a comment, POST /api/issues/{issueId}/comments with {"body":"..."}.',
+          '   - PATCH /api/issues/{issueId} with {"status":"done","comment":"what changed and why"}.',
+        ];
 
   const lines = [
     "Paperclip wake event for a cloud adapter.",
@@ -372,7 +485,7 @@ function buildWakeText(payload: WakePayload, paperclipEnv: Record<string, string
     `Load PAPERCLIP_API_KEY from ${claimedApiKeyPath} (the token you saved after claim-api-key).`,
     "",
     `api_base=${apiBaseHint}`,
-    `task_id=${payload.taskId ?? ""}`,
+    `task_key=${payload.taskKey ?? ""}`,
     `issue_id=${payload.issueId ?? ""}`,
     `wake_reason=${payload.wakeReason ?? ""}`,
     `wake_comment_id=${payload.wakeCommentId ?? ""}`,
@@ -388,22 +501,20 @@ function buildWakeText(payload: WakePayload, paperclipEnv: Record<string, string
     "",
     "Workflow:",
     "1) GET /api/agents/me",
-    `2) Determine issueId: PAPERCLIP_TASK_ID if present, otherwise issue_id (${issueIdHint}).`,
-    "3) If issueId exists:",
-    "   - POST /api/issues/{issueId}/checkout with {\"agentId\":\"$PAPERCLIP_AGENT_ID\",\"expectedStatuses\":[\"todo\",\"backlog\",\"blocked\"]}",
-    "   - GET /api/issues/{issueId}",
-    "   - GET /api/issues/{issueId}/comments",
-    "   - Execute the issue instructions exactly.",
-    "   - If instructions require a comment, POST /api/issues/{issueId}/comments with {\"body\":\"...\"}.",
-    "   - PATCH /api/issues/{issueId} with {\"status\":\"done\",\"comment\":\"what changed and why\"}.",
-    "4) If issueId does not exist:",
+    `2) Determine task scope: PAPERCLIP_TASK_KEY if present, otherwise task_key (${taskKeyHint}).`,
+    `3) Determine conversationId from PAPERCLIP_CONVERSATION_ID if present, otherwise ${conversationIdHint}.`,
+    ...conversationWorkflowLines,
+    "5) If there is no task scope:",
     "   - GET /api/companies/$PAPERCLIP_COMPANY_ID/issues?assigneeAgentId=$PAPERCLIP_AGENT_ID&status=todo,in_progress,blocked",
-    "   - Pick in_progress first, then todo, then blocked, then execute step 3.",
+    "   - Pick in_progress first, then todo, then blocked, then execute the issue workflow above.",
     "",
-    "Useful endpoints for issue work:",
+    "Useful endpoints for tracked work:",
     "- POST /api/issues/{issueId}/comments",
     "- PATCH /api/issues/{issueId}",
     "- POST /api/companies/{companyId}/issues (when asked to create a new issue)",
+    "- GET /api/conversations/{conversationId}",
+    "- GET /api/conversations/{conversationId}/messages",
+    "- POST /api/conversations/{conversationId}/messages",
     "",
     "Complete the workflow in this run.",
   ];
@@ -419,17 +530,21 @@ function buildStandardPaperclipPayload(
   ctx: AdapterExecutionContext,
   wakePayload: WakePayload,
   paperclipEnv: Record<string, string>,
-  payloadTemplate: Record<string, unknown>,
+  payloadTemplate: Record<string, unknown>
 ): Record<string, unknown> {
   const templatePaperclip = parseObject(payloadTemplate.paperclip);
   const workspace = asRecord(ctx.context.paperclipWorkspace);
   const workspaces = Array.isArray(ctx.context.paperclipWorkspaces)
-    ? ctx.context.paperclipWorkspaces.filter((entry): entry is Record<string, unknown> => Boolean(asRecord(entry)))
+    ? ctx.context.paperclipWorkspaces.filter(
+        (entry): entry is Record<string, unknown> => Boolean(asRecord(entry))
+      )
     : [];
   const configuredWorkspaceRuntime = parseObject(ctx.config.workspaceRuntime);
-  const runtimeServiceIntents = Array.isArray(ctx.context.paperclipRuntimeServiceIntents)
+  const runtimeServiceIntents = Array.isArray(
+    ctx.context.paperclipRuntimeServiceIntents
+  )
     ? ctx.context.paperclipRuntimeServiceIntents.filter(
-        (entry): entry is Record<string, unknown> => Boolean(asRecord(entry)),
+        (entry): entry is Record<string, unknown> => Boolean(asRecord(entry))
       )
     : [];
 
@@ -438,9 +553,18 @@ function buildStandardPaperclipPayload(
     companyId: ctx.agent.companyId,
     agentId: ctx.agent.id,
     agentName: ctx.agent.name,
-    taskId: wakePayload.taskId,
+    taskKey: wakePayload.taskKey,
     issueId: wakePayload.issueId,
     issueIds: wakePayload.issueIds,
+    conversationId: wakePayload.conversationId,
+    conversationMessageId: wakePayload.conversationMessageId,
+    conversationMessageSequence: wakePayload.conversationMessageSequence,
+    conversationResponseMode: wakePayload.conversationResponseMode,
+    conversationTargetKind: wakePayload.conversationTargetKind,
+    conversationTargetId: wakePayload.conversationTargetId,
+    linkedConversationMemoryMarkdown:
+      wakePayload.linkedConversationMemoryMarkdown,
+    linkedConversationRefs: wakePayload.linkedConversationRefs,
     wakeReason: wakePayload.wakeReason,
     wakeCommentId: wakePayload.wakeCommentId,
     approvalId: wakePayload.approvalId,
@@ -454,10 +578,15 @@ function buildStandardPaperclipPayload(
   if (workspaces.length > 0) {
     standardPaperclip.workspaces = workspaces;
   }
-  if (runtimeServiceIntents.length > 0 || Object.keys(configuredWorkspaceRuntime).length > 0) {
+  if (
+    runtimeServiceIntents.length > 0 ||
+    Object.keys(configuredWorkspaceRuntime).length > 0
+  ) {
     standardPaperclip.workspaceRuntime = {
       ...configuredWorkspaceRuntime,
-      ...(runtimeServiceIntents.length > 0 ? { services: runtimeServiceIntents } : {}),
+      ...(runtimeServiceIntents.length > 0
+        ? { services: runtimeServiceIntents }
+        : {}),
     };
   }
 
@@ -481,13 +610,19 @@ function rawDataToString(data: unknown): string {
   if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
   if (Array.isArray(data)) {
     return Buffer.concat(
-      data.map((entry) => (Buffer.isBuffer(entry) ? entry : Buffer.from(String(entry), "utf8"))),
+      data.map((entry) =>
+        Buffer.isBuffer(entry) ? entry : Buffer.from(String(entry), "utf8")
+      )
     ).toString("utf8");
   }
   return String(data ?? "");
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string
+): Promise<T> {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
@@ -516,7 +651,11 @@ function derivePublicKeyRaw(publicKeyPem: string): Buffer {
 }
 
 function base64UrlEncode(buf: Buffer): string {
-  return buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
+  return buf
+    .toString("base64")
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/g, "");
 }
 
 function signDevicePayload(privateKeyPem: string, payload: string): string {
@@ -556,12 +695,16 @@ function buildDeviceAuthPayloadV3(params: {
   ].join("|");
 }
 
-function resolveDeviceIdentity(config: Record<string, unknown>): GatewayDeviceIdentity {
+function resolveDeviceIdentity(
+  config: Record<string, unknown>
+): GatewayDeviceIdentity {
   const configuredPrivateKey = nonEmpty(config.devicePrivateKeyPem);
   if (configuredPrivateKey) {
     const privateKey = crypto.createPrivateKey(configuredPrivateKey);
     const publicKey = crypto.createPublicKey(privateKey);
-    const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
+    const publicKeyPem = publicKey
+      .export({ type: "spki", format: "pem" })
+      .toString();
     const raw = derivePublicKeyRaw(publicKeyPem);
     return {
       deviceId: crypto.createHash("sha256").update(raw).digest("hex"),
@@ -572,8 +715,12 @@ function resolveDeviceIdentity(config: Record<string, unknown>): GatewayDeviceId
   }
 
   const generated = crypto.generateKeyPairSync("ed25519");
-  const publicKeyPem = generated.publicKey.export({ type: "spki", format: "pem" }).toString();
-  const privateKeyPem = generated.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const publicKeyPem = generated.publicKey
+    .export({ type: "spki", format: "pem" })
+    .toString();
+  const privateKeyPem = generated.privateKey
+    .export({ type: "pkcs8", format: "pem" })
+    .toString();
   const raw = derivePublicKeyRaw(publicKeyPem);
   return {
     deviceId: crypto.createHash("sha256").update(raw).digest("hex"),
@@ -585,12 +732,19 @@ function resolveDeviceIdentity(config: Record<string, unknown>): GatewayDeviceId
 
 function isResponseFrame(value: unknown): value is GatewayResponseFrame {
   const record = asRecord(value);
-  return Boolean(record && record.type === "res" && typeof record.id === "string" && typeof record.ok === "boolean");
+  return Boolean(
+    record &&
+      record.type === "res" &&
+      typeof record.id === "string" &&
+      typeof record.ok === "boolean"
+  );
 }
 
 function isEventFrame(value: unknown): value is GatewayEventFrame {
   const record = asRecord(value);
-  return Boolean(record && record.type === "event" && typeof record.event === "string");
+  return Boolean(
+    record && record.type === "event" && typeof record.event === "string"
+  );
 }
 
 class GatewayWsClient {
@@ -610,7 +764,7 @@ class GatewayWsClient {
 
   async connect(
     buildConnectParams: (nonce: string) => Record<string, unknown>,
-    timeoutMs: number,
+    timeoutMs: number
   ): Promise<Record<string, unknown> | null> {
     this.ws = new WebSocket(this.opts.url, {
       headers: this.opts.headers,
@@ -632,7 +786,10 @@ class GatewayWsClient {
 
     ws.on("error", (err) => {
       const message = err instanceof Error ? err.message : String(err);
-      void this.opts.onLog("stderr", `[openclaw-gateway] websocket error: ${message}\n`);
+      void this.opts.onLog(
+        "stderr",
+        `[openclaw-gateway] websocket error: ${message}\n`
+      );
     });
 
     await withTimeout(
@@ -647,7 +804,11 @@ class GatewayWsClient {
         };
         const onClose = (code: number, reason: Buffer) => {
           cleanup();
-          reject(new Error(`gateway closed before open (${code}): ${rawDataToString(reason)}`));
+          reject(
+            new Error(
+              `gateway closed before open (${code}): ${rawDataToString(reason)}`
+            )
+          );
         };
         const cleanup = () => {
           ws.off("open", onOpen);
@@ -659,15 +820,23 @@ class GatewayWsClient {
         ws.once("close", onClose);
       }),
       timeoutMs,
-      "gateway websocket open timeout",
+      "gateway websocket open timeout"
     );
 
-    const nonce = await withTimeout(this.challengePromise, timeoutMs, "gateway connect challenge timeout");
+    const nonce = await withTimeout(
+      this.challengePromise,
+      timeoutMs,
+      "gateway connect challenge timeout"
+    );
     const signedConnectParams = buildConnectParams(nonce);
 
-    const hello = await this.request<Record<string, unknown> | null>("connect", signedConnectParams, {
-      timeoutMs,
-    });
+    const hello = await this.request<Record<string, unknown> | null>(
+      "connect",
+      signedConnectParams,
+      {
+        timeoutMs,
+      }
+    );
 
     return hello;
   }
@@ -675,7 +844,7 @@ class GatewayWsClient {
   async request<T>(
     method: string,
     params: unknown,
-    opts: GatewayClientRequestOptions,
+    opts: GatewayClientRequestOptions
   ): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("gateway not connected");
@@ -811,7 +980,7 @@ async function autoApproveDevicePairing(params: {
   try {
     await params.onLog(
       "stdout",
-      "[openclaw-gateway] pairing required; attempting automatic pairing approval via gateway methods\n",
+      "[openclaw-gateway] pairing required; attempting automatic pairing approval via gateway methods\n"
     );
 
     await client.connect(
@@ -831,21 +1000,29 @@ async function autoApproveDevicePairing(params: {
           ...(params.password ? { password: params.password } : {}),
         },
       }),
-      params.connectTimeoutMs,
+      params.connectTimeoutMs
     );
 
     let requestId = params.requestId;
     if (!requestId) {
-      const listPayload = await client.request<Record<string, unknown>>("device.pair.list", {}, {
-        timeoutMs: params.connectTimeoutMs,
-      });
-      const pending = Array.isArray(listPayload.pending) ? listPayload.pending : [];
+      const listPayload = await client.request<Record<string, unknown>>(
+        "device.pair.list",
+        {},
+        {
+          timeoutMs: params.connectTimeoutMs,
+        }
+      );
+      const pending = Array.isArray(listPayload.pending)
+        ? listPayload.pending
+        : [];
       const pendingRecords = pending
         .map((entry) => asRecord(entry))
         .filter((entry): entry is Record<string, unknown> => Boolean(entry));
       const matching =
         (params.deviceId
-          ? pendingRecords.find((entry) => nonEmpty(entry.deviceId) === params.deviceId)
+          ? pendingRecords.find(
+              (entry) => nonEmpty(entry.deviceId) === params.deviceId
+            )
           : null) ?? pendingRecords[pendingRecords.length - 1];
       requestId = nonEmpty(matching?.requestId);
     }
@@ -859,26 +1036,34 @@ async function autoApproveDevicePairing(params: {
       { requestId },
       {
         timeoutMs: params.connectTimeoutMs,
-      },
+      }
     );
 
     return { ok: true, requestId };
   } catch (err) {
-    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
   } finally {
     client.close();
   }
 }
 
-function parseUsage(value: unknown): AdapterExecutionResult["usage"] | undefined {
+function parseUsage(
+  value: unknown
+): AdapterExecutionResult["usage"] | undefined {
   const record = asRecord(value);
   if (!record) return undefined;
 
   const inputTokens = asNumber(record.inputTokens ?? record.input, 0);
   const outputTokens = asNumber(record.outputTokens ?? record.output, 0);
   const cachedInputTokens = asNumber(
-    record.cachedInputTokens ?? record.cached_input_tokens ?? record.cacheRead ?? record.cache_read,
-    0,
+    record.cachedInputTokens ??
+      record.cached_input_tokens ??
+      record.cacheRead ??
+      record.cache_read,
+    0
   );
 
   if (inputTokens <= 0 && outputTokens <= 0 && cachedInputTokens <= 0) {
@@ -892,19 +1077,26 @@ function parseUsage(value: unknown): AdapterExecutionResult["usage"] | undefined
   };
 }
 
-function extractRuntimeServicesFromMeta(meta: Record<string, unknown> | null): AdapterRuntimeServiceReport[] {
+function extractRuntimeServicesFromMeta(
+  meta: Record<string, unknown> | null
+): AdapterRuntimeServiceReport[] {
   if (!meta) return [];
   const reports: AdapterRuntimeServiceReport[] = [];
 
   const runtimeServices = Array.isArray(meta.runtimeServices)
-    ? meta.runtimeServices.filter((entry): entry is Record<string, unknown> => Boolean(asRecord(entry)))
+    ? meta.runtimeServices.filter((entry): entry is Record<string, unknown> =>
+        Boolean(asRecord(entry))
+      )
     : [];
   for (const entry of runtimeServices) {
     const serviceName = nonEmpty(entry.serviceName) ?? nonEmpty(entry.name);
     if (!serviceName) continue;
     const rawStatus = nonEmpty(entry.status)?.toLowerCase();
     const status =
-      rawStatus === "starting" || rawStatus === "running" || rawStatus === "stopped" || rawStatus === "failed"
+      rawStatus === "starting" ||
+      rawStatus === "running" ||
+      rawStatus === "stopped" ||
+      rawStatus === "failed"
         ? rawStatus
         : "running";
     const rawLifecycle = nonEmpty(entry.lifecycle)?.toLowerCase();
@@ -918,11 +1110,13 @@ function extractRuntimeServicesFromMeta(meta: Record<string, unknown> | null): A
         : "run";
     const rawHealth = nonEmpty(entry.healthStatus)?.toLowerCase();
     const healthStatus =
-      rawHealth === "healthy" || rawHealth === "unhealthy" || rawHealth === "unknown"
+      rawHealth === "healthy" ||
+      rawHealth === "unhealthy" ||
+      rawHealth === "unknown"
         ? rawHealth
         : status === "running"
-          ? "healthy"
-          : "unknown";
+        ? "healthy"
+        : "unknown";
 
     reports.push({
       id: nonEmpty(entry.id),
@@ -960,7 +1154,10 @@ function extractRuntimeServicesFromMeta(meta: Record<string, unknown> | null): A
   }
 
   const previewUrls = Array.isArray(meta.previewUrls)
-    ? meta.previewUrls.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    ? meta.previewUrls.filter(
+        (entry): entry is string =>
+          typeof entry === "string" && entry.trim().length > 0
+      )
     : [];
   previewUrls.forEach((url, index) => {
     reports.push({
@@ -993,7 +1190,9 @@ function extractResultText(value: unknown): string | null {
   return nonEmpty(record.text) ?? nonEmpty(record.summary) ?? null;
 }
 
-export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
+export async function execute(
+  ctx: AdapterExecutionContext
+): Promise<AdapterExecutionResult> {
   const urlValue = asString(ctx.config.url, "").trim();
   if (!urlValue) {
     return {
@@ -1026,13 +1225,19 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     };
   }
 
-  const timeoutSec = Math.max(0, Math.floor(asNumber(ctx.config.timeoutSec, 120)));
+  const timeoutSec = Math.max(
+    0,
+    Math.floor(asNumber(ctx.config.timeoutSec, 120))
+  );
   const timeoutMs = timeoutSec > 0 ? timeoutSec * 1000 : 0;
   const connectTimeoutMs = timeoutMs > 0 ? Math.min(timeoutMs, 15_000) : 10_000;
-  const waitTimeoutMs = parseOptionalPositiveInteger(ctx.config.waitTimeoutMs) ?? (timeoutMs > 0 ? timeoutMs : 30_000);
+  const waitTimeoutMs =
+    parseOptionalPositiveInteger(ctx.config.waitTimeoutMs) ??
+    (timeoutMs > 0 ? timeoutMs : 30_000);
 
   const payloadTemplate = parseObject(ctx.config.payloadTemplate);
-  const transportHint = nonEmpty(ctx.config.streamTransport) ?? nonEmpty(ctx.config.transport);
+  const transportHint =
+    nonEmpty(ctx.config.streamTransport) ?? nonEmpty(ctx.config.transport);
 
   const headers = toStringRecord(ctx.config.headers);
   const authToken = resolveAuthToken(parseObject(ctx.config), headers);
@@ -1045,7 +1250,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const clientId = nonEmpty(ctx.config.clientId) ?? DEFAULT_CLIENT_ID;
   const clientMode = nonEmpty(ctx.config.clientMode) ?? DEFAULT_CLIENT_MODE;
-  const clientVersion = nonEmpty(ctx.config.clientVersion) ?? DEFAULT_CLIENT_VERSION;
+  const clientVersion =
+    nonEmpty(ctx.config.clientVersion) ?? DEFAULT_CLIENT_VERSION;
   const role = nonEmpty(ctx.config.role) ?? DEFAULT_ROLE;
   const scopes = normalizeScopes(ctx.config.scopes);
   const deviceFamily = nonEmpty(ctx.config.deviceFamily);
@@ -1055,18 +1261,28 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const paperclipEnv = buildPaperclipEnvForWake(ctx, wakePayload);
   const wakeText = buildWakeText(wakePayload, paperclipEnv);
 
-  const sessionKeyStrategy = normalizeSessionKeyStrategy(ctx.config.sessionKeyStrategy);
+  const sessionKeyStrategy = normalizeSessionKeyStrategy(
+    ctx.config.sessionKeyStrategy
+  );
   const configuredSessionKey = nonEmpty(ctx.config.sessionKey);
   const sessionKey = resolveSessionKey({
     strategy: sessionKeyStrategy,
     configuredSessionKey,
     runId: ctx.runId,
-    issueId: wakePayload.issueId,
+    taskKey: wakePayload.taskKey,
   });
 
-  const templateMessage = nonEmpty(payloadTemplate.message) ?? nonEmpty(payloadTemplate.text);
-  const message = templateMessage ? appendWakeText(templateMessage, wakeText) : wakeText;
-  const paperclipPayload = buildStandardPaperclipPayload(ctx, wakePayload, paperclipEnv, payloadTemplate);
+  const templateMessage =
+    nonEmpty(payloadTemplate.message) ?? nonEmpty(payloadTemplate.text);
+  const message = templateMessage
+    ? appendWakeText(templateMessage, wakeText)
+    : wakeText;
+  const paperclipPayload = buildStandardPaperclipPayload(
+    ctx,
+    wakePayload,
+    paperclipEnv,
+    payloadTemplate
+  );
 
   const agentParams: Record<string, unknown> = {
     ...payloadTemplate,
@@ -1097,27 +1313,41 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const outboundHeaderKeys = Object.keys(headers).sort();
   await ctx.onLog(
     "stdout",
-    `[openclaw-gateway] outbound headers (redacted): ${stringifyForLog(redactForLog(headers), 4_000)}\n`,
+    `[openclaw-gateway] outbound headers (redacted): ${stringifyForLog(
+      redactForLog(headers),
+      4_000
+    )}\n`
   );
   await ctx.onLog(
     "stdout",
-    `[openclaw-gateway] outbound payload (redacted): ${stringifyForLog(redactForLog(agentParams), 12_000)}\n`,
+    `[openclaw-gateway] outbound payload (redacted): ${stringifyForLog(
+      redactForLog(agentParams),
+      12_000
+    )}\n`
   );
-  await ctx.onLog("stdout", `[openclaw-gateway] outbound header keys: ${outboundHeaderKeys.join(", ")}\n`);
+  await ctx.onLog(
+    "stdout",
+    `[openclaw-gateway] outbound header keys: ${outboundHeaderKeys.join(
+      ", "
+    )}\n`
+  );
   if (transportHint) {
     await ctx.onLog(
       "stdout",
-      `[openclaw-gateway] ignoring streamTransport=${transportHint}; gateway adapter always uses websocket protocol\n`,
+      `[openclaw-gateway] ignoring streamTransport=${transportHint}; gateway adapter always uses websocket protocol\n`
     );
   }
   if (parsedUrl.protocol === "ws:" && !isLoopbackHost(parsedUrl.hostname)) {
     await ctx.onLog(
       "stdout",
-      "[openclaw-gateway] warning: using plaintext ws:// to a non-loopback host; prefer wss:// for remote endpoints\n",
+      "[openclaw-gateway] warning: using plaintext ws:// to a non-loopback host; prefer wss:// for remote endpoints\n"
     );
   }
 
-  const autoPairOnFirstConnect = parseBoolean(ctx.config.autoPairOnFirstConnect, true);
+  const autoPairOnFirstConnect = parseBoolean(
+    ctx.config.autoPairOnFirstConnect,
+    true
+  );
   let autoPairAttempted = false;
   let latestResultPayload: unknown = null;
 
@@ -1132,7 +1362,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         if (frame.event === "shutdown") {
           await ctx.onLog(
             "stdout",
-            `[openclaw-gateway] gateway shutdown notice: ${stringifyForLog(frame.payload ?? {}, 2_000)}\n`,
+            `[openclaw-gateway] gateway shutdown notice: ${stringifyForLog(
+              frame.payload ?? {},
+              2_000
+            )}\n`
           );
         }
         return;
@@ -1148,7 +1381,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const data = asRecord(payload.data) ?? {};
       await ctx.onLog(
         "stdout",
-        `[openclaw-gateway:event] run=${runId} stream=${stream} data=${stringifyForLog(data, 8_000)}\n`,
+        `[openclaw-gateway:event] run=${runId} stream=${stream} data=${stringifyForLog(
+          data,
+          8_000
+        )}\n`
       );
 
       if (stream === "assistant") {
@@ -1163,14 +1399,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       }
 
       if (stream === "error") {
-        lifecycleError = nonEmpty(data.error) ?? nonEmpty(data.message) ?? lifecycleError;
+        lifecycleError =
+          nonEmpty(data.error) ?? nonEmpty(data.message) ?? lifecycleError;
         return;
       }
 
       if (stream === "lifecycle") {
         const phase = nonEmpty(data.phase)?.toLowerCase();
         if (phase === "error" || phase === "failed" || phase === "cancelled") {
-          lifecycleError = nonEmpty(data.error) ?? nonEmpty(data.message) ?? lifecycleError;
+          lifecycleError =
+            nonEmpty(data.error) ?? nonEmpty(data.message) ?? lifecycleError;
         }
       }
     };
@@ -1183,17 +1421,22 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     });
 
     try {
-      deviceIdentity = disableDeviceAuth ? null : resolveDeviceIdentity(parseObject(ctx.config));
+      deviceIdentity = disableDeviceAuth
+        ? null
+        : resolveDeviceIdentity(parseObject(ctx.config));
       if (deviceIdentity) {
         await ctx.onLog(
           "stdout",
-          `[openclaw-gateway] device auth enabled keySource=${deviceIdentity.source} deviceId=${deviceIdentity.deviceId}\n`,
+          `[openclaw-gateway] device auth enabled keySource=${deviceIdentity.source} deviceId=${deviceIdentity.deviceId}\n`
         );
       } else {
         await ctx.onLog("stdout", "[openclaw-gateway] device auth disabled\n");
       }
 
-      await ctx.onLog("stdout", `[openclaw-gateway] connecting to ${parsedUrl.toString()}\n`);
+      await ctx.onLog(
+        "stdout",
+        `[openclaw-gateway] connecting to ${parsedUrl.toString()}\n`
+      );
 
       const hello = await client.connect((nonce) => {
         const signedAtMs = Date.now();
@@ -1245,27 +1488,39 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
       await ctx.onLog(
         "stdout",
-        `[openclaw-gateway] connected protocol=${asNumber(asRecord(hello)?.protocol, PROTOCOL_VERSION)}\n`,
+        `[openclaw-gateway] connected protocol=${asNumber(
+          asRecord(hello)?.protocol,
+          PROTOCOL_VERSION
+        )}\n`
       );
 
-      const acceptedPayload = await client.request<Record<string, unknown>>("agent", agentParams, {
-        timeoutMs: connectTimeoutMs,
-      });
+      const acceptedPayload = await client.request<Record<string, unknown>>(
+        "agent",
+        agentParams,
+        {
+          timeoutMs: connectTimeoutMs,
+        }
+      );
 
       latestResultPayload = acceptedPayload;
 
-      const acceptedStatus = nonEmpty(acceptedPayload?.status)?.toLowerCase() ?? "";
+      const acceptedStatus =
+        nonEmpty(acceptedPayload?.status)?.toLowerCase() ?? "";
       const acceptedRunId = nonEmpty(acceptedPayload?.runId) ?? ctx.runId;
       trackedRunIds.add(acceptedRunId);
 
       await ctx.onLog(
         "stdout",
-        `[openclaw-gateway] agent accepted runId=${acceptedRunId} status=${acceptedStatus || "unknown"}\n`,
+        `[openclaw-gateway] agent accepted runId=${acceptedRunId} status=${
+          acceptedStatus || "unknown"
+        }\n`
       );
 
       if (acceptedStatus === "error") {
         const errorMessage =
-          nonEmpty(acceptedPayload?.summary) ?? lifecycleError ?? "OpenClaw gateway agent request failed";
+          nonEmpty(acceptedPayload?.summary) ??
+          lifecycleError ??
+          "OpenClaw gateway agent request failed";
         return {
           exitCode: 1,
           signal: null,
@@ -1280,7 +1535,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         const waitPayload = await client.request<Record<string, unknown>>(
           "agent.wait",
           { runId: acceptedRunId, timeoutMs: waitTimeoutMs },
-          { timeoutMs: waitTimeoutMs + connectTimeoutMs },
+          { timeoutMs: waitTimeoutMs + connectTimeoutMs }
         );
 
         latestResultPayload = waitPayload;
@@ -1334,8 +1589,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const acceptedResult = asRecord(acceptedPayload?.result);
       const latestPayload = asRecord(latestResultPayload);
       const latestResult = asRecord(latestPayload?.result);
-      const acceptedMeta = asRecord(acceptedResult?.meta) ?? asRecord(acceptedPayload?.meta);
-      const latestMeta = asRecord(latestResult?.meta) ?? asRecord(latestPayload?.meta);
+      const acceptedMeta =
+        asRecord(acceptedResult?.meta) ?? asRecord(acceptedPayload?.meta);
+      const latestMeta =
+        asRecord(latestResult?.meta) ?? asRecord(latestPayload?.meta);
       const mergedMeta = {
         ...(acceptedMeta ?? {}),
         ...(latestMeta ?? {}),
@@ -1345,14 +1602,22 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         asRecord(acceptedMeta?.agentMeta) ??
         asRecord(latestMeta?.agentMeta);
       const usage = parseUsage(agentMeta?.usage ?? mergedMeta.usage);
-      const runtimeServices = extractRuntimeServicesFromMeta(agentMeta ?? mergedMeta);
-      const provider = nonEmpty(agentMeta?.provider) ?? nonEmpty(mergedMeta.provider) ?? "openclaw";
-      const model = nonEmpty(agentMeta?.model) ?? nonEmpty(mergedMeta.model) ?? null;
+      const runtimeServices = extractRuntimeServicesFromMeta(
+        agentMeta ?? mergedMeta
+      );
+      const provider =
+        nonEmpty(agentMeta?.provider) ??
+        nonEmpty(mergedMeta.provider) ??
+        "openclaw";
+      const model =
+        nonEmpty(agentMeta?.model) ?? nonEmpty(mergedMeta.model) ?? null;
       const costUsd = asNumber(agentMeta?.costUsd ?? mergedMeta.costUsd, 0);
 
       await ctx.onLog(
         "stdout",
-        `[openclaw-gateway] run completed runId=${Array.from(trackedRunIds).join(",")} status=ok\n`,
+        `[openclaw-gateway] run completed runId=${Array.from(
+          trackedRunIds
+        ).join(",")} status=ok\n`
       );
 
       return {
@@ -1399,13 +1664,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         if (pairResult.ok) {
           await ctx.onLog(
             "stdout",
-            `[openclaw-gateway] auto-approved pairing request ${pairResult.requestId}; retrying\n`,
+            `[openclaw-gateway] auto-approved pairing request ${pairResult.requestId}; retrying\n`
           );
           continue;
         }
         await ctx.onLog(
           "stderr",
-          `[openclaw-gateway] auto-pairing failed: ${pairResult.reason}\n`,
+          `[openclaw-gateway] auto-pairing failed: ${pairResult.reason}\n`
         );
       }
 
@@ -1413,7 +1678,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         ? `${message}. Approve the pending device in OpenClaw (for example: openclaw devices approve --latest --url <gateway-ws-url> --token <gateway-token>) and retry. Ensure this agent has a persisted adapterConfig.devicePrivateKeyPem so approvals are reused.`
         : message;
 
-      await ctx.onLog("stderr", `[openclaw-gateway] request failed: ${detailedMessage}\n`);
+      await ctx.onLog(
+        "stderr",
+        `[openclaw-gateway] request failed: ${detailedMessage}\n`
+      );
 
       return {
         exitCode: 1,
@@ -1423,8 +1691,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         errorCode: timedOut
           ? "openclaw_gateway_timeout"
           : pairingRequired
-            ? "openclaw_gateway_pairing_required"
-            : "openclaw_gateway_request_failed",
+          ? "openclaw_gateway_pairing_required"
+          : "openclaw_gateway_request_failed",
         resultJson: asRecord(latestResultPayload),
       };
     } finally {

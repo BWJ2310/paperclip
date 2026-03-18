@@ -15,6 +15,7 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { ProjectProperties, type ProjectConfigFieldKey, type ProjectFieldSaveState } from "../components/ProjectProperties";
 import { InlineEditor } from "../components/InlineEditor";
+import { LinkedConversationsSection } from "../components/LinkedConversationsSection";
 import { StatusBadge } from "../components/StatusBadge";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
 import { IssuesList } from "../components/IssuesList";
@@ -259,6 +260,20 @@ export function ProjectDetail() {
     [pluginDetailSlots],
   );
   const activePluginTab = pluginTabItems.find((item) => item.value === activeTab) ?? null;
+
+  const {
+    data: linkedConversations,
+    isLoading: linkedConversationsLoading,
+    error: linkedConversationsError,
+  } = useQuery({
+    queryKey: queryKeys.projects.linkedConversations(projectLookupRef),
+    queryFn: () =>
+      projectsApi.listLinkedConversations(
+        project?.id ?? projectLookupRef,
+        resolvedCompanyId ?? lookupCompanyId,
+      ),
+    enabled: !!project?.id,
+  });
 
   useEffect(() => {
     if (!project?.companyId || project.companyId === selectedCompanyId) return;
@@ -554,6 +569,21 @@ export function ProjectDetail() {
         }}
         className="flex flex-wrap gap-2"
         itemClassName="inline-flex"
+      />
+
+      <LinkedConversationsSection
+        companyId={project.companyId}
+        targetKind="project"
+        targetId={project.id}
+        targetLabel={project.name}
+        conversations={linkedConversations}
+        isLoading={linkedConversationsLoading}
+        error={(linkedConversationsError as Error | null) ?? null}
+        onChanged={() => {
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.projects.linkedConversations(project.id),
+          });
+        }}
       />
 
       <Tabs value={activeTab ?? "list"} onValueChange={(value) => handleTabChange(value as ProjectTab)}>

@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, isNotNull, lt, lte, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, isNotNull, lt, lte, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { activityLog, agents, companies, costEvents, issues, projects } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
@@ -359,6 +359,32 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         .where(and(...conditions, sql`${effectiveProjectId} is not null`))
         .groupBy(effectiveProjectId, projects.name)
         .orderBy(desc(costCentsExpr));
+    },
+
+    forConversation: async (companyId: string, conversationId: string) => {
+      const conditions: ReturnType<typeof eq>[] = [
+        eq(costEvents.companyId, companyId),
+        eq(costEvents.conversationId, conversationId),
+      ];
+
+      const [row] = await db
+        .select({
+          spendCents: sql<number>`coalesce(sum(${costEvents.costCents}), 0)::int`,
+          inputTokens: sql<number>`coalesce(sum(${costEvents.inputTokens}), 0)::int`,
+          outputTokens: sql<number>`coalesce(sum(${costEvents.outputTokens}), 0)::int`,
+          runCount: count(costEvents.id),
+          lastOccurredAt: sql<Date | null>`max(${costEvents.occurredAt})`,
+        })
+        .from(costEvents)
+        .where(and(...conditions));
+
+      return {
+        spendCents: row?.spendCents ?? 0,
+        inputTokens: row?.inputTokens ?? 0,
+        outputTokens: row?.outputTokens ?? 0,
+        runCount: row?.runCount ?? 0,
+        lastOccurredAt: row?.lastOccurredAt ?? null,
+      };
     },
   };
 }

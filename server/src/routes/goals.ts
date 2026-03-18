@@ -1,18 +1,24 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
-import { createGoalSchema, updateGoalSchema } from "@paperclipai/shared";
+import {
+  createGoalSchema,
+  listGoalsQuerySchema,
+  updateGoalSchema,
+} from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
-import { goalService, logActivity } from "../services/index.js";
+import { conversationService, goalService, logActivity } from "../services/index.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 
 export function goalRoutes(db: Db) {
   const router = Router();
   const svc = goalService(db);
+  const conversationsSvc = conversationService(db);
 
   router.get("/companies/:companyId/goals", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const result = await svc.list(companyId);
+    const query = listGoalsQuerySchema.parse(req.query);
+    const result = await svc.list(companyId, query);
     res.json(result);
   });
 
@@ -25,6 +31,27 @@ export function goalRoutes(db: Db) {
     }
     assertCompanyAccess(req, goal.companyId);
     res.json(goal);
+  });
+
+  router.get("/goals/:id/linked-conversations", async (req, res) => {
+    const id = req.params.id as string;
+    const goal = await svc.getById(id);
+    if (!goal) {
+      res.status(404).json({ error: "Goal not found" });
+      return;
+    }
+    assertCompanyAccess(req, goal.companyId);
+    const actor = getActorInfo(req);
+    const rows = await conversationsSvc.listLinkedConversations({
+      companyId: goal.companyId,
+      targetKind: "goal",
+      targetId: goal.id,
+      viewer:
+        req.actor.type === "agent" && req.actor.agentId
+          ? { type: "agent", agentId: req.actor.agentId }
+          : { type: "board", userId: actor.actorId },
+    });
+    res.json(rows);
   });
 
   router.post("/companies/:companyId/goals", validate(createGoalSchema), async (req, res) => {

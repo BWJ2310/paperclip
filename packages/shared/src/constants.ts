@@ -26,11 +26,11 @@ export const AGENT_ADAPTER_TYPES = [
   "http",
   "claude_local",
   "codex_local",
+  "gemini_local",
   "opencode_local",
   "pi_local",
   "cursor",
   "openclaw_gateway",
-  "hermes_local",
 ] as const;
 export type AgentAdapterType = (typeof AGENT_ADAPTER_TYPES)[number];
 
@@ -128,7 +128,12 @@ export type IssueOriginKind = (typeof ISSUE_ORIGIN_KINDS)[number];
 export const GOAL_LEVELS = ["company", "team", "agent", "task"] as const;
 export type GoalLevel = (typeof GOAL_LEVELS)[number];
 
-export const GOAL_STATUSES = ["planned", "active", "achieved", "cancelled"] as const;
+export const GOAL_STATUSES = [
+  "planned",
+  "active",
+  "achieved",
+  "cancelled",
+] as const;
 export type GoalStatus = (typeof GOAL_STATUSES)[number];
 
 export const PROJECT_STATUSES = [
@@ -170,6 +175,53 @@ export type RoutineRunSource = (typeof ROUTINE_RUN_SOURCES)[number];
 
 export const PAUSE_REASONS = ["manual", "budget", "system"] as const;
 export type PauseReason = (typeof PAUSE_REASONS)[number];
+export const CONVERSATION_STATUSES = ["active", "archived"] as const;
+export type ConversationStatus = (typeof CONVERSATION_STATUSES)[number];
+
+export const CONVERSATION_AUTHOR_TYPES = ["user", "agent", "system"] as const;
+export type ConversationAuthorType = (typeof CONVERSATION_AUTHOR_TYPES)[number];
+
+export const CONVERSATION_MESSAGE_REF_KINDS = [
+  "agent",
+  "issue",
+  "goal",
+  "project",
+] as const;
+export type ConversationMessageRefKind =
+  (typeof CONVERSATION_MESSAGE_REF_KINDS)[number];
+
+export const CONVERSATION_MESSAGE_REF_ORIGINS = [
+  "inline_mention",
+  "active_context",
+] as const;
+export type ConversationMessageRefOrigin =
+  (typeof CONVERSATION_MESSAGE_REF_ORIGINS)[number];
+
+export const CONVERSATION_TARGET_KINDS = ["issue", "goal", "project"] as const;
+export type ConversationTargetKind = (typeof CONVERSATION_TARGET_KINDS)[number];
+
+export const CONVERSATION_LINK_ORIGINS = [
+  "message_ref",
+  "manual",
+  "system",
+] as const;
+export type ConversationLinkOrigin =
+  (typeof CONVERSATION_LINK_ORIGINS)[number];
+
+export const CONVERSATION_ACTOR_TYPES = ["user", "agent", "system"] as const;
+export type ConversationActorType = (typeof CONVERSATION_ACTOR_TYPES)[number];
+
+export const CONVERSATION_MEMORY_BUILD_STATUSES = [
+  "ready",
+  "rebuilding",
+  "failed",
+] as const;
+export type ConversationMemoryBuildStatus =
+  (typeof CONVERSATION_MEMORY_BUILD_STATUSES)[number];
+
+export const CONVERSATION_RESPONSE_MODES = ["optional", "required"] as const;
+export type ConversationResponseMode =
+  (typeof CONVERSATION_RESPONSE_MODES)[number];
 
 export const PROJECT_COLORS = [
   "#6366f1", // indigo
@@ -279,10 +331,17 @@ export const HEARTBEAT_INVOCATION_SOURCES = [
   "assignment",
   "on_demand",
   "automation",
+  "conversation_message",
 ] as const;
-export type HeartbeatInvocationSource = (typeof HEARTBEAT_INVOCATION_SOURCES)[number];
+export type HeartbeatInvocationSource =
+  (typeof HEARTBEAT_INVOCATION_SOURCES)[number];
 
-export const WAKEUP_TRIGGER_DETAILS = ["manual", "ping", "callback", "system"] as const;
+export const WAKEUP_TRIGGER_DETAILS = [
+  "manual",
+  "ping",
+  "callback",
+  "system",
+] as const;
 export type WakeupTriggerDetail = (typeof WAKEUP_TRIGGER_DETAILS)[number];
 
 export const WAKEUP_REQUEST_STATUSES = [
@@ -314,11 +373,25 @@ export const LIVE_EVENT_TYPES = [
   "heartbeat.run.log",
   "agent.status",
   "activity.logged",
+  "conversation.created",
+  "conversation.updated",
+  "conversation.participant_added",
+  "conversation.participant_removed",
+  "conversation.message_posted",
+  "conversation.context_linked",
+  "conversation.context_unlinked",
   "plugin.ui.updated",
   "plugin.worker.crashed",
   "plugin.worker.restarted",
 ] as const;
 export type LiveEventType = (typeof LIVE_EVENT_TYPES)[number];
+
+export const LIVE_EVENT_AUDIENCE_SCOPES = [
+  "company",
+  "conversationParticipants",
+] as const;
+export type LiveEventAudienceScope =
+  (typeof LIVE_EVENT_AUDIENCE_SCOPES)[number];
 
 export const PRINCIPAL_TYPES = ["user", "agent"] as const;
 export type PrincipalType = (typeof PRINCIPAL_TYPES)[number];
@@ -326,7 +399,12 @@ export type PrincipalType = (typeof PRINCIPAL_TYPES)[number];
 export const MEMBERSHIP_STATUSES = ["pending", "active", "suspended"] as const;
 export type MembershipStatus = (typeof MEMBERSHIP_STATUSES)[number];
 
-export const MEMBERSHIP_ROLES = ["owner", "admin", "contributor", "viewer"] as const;
+export const MEMBERSHIP_ROLES = [
+  "owner",
+  "admin",
+  "contributor",
+  "viewer",
+] as const;
 export type MembershipRole = (typeof MEMBERSHIP_ROLES)[number];
 
 export const ROLE_HIERARCHY: Record<MembershipRole, number> = {
@@ -337,8 +415,22 @@ export const ROLE_HIERARCHY: Record<MembershipRole, number> = {
 } as const;
 
 export const ROLE_PRESETS: Record<MembershipRole, readonly PermissionKey[]> = {
-  owner: ["users:invite", "users:manage_permissions", "agents:create", "tasks:assign", "tasks:assign_scope", "joins:approve"] as const,
-  admin: ["users:invite", "users:manage_permissions", "agents:create", "tasks:assign", "tasks:assign_scope", "joins:approve"] as const,
+  owner: [
+    "users:invite",
+    "users:manage_permissions",
+    "agents:create",
+    "tasks:assign",
+    "tasks:assign_scope",
+    "joins:approve",
+  ] as const,
+  admin: [
+    "users:invite",
+    "users:manage_permissions",
+    "agents:create",
+    "tasks:assign",
+    "tasks:assign_scope",
+    "joins:approve",
+  ] as const,
   contributor: ["tasks:assign", "tasks:assign_scope"] as const,
   viewer: [] as const,
 } as const;
@@ -357,7 +449,11 @@ export type InviteJoinType = (typeof INVITE_JOIN_TYPES)[number];
 export const JOIN_REQUEST_TYPES = ["human", "agent"] as const;
 export type JoinRequestType = (typeof JOIN_REQUEST_TYPES)[number];
 
-export const JOIN_REQUEST_STATUSES = ["pending_approval", "approved", "rejected"] as const;
+export const JOIN_REQUEST_STATUSES = [
+  "pending_approval",
+  "approved",
+  "rejected",
+] as const;
 export type JoinRequestStatus = (typeof JOIN_REQUEST_STATUSES)[number];
 
 export const PERMISSION_KEYS = [
@@ -519,6 +615,7 @@ export const PLUGIN_RESERVED_COMPANY_ROUTE_SEGMENTS = [
   "projects",
   "issues",
   "goals",
+  "conversations",
   "approvals",
   "costs",
   "activity",
@@ -550,7 +647,8 @@ export const PLUGIN_LAUNCHER_PLACEMENT_ZONES = [
   "commentContextMenuItem",
   "settingsPage",
 ] as const;
-export type PluginLauncherPlacementZone = (typeof PLUGIN_LAUNCHER_PLACEMENT_ZONES)[number];
+export type PluginLauncherPlacementZone =
+  (typeof PLUGIN_LAUNCHER_PLACEMENT_ZONES)[number];
 
 /**
  * Launcher action kinds describe what the launcher does when activated.
@@ -605,7 +703,8 @@ export const PLUGIN_UI_SLOT_ENTITY_TYPES = [
   "run",
   "comment",
 ] as const;
-export type PluginUiSlotEntityType = (typeof PLUGIN_UI_SLOT_ENTITY_TYPES)[number];
+export type PluginUiSlotEntityType =
+  (typeof PLUGIN_UI_SLOT_ENTITY_TYPES)[number];
 
 /**
  * Scope kinds for plugin state storage. Determines the granularity at which
@@ -626,11 +725,7 @@ export const PLUGIN_STATE_SCOPE_KINDS = [
 export type PluginStateScopeKind = (typeof PLUGIN_STATE_SCOPE_KINDS)[number];
 
 /** Statuses for a plugin's scheduled job definition. */
-export const PLUGIN_JOB_STATUSES = [
-  "active",
-  "paused",
-  "failed",
-] as const;
+export const PLUGIN_JOB_STATUSES = ["active", "paused", "failed"] as const;
 export type PluginJobStatus = (typeof PLUGIN_JOB_STATUSES)[number];
 
 /** Statuses for individual job run executions. */
@@ -645,11 +740,7 @@ export const PLUGIN_JOB_RUN_STATUSES = [
 export type PluginJobRunStatus = (typeof PLUGIN_JOB_RUN_STATUSES)[number];
 
 /** What triggered a particular job run. */
-export const PLUGIN_JOB_RUN_TRIGGERS = [
-  "schedule",
-  "manual",
-  "retry",
-] as const;
+export const PLUGIN_JOB_RUN_TRIGGERS = ["schedule", "manual", "retry"] as const;
 export type PluginJobRunTrigger = (typeof PLUGIN_JOB_RUN_TRIGGERS)[number];
 
 /** Statuses for inbound webhook deliveries. */
@@ -658,7 +749,8 @@ export const PLUGIN_WEBHOOK_DELIVERY_STATUSES = [
   "success",
   "failed",
 ] as const;
-export type PluginWebhookDeliveryStatus = (typeof PLUGIN_WEBHOOK_DELIVERY_STATUSES)[number];
+export type PluginWebhookDeliveryStatus =
+  (typeof PLUGIN_WEBHOOK_DELIVERY_STATUSES)[number];
 
 /**
  * Core domain event types that plugins can subscribe to via the

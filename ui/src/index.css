@@ -339,6 +339,7 @@
   margin-top: 1.1em;
 }
 
+.paperclip-mdxeditor-content a.paperclip-mention-chip,
 .paperclip-mdxeditor-content a.paperclip-project-mention-chip {
   display: inline-flex;
   align-items: center;
@@ -696,6 +697,7 @@
 }
 
 /* Project mention chips rendered inside MarkdownBody */
+a.paperclip-mention-chip,
 a.paperclip-project-mention-chip {
   display: inline-flex;
   align-items: center;

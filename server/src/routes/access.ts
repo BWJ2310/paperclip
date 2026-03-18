@@ -2,7 +2,7 @@ import {
   createHash,
   generateKeyPairSync,
   randomBytes,
-  timingSafeEqual
+  timingSafeEqual,
 } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -15,7 +15,7 @@ import {
   agentApiKeys,
   authUsers,
   invites,
-  joinRequests
+  joinRequests,
 } from "@paperclipai/db";
 import {
   acceptInviteSchema,
@@ -26,7 +26,7 @@ import {
   updateMemberPermissionsSchema,
   updateUserCompanyAccessSchema,
   PERMISSION_KEYS,
-  HUMAN_INVITE_TTL_MS
+  HUMAN_INVITE_TTL_MS,
 } from "@paperclipai/shared";
 import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 import {
@@ -34,7 +34,7 @@ import {
   conflict,
   notFound,
   unauthorized,
-  badRequest
+  badRequest,
 } from "../errors.js";
 import { readRawConfigFile, writeConfigFile } from "../config-file.js";
 import { createEmailService } from "../services/email.js";
@@ -46,13 +46,17 @@ import {
   agentService,
   deduplicateAgentName,
   logActivity,
-  notifyHireApproved
+  notifyHireApproved,
 } from "../services/index.js";
 import { assertCompanyAccess } from "./authz.js";
 import {
   claimBoardOwnership,
-  inspectBoardClaimChallenge
+  inspectBoardClaimChallenge,
 } from "../board-claim.js";
+import {
+  getBoardActorUserId,
+  normalizeBoardUserId,
+} from "../auth/board-actor.js";
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -77,7 +81,10 @@ function createClaimSecret() {
   return `pcp_claim_${randomBytes(24).toString("hex")}`;
 }
 
-export function companyInviteExpiresAt(nowMs: number = Date.now(), ttlMs: number = COMPANY_INVITE_TTL_MS) {
+export function companyInviteExpiresAt(
+  nowMs: number = Date.now(),
+  ttlMs: number = COMPANY_INVITE_TTL_MS
+) {
   return new Date(nowMs + ttlMs);
 }
 
@@ -112,7 +119,7 @@ function readSkillMarkdown(skillName: string): string | null {
   const candidates = [
     path.resolve(moduleDir, "../../skills", normalized, "SKILL.md"), // published: dist/routes/ -> <pkg>/skills/
     path.resolve(process.cwd(), "skills", normalized, "SKILL.md"), // cwd (e.g. monorepo root)
-    path.resolve(moduleDir, "../../../skills", normalized, "SKILL.md") // dev: src/routes/ -> repo root/skills/
+    path.resolve(moduleDir, "../../../skills", normalized, "SKILL.md"), // dev: src/routes/ -> repo root/skills/
   ];
   for (const skillPath of candidates) {
     try {
@@ -268,7 +275,7 @@ function normalizeHeaderValue(
     "header",
     "raw",
     "text",
-    "string"
+    "string",
   ];
   for (const key of candidateKeys) {
     if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
@@ -498,7 +505,7 @@ export function mergeJoinDefaultsPayloadForReplay(
 
   const merged: Record<string, unknown> = {
     ...(existingDefaultsPayload as Record<string, unknown>),
-    ...(nextDefaultsPayload as Record<string, unknown>)
+    ...(nextDefaultsPayload as Record<string, unknown>),
   };
 
   const existingHeaders = normalizeHeaderMap(
@@ -510,7 +517,7 @@ export function mergeJoinDefaultsPayloadForReplay(
   if (existingHeaders || nextHeaders) {
     merged.headers = {
       ...(existingHeaders ?? {}),
-      ...(nextHeaders ?? {})
+      ...(nextHeaders ?? {}),
     };
   } else if (Object.prototype.hasOwnProperty.call(merged, "headers")) {
     delete merged.headers;
@@ -556,7 +563,7 @@ function summarizeSecretForLog(
   return {
     present: true,
     length: trimmed.length,
-    sha256Prefix: hashToken(trimmed).slice(0, 12)
+    sha256Prefix: hashToken(trimmed).slice(0, 12),
   };
 }
 
@@ -581,7 +588,10 @@ function summarizeOpenClawGatewayDefaultsForLog(defaultsPayload: unknown) {
       : null,
     headerKeys: headers ? Object.keys(headers).sort() : [],
     sessionKeyStrategy: defaults
-      ? nonEmptyTrimmedString(defaults.sessionKeyStrategy)
+      ? (() => {
+          const value = nonEmptyTrimmedString(defaults.sessionKeyStrategy);
+          return value === "issue" ? "task_key" : value;
+        })()
       : null,
     disableDeviceAuth: defaults
       ? parseBooleanLike(defaults.disableDeviceAuth)
@@ -593,7 +603,7 @@ function summarizeOpenClawGatewayDefaultsForLog(defaultsPayload: unknown) {
     devicePrivateKeyPem: defaults
       ? summarizeSecretForLog(defaults.devicePrivateKeyPem)
       : null,
-    gatewayToken: summarizeSecretForLog(gatewayTokenValue)
+    gatewayToken: summarizeSecretForLog(gatewayTokenValue),
   };
 }
 
@@ -620,8 +630,7 @@ export function normalizeAgentDefaultsForJoin(input: {
       level: "warn",
       message:
         "No OpenClaw gateway config was provided in agentDefaultsPayload.",
-      hint:
-        "Include agentDefaultsPayload.url and headers.x-openclaw-token for OpenClaw gateway joins."
+      hint: "Include agentDefaultsPayload.url and headers.x-openclaw-token for OpenClaw gateway joins.",
     });
     fatalErrors.push(
       "agentDefaultsPayload is required for adapterType=openclaw_gateway"
@@ -629,7 +638,7 @@ export function normalizeAgentDefaultsForJoin(input: {
     return {
       normalized: null as Record<string, unknown> | null,
       diagnostics,
-      fatalErrors
+      fatalErrors,
     };
   }
 
@@ -643,7 +652,7 @@ export function normalizeAgentDefaultsForJoin(input: {
       code: "openclaw_gateway_url_missing",
       level: "warn",
       message: "OpenClaw gateway URL is missing.",
-      hint: "Set agentDefaultsPayload.url to ws:// or wss:// gateway URL."
+      hint: "Set agentDefaultsPayload.url to ws:// or wss:// gateway URL.",
     });
     fatalErrors.push("agentDefaultsPayload.url is required");
   } else {
@@ -653,7 +662,7 @@ export function normalizeAgentDefaultsForJoin(input: {
         diagnostics.push({
           code: "openclaw_gateway_url_protocol",
           level: "warn",
-          message: `OpenClaw gateway URL must use ws:// or wss:// (got ${gatewayUrl.protocol}).`
+          message: `OpenClaw gateway URL must use ws:// or wss:// (got ${gatewayUrl.protocol}).`,
         });
         fatalErrors.push(
           "agentDefaultsPayload.url must use ws:// or wss:// for openclaw_gateway"
@@ -663,14 +672,14 @@ export function normalizeAgentDefaultsForJoin(input: {
         diagnostics.push({
           code: "openclaw_gateway_url_configured",
           level: "info",
-          message: `Gateway endpoint set to ${gatewayUrl.toString()}`
+          message: `Gateway endpoint set to ${gatewayUrl.toString()}`,
         });
       }
     } catch {
       diagnostics.push({
         code: "openclaw_gateway_url_invalid",
         level: "warn",
-        message: `Invalid OpenClaw gateway URL: ${rawGatewayUrl}`
+        message: `Invalid OpenClaw gateway URL: ${rawGatewayUrl}`,
       });
       fatalErrors.push("agentDefaultsPayload.url is not a valid URL");
     }
@@ -680,7 +689,9 @@ export function normalizeAgentDefaultsForJoin(input: {
   const gatewayToken =
     headerMapGetIgnoreCase(headers, "x-openclaw-token") ??
     headerMapGetIgnoreCase(headers, "x-openclaw-auth") ??
-    tokenFromAuthorizationHeader(headerMapGetIgnoreCase(headers, "authorization"));
+    tokenFromAuthorizationHeader(
+      headerMapGetIgnoreCase(headers, "authorization")
+    );
   if (gatewayToken && !headerMapHasKeyIgnoreCase(headers, "x-openclaw-token")) {
     headers["x-openclaw-token"] = gatewayToken;
   }
@@ -693,8 +704,7 @@ export function normalizeAgentDefaultsForJoin(input: {
       code: "openclaw_gateway_auth_header_missing",
       level: "warn",
       message: "Gateway auth token is missing from agent defaults.",
-      hint:
-        "Set agentDefaultsPayload.headers.x-openclaw-token (or legacy x-openclaw-auth)."
+      hint: "Set agentDefaultsPayload.headers.x-openclaw-token (or legacy x-openclaw-auth).",
     });
     fatalErrors.push(
       "agentDefaultsPayload.headers.x-openclaw-token (or x-openclaw-auth) is required"
@@ -703,9 +713,10 @@ export function normalizeAgentDefaultsForJoin(input: {
     diagnostics.push({
       code: "openclaw_gateway_auth_header_too_short",
       level: "warn",
-      message: `Gateway auth token appears too short (${gatewayToken.trim().length} chars).`,
-      hint:
-        "Use the full gateway auth token from ~/.openclaw/openclaw.json (typically long random string)."
+      message: `Gateway auth token appears too short (${
+        gatewayToken.trim().length
+      } chars).`,
+      hint: "Use the full gateway auth token from ~/.openclaw/openclaw.json (typically long random string).",
     });
     fatalErrors.push(
       "agentDefaultsPayload.headers.x-openclaw-token is too short; expected a full gateway token"
@@ -714,7 +725,7 @@ export function normalizeAgentDefaultsForJoin(input: {
     diagnostics.push({
       code: "openclaw_gateway_auth_header_configured",
       level: "info",
-      message: "Gateway auth token configured."
+      message: "Gateway auth token configured.",
     });
   }
 
@@ -737,7 +748,7 @@ export function normalizeAgentDefaultsForJoin(input: {
       code: "openclaw_gateway_device_key_configured",
       level: "info",
       message:
-        "Gateway device key configured. Pairing approvals should persist for this agent."
+        "Gateway device key configured. Pairing approvals should persist for this agent.",
     });
   } else if (!disableDeviceAuth) {
     try {
@@ -746,7 +757,7 @@ export function normalizeAgentDefaultsForJoin(input: {
         code: "openclaw_gateway_device_key_generated",
         level: "info",
         message:
-          "Generated persistent gateway device key for this join. Pairing approvals should persist for this agent."
+          "Generated persistent gateway device key for this join. Pairing approvals should persist for this agent.",
       });
     } catch (err) {
       diagnostics.push({
@@ -755,8 +766,7 @@ export function normalizeAgentDefaultsForJoin(input: {
         message: `Failed to generate gateway device key: ${
           err instanceof Error ? err.message : String(err)
         }`,
-        hint:
-          "Set agentDefaultsPayload.devicePrivateKeyPem explicitly or set disableDeviceAuth=true."
+        hint: "Set agentDefaultsPayload.devicePrivateKeyPem explicitly or set disableDeviceAuth=true.",
       });
       fatalErrors.push(
         "Failed to generate gateway device key. Set devicePrivateKeyPem or disableDeviceAuth=true."
@@ -776,7 +786,8 @@ export function normalizeAgentDefaultsForJoin(input: {
   }
 
   const timeoutSec =
-    typeof defaults.timeoutSec === "number" && Number.isFinite(defaults.timeoutSec)
+    typeof defaults.timeoutSec === "number" &&
+    Number.isFinite(defaults.timeoutSec)
       ? Math.floor(defaults.timeoutSec)
       : typeof defaults.timeoutSec === "string"
       ? Number.parseInt(defaults.timeoutSec.trim(), 10)
@@ -788,10 +799,12 @@ export function normalizeAgentDefaultsForJoin(input: {
   const sessionKeyStrategy = nonEmptyTrimmedString(defaults.sessionKeyStrategy);
   if (
     sessionKeyStrategy === "fixed" ||
+    sessionKeyStrategy === "task_key" ||
     sessionKeyStrategy === "issue" ||
     sessionKeyStrategy === "run"
   ) {
-    normalized.sessionKeyStrategy = sessionKeyStrategy;
+    normalized.sessionKeyStrategy =
+      sessionKeyStrategy === "issue" ? "task_key" : sessionKeyStrategy;
   }
 
   const sessionKey = nonEmptyTrimmedString(defaults.sessionKey);
@@ -828,21 +841,21 @@ export function normalizeAgentDefaultsForJoin(input: {
         diagnostics.push({
           code: "openclaw_gateway_paperclip_api_url_protocol",
           level: "warn",
-          message: `paperclipApiUrl must use http:// or https:// (got ${parsedPaperclipApiUrl.protocol}).`
+          message: `paperclipApiUrl must use http:// or https:// (got ${parsedPaperclipApiUrl.protocol}).`,
         });
       } else {
         normalized.paperclipApiUrl = parsedPaperclipApiUrl.toString();
         diagnostics.push({
           code: "openclaw_gateway_paperclip_api_url_configured",
           level: "info",
-          message: `paperclipApiUrl set to ${parsedPaperclipApiUrl.toString()}`
+          message: `paperclipApiUrl set to ${parsedPaperclipApiUrl.toString()}`,
         });
       }
     } catch {
       diagnostics.push({
         code: "openclaw_gateway_paperclip_api_url_invalid",
         level: "warn",
-        message: `Invalid paperclipApiUrl: ${rawPaperclipApiUrl}`
+        message: `Invalid paperclipApiUrl: ${rawPaperclipApiUrl}`,
       });
     }
   }
@@ -875,7 +888,7 @@ function toInviteSummaryResponse(
     skillIndexUrl: baseUrl
       ? `${baseUrl}/api/skills/index`
       : "/api/skills/index",
-    inviteMessage
+    inviteMessage,
   };
 }
 
@@ -909,7 +922,7 @@ function buildOnboardingDiscoveryDiagnostics(input: {
       level: "warn",
       message:
         "Onboarding URL resolves to loopback hostname. Remote OpenClaw agents cannot reach localhost on your Paperclip host.",
-      hint: "Use a reachable hostname/IP (for example Tailscale hostname, Docker host alias, or public domain)."
+      hint: "Use a reachable hostname/IP (for example Tailscale hostname, Docker host alias, or public domain).",
     });
   }
 
@@ -922,7 +935,7 @@ function buildOnboardingDiscoveryDiagnostics(input: {
       code: "openclaw_onboarding_private_loopback_bind",
       level: "warn",
       message: "Paperclip is bound to loopback in authenticated/private mode.",
-      hint: "Run with a reachable bind host or use pnpm dev --tailscale-auth for private-network onboarding."
+      hint: "Run with a reachable bind host or use pnpm dev --tailscale-auth for private-network onboarding.",
     });
   }
 
@@ -938,7 +951,7 @@ function buildOnboardingDiscoveryDiagnostics(input: {
       code: "openclaw_onboarding_private_host_not_allowed",
       level: "warn",
       message: `Onboarding host "${apiHost}" is not in allowed hostnames for authenticated/private mode.`,
-      hint: `Run pnpm paperclipai allowed-hostname ${apiHost}`
+      hint: `Run pnpm paperclipai allowed-hostname ${apiHost}`,
     });
   }
 
@@ -1012,12 +1025,12 @@ function buildInviteOnboardingManifest(
     deploymentMode: opts.deploymentMode,
     deploymentExposure: opts.deploymentExposure,
     bindHost: opts.bindHost,
-    allowedHostnames: opts.allowedHostnames
+    allowedHostnames: opts.allowedHostnames,
   });
   const connectionCandidates = buildOnboardingConnectionCandidates({
     apiBaseUrl: baseUrl,
     bindHost: opts.bindHost,
-    allowedHostnames: opts.allowedHostnames
+    allowedHostnames: opts.allowedHostnames,
   });
 
   return {
@@ -1033,20 +1046,20 @@ function buildInviteOnboardingManifest(
         adapterType: "Use 'openclaw_gateway' for OpenClaw Gateway agents",
         capabilities: "Optional capability summary",
         agentDefaultsPayload:
-          "Adapter config for OpenClaw gateway. MUST include url (ws:// or wss://) and headers.x-openclaw-token (or legacy x-openclaw-auth). Optional fields: paperclipApiUrl, waitTimeoutMs, sessionKeyStrategy, sessionKey, role, scopes, disableDeviceAuth, devicePrivateKeyPem."
+          "Adapter config for OpenClaw gateway. MUST include url (ws:// or wss://) and headers.x-openclaw-token (or legacy x-openclaw-auth). Optional fields: paperclipApiUrl, waitTimeoutMs, sessionKeyStrategy, sessionKey, role, scopes, disableDeviceAuth, devicePrivateKeyPem.",
       },
       registrationEndpoint: {
         method: "POST",
         path: registrationEndpointPath,
-        url: registrationEndpointUrl
+        url: registrationEndpointUrl,
       },
       claimEndpointTemplate: {
         method: "POST",
         path: "/api/join-requests/{requestId}/claim-api-key",
         body: {
           claimSecret:
-            "one-time claim secret returned when the join request is created"
-        }
+            "one-time claim secret returned when the join request is created",
+        },
       },
       connectivity: {
         deploymentMode: opts.deploymentMode,
@@ -1059,20 +1072,20 @@ function buildInviteOnboardingManifest(
           opts.deploymentMode === "authenticated" &&
           opts.deploymentExposure === "private"
             ? "If OpenClaw runs on another machine, ensure the Paperclip hostname is reachable and allowed via `pnpm paperclipai allowed-hostname <host>`."
-            : "Ensure OpenClaw can reach this Paperclip API base URL for invite, claim, and skill bootstrap calls."
+            : "Ensure OpenClaw can reach this Paperclip API base URL for invite, claim, and skill bootstrap calls.",
       },
       textInstructions: {
         path: onboardingTextPath,
         url: onboardingTextUrl,
-        contentType: "text/plain"
+        contentType: "text/plain",
       },
       skill: {
         name: "paperclip",
         path: skillPath,
         url: skillUrl,
-        installPath: "~/.openclaw/skills/paperclip/SKILL.md"
-      }
-    }
+        installPath: "~/.openclaw/skills/paperclip/SKILL.md",
+      },
+    },
   };
 }
 
@@ -1168,7 +1181,7 @@ export function buildInviteOnboardingTextDocument(
           paperclipApiUrl: "http://host.docker.internal:3100",
           headers: { "x-openclaw-token": token },
           waitTimeoutMs: 120000,
-          sessionKeyStrategy: "issue",
+          sessionKeyStrategy: "task_key",
           role: "operator",
           scopes: ["operator.admin"]
         }
@@ -1201,7 +1214,7 @@ export function buildInviteOnboardingTextDocument(
         "paperclipApiUrl": "https://paperclip-hostname-your-agent-can-reach:3100",
         "headers": { "x-openclaw-token": "replace-me" },
         "waitTimeoutMs": 120000,
-        "sessionKeyStrategy": "issue",
+        "sessionKeyStrategy": "task_key",
         "role": "operator",
         "scopes": ["operator.admin"]
       }
@@ -1402,7 +1415,7 @@ function grantsFromDefaults(
         typeof record.scope === "object" &&
         !Array.isArray(record.scope)
           ? (record.scope as Record<string, unknown>)
-          : null
+          : null,
     });
   }
   return result;
@@ -1430,7 +1443,7 @@ export function resolveJoinRequestAgentManagerId(
 function isInviteTokenHashCollisionError(error: unknown) {
   const candidates = [
     error,
-    (error as { cause?: unknown } | null)?.cause ?? null
+    (error as { cause?: unknown } | null)?.cause ?? null,
   ];
   for (const candidate of candidates) {
     if (!candidate || typeof candidate !== "object") continue;
@@ -1476,7 +1489,7 @@ async function probeInviteResolutionTarget(
     const response = await fetch(url, {
       method: "HEAD",
       redirect: "manual",
-      signal: controller.signal
+      signal: controller.signal,
     });
     const durationMs = Date.now() - startedAt;
     if (
@@ -1494,7 +1507,7 @@ async function probeInviteResolutionTarget(
         method: "HEAD",
         durationMs,
         httpStatus: response.status,
-        message: `Webhook endpoint responded to HEAD with HTTP ${response.status}.`
+        message: `Webhook endpoint responded to HEAD with HTTP ${response.status}.`,
       };
     }
     return {
@@ -1502,7 +1515,7 @@ async function probeInviteResolutionTarget(
       method: "HEAD",
       durationMs,
       httpStatus: response.status,
-      message: `Webhook endpoint probe returned HTTP ${response.status}.`
+      message: `Webhook endpoint probe returned HTTP ${response.status}.`,
     };
   } catch (error) {
     const durationMs = Date.now() - startedAt;
@@ -1512,7 +1525,7 @@ async function probeInviteResolutionTarget(
         method: "HEAD",
         durationMs,
         httpStatus: null,
-        message: `Webhook endpoint probe timed out after ${timeoutMs}ms.`
+        message: `Webhook endpoint probe timed out after ${timeoutMs}ms.`,
       };
     }
     return {
@@ -1523,7 +1536,7 @@ async function probeInviteResolutionTarget(
       message:
         error instanceof Error
           ? error.message
-          : "Webhook endpoint probe failed."
+          : "Webhook endpoint probe failed.",
     };
   } finally {
     clearTimeout(timeout);
@@ -1578,7 +1591,7 @@ export function accessRoutes(
     const claimed = await claimBoardOwnership(db, {
       token,
       code,
-      userId: req.actor.userId
+      userId: req.actor.userId,
     });
 
     if (claimed.status === "invalid")
@@ -1590,7 +1603,7 @@ export function accessRoutes(
     if (claimed.status === "claimed") {
       res.json({
         claimed: true,
-        userId: claimed.claimedByUserId ?? req.actor.userId
+        userId: claimed.claimedByUserId ?? req.actor.userId,
       });
       return;
     }
@@ -1606,12 +1619,14 @@ export function accessRoutes(
     assertCompanyAccess(req, companyId);
     if (req.actor.type === "agent") {
       if (!req.actor.agentId) throw forbidden();
-      const allowed = (await access.hasPermission(
-        companyId,
-        "agent",
-        req.actor.agentId,
-        permissionKey
-      )).granted;
+      const allowed = (
+        await access.hasPermission(
+          companyId,
+          "agent",
+          req.actor.agentId,
+          permissionKey
+        )
+      ).granted;
       if (!allowed) throw forbidden("Permission denied");
       return;
     }
@@ -1643,7 +1658,11 @@ export function accessRoutes(
     }
     if (req.actor.type !== "board") throw unauthorized();
     if (isLocalImplicit(req)) return;
-    const allowed = await access.canUser(companyId, req.actor.userId, "users:invite");
+    const allowed = await access.canUser(
+      companyId,
+      req.actor.userId,
+      "users:invite"
+    );
     if (!allowed) throw forbidden("Permission denied");
   }
 
@@ -1668,9 +1687,11 @@ export function accessRoutes(
       ),
       expiresAt: companyInviteExpiresAt(
         Date.now(),
-        input.allowedJoinTypes === "human" ? HUMAN_INVITE_TTL_MS : COMPANY_INVITE_TTL_MS,
+        input.allowedJoinTypes === "human"
+          ? HUMAN_INVITE_TTL_MS
+          : COMPANY_INVITE_TTL_MS
       ),
-      invitedByUserId: input.req.actor.userId ?? null
+      invitedByUserId: input.req.actor.userId ?? null,
     };
 
     let token: string | null = null;
@@ -1682,7 +1703,7 @@ export function accessRoutes(
           .insert(invites)
           .values({
             ...insertValues,
-            tokenHash: hashToken(candidateToken)
+            tokenHash: hashToken(candidateToken),
           })
           .returning()
           .then((rows) => rows[0]);
@@ -1712,13 +1733,13 @@ export function accessRoutes(
         { name: "paperclip", path: "/api/skills/paperclip" },
         {
           name: "para-memory-files",
-          path: "/api/skills/para-memory-files"
+          path: "/api/skills/para-memory-files",
         },
         {
           name: "paperclip-create-agent",
-          path: "/api/skills/paperclip-create-agent"
-        }
-      ]
+          path: "/api/skills/paperclip-create-agent",
+        },
+      ],
     });
   });
 
@@ -1741,7 +1762,7 @@ export function accessRoutes(
           companyId,
           allowedJoinTypes: req.body.allowedJoinTypes,
           defaultsPayload: req.body.defaultsPayload ?? null,
-          agentMessage: req.body.agentMessage ?? null
+          agentMessage: req.body.agentMessage ?? null,
         });
 
       await logActivity(db, {
@@ -1750,7 +1771,7 @@ export function accessRoutes(
         actorId:
           req.actor.type === "agent"
             ? req.actor.agentId ?? "unknown-agent"
-            : req.actor.userId ?? "board",
+            : getBoardActorUserId(req),
         action: "invite.created",
         entityType: "invite",
         entityId: created.id,
@@ -1758,20 +1779,22 @@ export function accessRoutes(
           inviteType: created.inviteType,
           allowedJoinTypes: created.allowedJoinTypes,
           expiresAt: created.expiresAt.toISOString(),
-          hasAgentMessage: Boolean(normalizedAgentMessage)
-        }
+          hasAgentMessage: Boolean(normalizedAgentMessage),
+        },
       });
 
       const inviteSummary = toInviteSummaryResponse(req, token, created);
       const baseUrl = requestBaseUrl(req);
-      const inviteUrl = baseUrl ? `${baseUrl}/invite/${token}` : `/invite/${token}`;
+      const inviteUrl = baseUrl
+        ? `${baseUrl}/invite/${token}`
+        : `/invite/${token}`;
       res.status(201).json({
         ...created,
         token,
         inviteUrl,
         onboardingTextPath: inviteSummary.onboardingTextPath,
         onboardingTextUrl: inviteSummary.onboardingTextUrl,
-        inviteMessage: inviteSummary.inviteMessage
+        inviteMessage: inviteSummary.inviteMessage,
       });
     }
   );
@@ -1788,7 +1811,7 @@ export function accessRoutes(
           companyId,
           allowedJoinTypes: "agent",
           defaultsPayload: null,
-          agentMessage: req.body.agentMessage ?? null
+          agentMessage: req.body.agentMessage ?? null,
         });
 
       await logActivity(db, {
@@ -1797,7 +1820,7 @@ export function accessRoutes(
         actorId:
           req.actor.type === "agent"
             ? req.actor.agentId ?? "unknown-agent"
-            : req.actor.userId ?? "board",
+            : getBoardActorUserId(req),
         action: "invite.openclaw_prompt_created",
         entityType: "invite",
         entityId: created.id,
@@ -1805,20 +1828,22 @@ export function accessRoutes(
           inviteType: created.inviteType,
           allowedJoinTypes: created.allowedJoinTypes,
           expiresAt: created.expiresAt.toISOString(),
-          hasAgentMessage: Boolean(normalizedAgentMessage)
-        }
+          hasAgentMessage: Boolean(normalizedAgentMessage),
+        },
       });
 
       const inviteSummary = toInviteSummaryResponse(req, token, created);
       const baseUrl = requestBaseUrl(req);
-      const inviteUrl = baseUrl ? `${baseUrl}/invite/${token}` : `/invite/${token}`;
+      const inviteUrl = baseUrl
+        ? `${baseUrl}/invite/${token}`
+        : `/invite/${token}`;
       res.status(201).json({
         ...created,
         token,
         inviteUrl,
         onboardingTextPath: inviteSummary.onboardingTextPath,
         onboardingTextUrl: inviteSummary.onboardingTextUrl,
-        inviteMessage: inviteSummary.inviteMessage
+        inviteMessage: inviteSummary.inviteMessage,
       });
     }
   );
@@ -1830,10 +1855,12 @@ export function accessRoutes(
       await assertCompanyPermission(req, companyId, "users:invite");
 
       const inviteId = req.params.inviteId as string;
-      const toEmail = typeof req.body.email === "string" ? req.body.email.trim() : "";
+      const toEmail =
+        typeof req.body.email === "string" ? req.body.email.trim() : "";
       if (!toEmail) throw badRequest("Email address is required");
 
-      const token = typeof req.body.token === "string" ? req.body.token.trim() : "";
+      const token =
+        typeof req.body.token === "string" ? req.body.token.trim() : "";
       if (!token) throw badRequest("Invite token is required");
 
       const invite = await db
@@ -1842,7 +1869,12 @@ export function accessRoutes(
         .where(and(eq(invites.id, inviteId), eq(invites.companyId, companyId)))
         .then((rows) => rows[0] ?? null);
 
-      if (!invite || invite.revokedAt || invite.acceptedAt || inviteExpired(invite)) {
+      if (
+        !invite ||
+        invite.revokedAt ||
+        invite.acceptedAt ||
+        inviteExpired(invite)
+      ) {
         throw notFound("Invite not found or expired");
       }
 
@@ -1850,13 +1882,17 @@ export function accessRoutes(
         throw badRequest("Token does not match invite");
       }
 
-      const emailService = req.app.locals.emailService as EmailService | undefined;
+      const emailService = req.app.locals.emailService as
+        | EmailService
+        | undefined;
       if (!emailService?.isConfigured()) {
         throw badRequest("Email service is not configured");
       }
 
       const baseUrl = requestBaseUrl(req);
-      const inviteUrl = baseUrl ? `${baseUrl}/invite/${token}` : `/invite/${token}`;
+      const inviteUrl = baseUrl
+        ? `${baseUrl}/invite/${token}`
+        : `/invite/${token}`;
 
       const { companies } = await import("@paperclipai/db");
       const company = await db
@@ -1976,7 +2012,7 @@ export function accessRoutes(
       testResolutionPath: `/api/invites/${token}/test-resolution`,
       requestedUrl: target.toString(),
       timeoutMs,
-      ...probe
+      ...probe,
     });
   });
 
@@ -2017,7 +2053,7 @@ export function accessRoutes(
             "Authenticated user required for bootstrap acceptance"
           );
         }
-        const userId = req.actor.userId ?? "local-board";
+        const userId = getBoardActorUserId(req);
         const existingAdmin = await access.isInstanceAdmin(userId);
         if (!existingAdmin) {
           await access.promoteInstanceAdmin(userId);
@@ -2032,7 +2068,7 @@ export function accessRoutes(
           inviteId: updatedInvite.id,
           inviteType: updatedInvite.inviteType,
           bootstrapAccepted: true,
-          userId
+          userId,
         });
         return;
       }
@@ -2074,7 +2110,7 @@ export function accessRoutes(
         !canReplayOpenClawGatewayInviteAccept({
           requestType,
           adapterType,
-          existingJoinRequest: existingJoinRequestForInvite
+          existingJoinRequest: existingJoinRequestForInvite,
         })
       ) {
         throw notFound("Invite not found");
@@ -2100,7 +2136,8 @@ export function accessRoutes(
               defaultsPayload: replayMergedDefaults,
               paperclipApiUrl: req.body.paperclipApiUrl ?? null,
               inboundOpenClawAuthHeader: req.header("x-openclaw-auth") ?? null,
-              inboundOpenClawTokenHeader: req.header("x-openclaw-token") ?? null
+              inboundOpenClawTokenHeader:
+                req.header("x-openclaw-token") ?? null,
             })
           : null;
 
@@ -2112,12 +2149,12 @@ export function accessRoutes(
               deploymentMode: opts.deploymentMode,
               deploymentExposure: opts.deploymentExposure,
               bindHost: opts.bindHost,
-              allowedHostnames: opts.allowedHostnames
+              allowedHostnames: opts.allowedHostnames,
             })
           : {
               normalized: null as Record<string, unknown> | null,
               diagnostics: [] as JoinDiagnostic[],
-              fatalErrors: [] as string[]
+              fatalErrors: [] as string[],
             };
 
       if (requestType === "agent" && joinDefaults.fatalErrors.length > 0) {
@@ -2130,11 +2167,11 @@ export function accessRoutes(
             inviteId: invite.id,
             joinRequestDiagnostics: joinDefaults.diagnostics.map((diag) => ({
               code: diag.code,
-              level: diag.level
+              level: diag.level,
             })),
             normalizedAgentDefaults: summarizeOpenClawGatewayDefaultsForLog(
               joinDefaults.normalized
-            )
+            ),
           },
           "invite accept normalized OpenClaw gateway defaults"
         );
@@ -2173,9 +2210,7 @@ export function accessRoutes(
                 status: "pending_approval",
                 requestIp: requestIp(req),
                 requestingUserId:
-                  requestType === "human"
-                    ? req.actor.userId ?? "local-board"
-                    : null,
+                  requestType === "human" ? getBoardActorUserId(req) : null,
                 requestEmailSnapshot:
                   requestType === "human" ? actorEmail : null,
                 agentName: requestType === "agent" ? req.body.agentName : null,
@@ -2187,7 +2222,7 @@ export function accessRoutes(
                 agentDefaultsPayload:
                   requestType === "agent" ? joinDefaults.normalized : null,
                 claimSecretHash,
-                claimSecretExpiresAt
+                claimSecretExpiresAt,
               })
               .returning()
               .then((rows) => rows[0]);
@@ -2212,7 +2247,7 @@ export function accessRoutes(
               adapterType: requestType === "agent" ? adapterType : null,
               agentDefaultsPayload:
                 requestType === "agent" ? joinDefaults.normalized : null,
-              updatedAt: new Date()
+              updatedAt: new Date(),
             })
             .where(eq(joinRequests.id, replayJoinRequestId as string))
             .returning()
@@ -2238,11 +2273,11 @@ export function accessRoutes(
           : {};
         const nextAdapterConfig = {
           ...existingAdapterConfig,
-          ...(joinDefaults.normalized ?? {})
+          ...(joinDefaults.normalized ?? {}),
         };
         const updatedAgent = await agents.update(created.createdAgentId, {
           adapterType,
-          adapterConfig: nextAdapterConfig
+          adapterConfig: nextAdapterConfig,
         });
         if (!updatedAgent) {
           throw conflict("Approved join request agent not found");
@@ -2253,11 +2288,11 @@ export function accessRoutes(
           actorId:
             req.actor.type === "agent"
               ? req.actor.agentId ?? "invite-agent"
-              : req.actor.userId ?? "board",
+              : getBoardActorUserId(req),
           action: "agent.updated_from_join_replay",
           entityType: "agent",
           entityId: updatedAgent.id,
-          details: { inviteId: invite.id, joinRequestId: created.id }
+          details: { inviteId: invite.id, joinRequestId: created.id },
         });
       }
 
@@ -2305,8 +2340,8 @@ export function accessRoutes(
               code: diag.code,
               level: diag.level,
               message: diag.message,
-              hint: diag.hint ?? null
-            }))
+              hint: diag.hint ?? null,
+            })),
           },
           "invite accept persisted OpenClaw gateway join request"
         );
@@ -2316,7 +2351,7 @@ export function accessRoutes(
             {
               inviteId: invite.id,
               joinRequestId: created.id,
-              missingPersistedFields
+              missingPersistedFields,
             },
             "invite accept detected missing persisted OpenClaw gateway defaults"
           );
@@ -2329,8 +2364,9 @@ export function accessRoutes(
         actorId:
           req.actor.type === "agent"
             ? req.actor.agentId ?? "invite-agent"
-            : req.actor.userId ??
-              (requestType === "agent" ? "invite-anon" : "board"),
+            : requestType === "agent"
+              ? "invite-anon"
+              : getBoardActorUserId(req),
         action: inviteAlreadyAccepted
           ? "join.request_replayed"
           : "join.requested",
@@ -2339,8 +2375,8 @@ export function accessRoutes(
         details: {
           requestType,
           requestIp: created.requestIp,
-          inviteReplay: inviteAlreadyAccepted
-        }
+          inviteReplay: inviteAlreadyAccepted,
+        },
       });
 
       const response = toJoinRequestResponse(created);
@@ -2356,7 +2392,7 @@ export function accessRoutes(
           claimSecret,
           claimApiKeyPath: `/api/join-requests/${created.id}/claim-api-key`,
           onboarding: onboardingManifest.onboarding,
-          diagnostics: joinDefaults.diagnostics
+          diagnostics: joinDefaults.diagnostics,
         });
         return;
       }
@@ -2364,7 +2400,7 @@ export function accessRoutes(
         ...response,
         ...(joinDefaults.diagnostics.length > 0
           ? { diagnostics: joinDefaults.diagnostics }
-          : {})
+          : {}),
       });
     }
   );
@@ -2400,10 +2436,10 @@ export function accessRoutes(
         actorId:
           req.actor.type === "agent"
             ? req.actor.agentId ?? "unknown-agent"
-            : req.actor.userId ?? "board",
+            : getBoardActorUserId(req),
         action: "invite.revoked",
         entityType: "invite",
-        entityId: id
+        entityId: id,
       });
     }
 
@@ -2462,17 +2498,22 @@ export function accessRoutes(
           throw conflict("Join request missing user identity");
 
         // Extract role from invite defaults instead of hardcoding "member"
-        const defaults = invite.defaultsPayload as Record<string, unknown> | null;
+        const defaults = invite.defaultsPayload as Record<
+          string,
+          unknown
+        > | null;
         const rolePreset = defaults?.rolePreset as string | undefined;
         const validRoles = ["owner", "admin", "contributor", "viewer"] as const;
-        const membershipRole = rolePreset && (validRoles as readonly string[]).includes(rolePreset)
-          ? rolePreset
-          : "contributor";
+        const membershipRole =
+          rolePreset && (validRoles as readonly string[]).includes(rolePreset)
+            ? rolePreset
+            : "contributor";
 
         // Enforce hierarchy: approver cannot grant a role equal or higher than their own
-        const actorMembership = req.actor.type === "agent" && req.actor.agentId
-          ? await access.getMembership(companyId, "agent", req.actor.agentId)
-          : req.actor.userId
+        const actorMembership =
+          req.actor.type === "agent" && req.actor.agentId
+            ? await access.getMembership(companyId, "agent", req.actor.agentId)
+            : req.actor.userId
             ? await access.getMembership(companyId, "user", req.actor.userId)
             : null;
         const isAdmin = req.actor.userId
@@ -2482,10 +2523,12 @@ export function accessRoutes(
           !isAdmin &&
           !access.canModifyMember(
             actorMembership?.membershipRole ?? null,
-            membershipRole,
+            membershipRole
           )
         ) {
-          throw forbidden("Cannot approve invite granting equal or higher role");
+          throw forbidden(
+            "Cannot approve invite granting equal or higher role"
+          );
         }
 
         await access.ensureMembership(
@@ -2520,7 +2563,7 @@ export function accessRoutes(
           existingAgents.map((a) => ({
             id: a.id,
             name: a.name,
-            status: a.status
+            status: a.status,
           }))
         );
 
@@ -2542,21 +2585,32 @@ export function accessRoutes(
           spentMonthlyCents: 0,
           permissions: {},
           lastHeartbeatAt: null,
-          metadata: null
+          metadata: null,
         });
         createdAgentId = created.id;
         // Use canonical role from invite defaults (defaulting to "contributor")
-        const agentDefaults = invite.defaultsPayload as Record<string, unknown> | null;
+        const agentDefaults = invite.defaultsPayload as Record<
+          string,
+          unknown
+        > | null;
         const agentRolePreset = agentDefaults?.rolePreset as string | undefined;
-        const agentValidRoles = ["owner", "admin", "contributor", "viewer"] as const;
-        const agentMembershipRole = agentRolePreset && (agentValidRoles as readonly string[]).includes(agentRolePreset)
-          ? agentRolePreset
-          : "contributor";
+        const agentValidRoles = [
+          "owner",
+          "admin",
+          "contributor",
+          "viewer",
+        ] as const;
+        const agentMembershipRole =
+          agentRolePreset &&
+          (agentValidRoles as readonly string[]).includes(agentRolePreset)
+            ? agentRolePreset
+            : "contributor";
 
         // Enforce hierarchy: approver cannot grant a role equal or higher than their own
-        const agentActorMembership = req.actor.type === "agent" && req.actor.agentId
-          ? await access.getMembership(companyId, "agent", req.actor.agentId)
-          : req.actor.userId
+        const agentActorMembership =
+          req.actor.type === "agent" && req.actor.agentId
+            ? await access.getMembership(companyId, "agent", req.actor.agentId)
+            : req.actor.userId
             ? await access.getMembership(companyId, "user", req.actor.userId)
             : null;
         const agentIsAdmin = req.actor.userId
@@ -2566,10 +2620,12 @@ export function accessRoutes(
           !agentIsAdmin &&
           !access.canModifyMember(
             agentActorMembership?.membershipRole ?? null,
-            agentMembershipRole,
+            agentMembershipRole
           )
         ) {
-          throw forbidden("Cannot approve invite granting equal or higher role");
+          throw forbidden(
+            "Cannot approve invite granting equal or higher role"
+          );
         }
 
         await access.ensureMembership(
@@ -2604,11 +2660,10 @@ export function accessRoutes(
         .update(joinRequests)
         .set({
           status: "approved",
-          approvedByUserId:
-            req.actor.userId ?? (isLocalImplicit(req) ? "local-board" : null),
+          approvedByUserId: normalizeBoardUserId(req.actor.userId),
           approvedAt: new Date(),
           createdAgentId,
-          updatedAt: new Date()
+          updatedAt: new Date(),
         })
         .where(eq(joinRequests.id, requestId))
         .returning()
@@ -2617,11 +2672,11 @@ export function accessRoutes(
       await logActivity(db, {
         companyId,
         actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorId: getBoardActorUserId(req),
         action: "join.approved",
         entityType: "join_request",
         entityId: requestId,
-        details: { requestType: existing.requestType, createdAgentId }
+        details: { requestType: existing.requestType, createdAgentId },
       });
 
       if (createdAgentId) {
@@ -2630,7 +2685,7 @@ export function accessRoutes(
           agentId: createdAgentId,
           source: "join_request",
           sourceId: requestId,
-          approvedAt: new Date()
+          approvedAt: new Date(),
         }).catch(() => {});
       }
 
@@ -2663,10 +2718,9 @@ export function accessRoutes(
         .update(joinRequests)
         .set({
           status: "rejected",
-          rejectedByUserId:
-            req.actor.userId ?? (isLocalImplicit(req) ? "local-board" : null),
+          rejectedByUserId: normalizeBoardUserId(req.actor.userId),
           rejectedAt: new Date(),
-          updatedAt: new Date()
+          updatedAt: new Date(),
         })
         .where(eq(joinRequests.id, requestId))
         .returning()
@@ -2675,11 +2729,11 @@ export function accessRoutes(
       await logActivity(db, {
         companyId,
         actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorId: getBoardActorUserId(req),
         action: "join.rejected",
         entityType: "join_request",
         entityId: requestId,
-        details: { requestType: existing.requestType }
+        details: { requestType: existing.requestType },
       });
 
       res.json(toJoinRequestResponse(rejected));
@@ -2754,15 +2808,15 @@ export function accessRoutes(
         entityId: created.id,
         details: {
           agentId: joinRequest.createdAgentId,
-          joinRequestId: requestId
-        }
+          joinRequestId: requestId,
+        },
       });
 
       res.status(201).json({
         keyId: created.id,
         token: created.token,
         agentId: joinRequest.createdAgentId,
-        createdAt: created.createdAt
+        createdAt: created.createdAt,
       });
     }
   );
@@ -2772,23 +2826,37 @@ export function accessRoutes(
     assertCompanyAccess(req, companyId);
 
     if (req.actor.type === "agent" && req.actor.agentId) {
-      const result = await access.getMyPermissions(companyId, "agent", req.actor.agentId);
+      const result = await access.getMyPermissions(
+        companyId,
+        "agent",
+        req.actor.agentId
+      );
       res.json(result);
       return;
     }
 
     if (req.actor.type === "board") {
       if (isLocalImplicit(req)) {
-        res.json({ membershipRole: "owner", permissions: [...PERMISSION_KEYS] });
+        res.json({
+          membershipRole: "owner",
+          permissions: [...PERMISSION_KEYS],
+        });
         return;
       }
       if (req.actor.userId) {
         const isAdmin = await access.isInstanceAdmin(req.actor.userId);
         if (isAdmin) {
-          res.json({ membershipRole: "owner", permissions: [...PERMISSION_KEYS] });
+          res.json({
+            membershipRole: "owner",
+            permissions: [...PERMISSION_KEYS],
+          });
           return;
         }
-        const result = await access.getMyPermissions(companyId, "user", req.actor.userId);
+        const result = await access.getMyPermissions(
+          companyId,
+          "user",
+          req.actor.userId
+        );
         res.json(result);
         return;
       }
@@ -2819,17 +2887,26 @@ export function accessRoutes(
       const memberId = req.params.memberId as string;
       await assertCompanyPermission(req, companyId, "users:manage_permissions");
 
-      const actorMembership = req.actor.type === "agent" && req.actor.agentId
-        ? await access.getMembership(companyId, "agent", req.actor.agentId)
-        : req.actor.userId
+      const actorMembership =
+        req.actor.type === "agent" && req.actor.agentId
+          ? await access.getMembership(companyId, "agent", req.actor.agentId)
+          : req.actor.userId
           ? await access.getMembership(companyId, "user", req.actor.userId)
           : null;
       const targetMembers = await access.listMembers(companyId);
       const targetMember = targetMembers.find((m) => m.id === memberId);
       if (!targetMember) throw notFound("Member not found");
 
-      const isAdmin = req.actor.userId ? await access.isInstanceAdmin(req.actor.userId) : false;
-      if (!isAdmin && !access.canModifyMember(actorMembership?.membershipRole ?? null, targetMember.membershipRole)) {
+      const isAdmin = req.actor.userId
+        ? await access.isInstanceAdmin(req.actor.userId)
+        : false;
+      if (
+        !isAdmin &&
+        !access.canModifyMember(
+          actorMembership?.membershipRole ?? null,
+          targetMember.membershipRole
+        )
+      ) {
         throw forbidden("Cannot modify member with equal or higher role");
       }
 
@@ -2850,72 +2927,117 @@ export function accessRoutes(
     const memberId = req.params.memberId as string;
     await assertCompanyPermission(req, companyId, "users:manage_permissions");
 
-    const actorMembership = req.actor.type === "agent" && req.actor.agentId
-      ? await access.getMembership(companyId, "agent", req.actor.agentId)
-      : req.actor.userId
+    const actorMembership =
+      req.actor.type === "agent" && req.actor.agentId
+        ? await access.getMembership(companyId, "agent", req.actor.agentId)
+        : req.actor.userId
         ? await access.getMembership(companyId, "user", req.actor.userId)
         : null;
     const targetMembers = await access.listMembers(companyId);
     const targetMember = targetMembers.find((m) => m.id === memberId);
     if (!targetMember) throw notFound("Member not found");
 
-    const isAdmin = req.actor.userId ? await access.isInstanceAdmin(req.actor.userId) : false;
-    if (!isAdmin && !access.canModifyMember(actorMembership?.membershipRole ?? null, targetMember.membershipRole)) {
+    const isAdmin = req.actor.userId
+      ? await access.isInstanceAdmin(req.actor.userId)
+      : false;
+    if (
+      !isAdmin &&
+      !access.canModifyMember(
+        actorMembership?.membershipRole ?? null,
+        targetMember.membershipRole
+      )
+    ) {
       throw forbidden("Cannot remove member with equal or higher role");
     }
 
-    const removed = await access.removeMember(companyId, memberId, req.actor.userId ?? "system");
+    const removed = await access.removeMember(
+      companyId,
+      memberId,
+      req.actor.userId ?? "system"
+    );
     if (!removed) throw notFound("Member not found");
     res.status(204).send();
   });
 
-  router.post("/companies/:companyId/members/:memberId/suspend", async (req, res) => {
-    const companyId = req.params.companyId as string;
-    const memberId = req.params.memberId as string;
-    await assertCompanyPermission(req, companyId, "users:manage_permissions");
+  router.post(
+    "/companies/:companyId/members/:memberId/suspend",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const memberId = req.params.memberId as string;
+      await assertCompanyPermission(req, companyId, "users:manage_permissions");
 
-    const actorMembership = req.actor.type === "agent" && req.actor.agentId
-      ? await access.getMembership(companyId, "agent", req.actor.agentId)
-      : req.actor.userId
-        ? await access.getMembership(companyId, "user", req.actor.userId)
-        : null;
-    const targetMembers = await access.listMembers(companyId);
-    const targetMember = targetMembers.find((m) => m.id === memberId);
-    if (!targetMember) throw notFound("Member not found");
+      const actorMembership =
+        req.actor.type === "agent" && req.actor.agentId
+          ? await access.getMembership(companyId, "agent", req.actor.agentId)
+          : req.actor.userId
+          ? await access.getMembership(companyId, "user", req.actor.userId)
+          : null;
+      const targetMembers = await access.listMembers(companyId);
+      const targetMember = targetMembers.find((m) => m.id === memberId);
+      if (!targetMember) throw notFound("Member not found");
 
-    const isAdmin = req.actor.userId ? await access.isInstanceAdmin(req.actor.userId) : false;
-    if (!isAdmin && !access.canModifyMember(actorMembership?.membershipRole ?? null, targetMember.membershipRole)) {
-      throw forbidden("Cannot suspend member with equal or higher role");
+      const isAdmin = req.actor.userId
+        ? await access.isInstanceAdmin(req.actor.userId)
+        : false;
+      if (
+        !isAdmin &&
+        !access.canModifyMember(
+          actorMembership?.membershipRole ?? null,
+          targetMember.membershipRole
+        )
+      ) {
+        throw forbidden("Cannot suspend member with equal or higher role");
+      }
+
+      const suspended = await access.suspendMember(
+        companyId,
+        memberId,
+        req.actor.userId ?? "system"
+      );
+      if (!suspended) throw notFound("Member not found");
+      res.json(suspended);
     }
+  );
 
-    const suspended = await access.suspendMember(companyId, memberId, req.actor.userId ?? "system");
-    if (!suspended) throw notFound("Member not found");
-    res.json(suspended);
-  });
+  router.post(
+    "/companies/:companyId/members/:memberId/unsuspend",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const memberId = req.params.memberId as string;
+      await assertCompanyPermission(req, companyId, "users:manage_permissions");
 
-  router.post("/companies/:companyId/members/:memberId/unsuspend", async (req, res) => {
-    const companyId = req.params.companyId as string;
-    const memberId = req.params.memberId as string;
-    await assertCompanyPermission(req, companyId, "users:manage_permissions");
+      const actorMembership =
+        req.actor.type === "agent" && req.actor.agentId
+          ? await access.getMembership(companyId, "agent", req.actor.agentId)
+          : req.actor.userId
+          ? await access.getMembership(companyId, "user", req.actor.userId)
+          : null;
+      const targetMembers = await access.listMembers(companyId);
+      const targetMember = targetMembers.find((m) => m.id === memberId);
+      if (!targetMember) throw notFound("Member not found");
 
-    const actorMembership = req.actor.type === "agent" && req.actor.agentId
-      ? await access.getMembership(companyId, "agent", req.actor.agentId)
-      : req.actor.userId
-        ? await access.getMembership(companyId, "user", req.actor.userId)
-        : null;
-    const targetMembers = await access.listMembers(companyId);
-    const targetMember = targetMembers.find((m) => m.id === memberId);
-    if (!targetMember) throw notFound("Member not found");
+      const isAdmin = req.actor.userId
+        ? await access.isInstanceAdmin(req.actor.userId)
+        : false;
+      if (
+        !isAdmin &&
+        !access.canModifyMember(
+          actorMembership?.membershipRole ?? null,
+          targetMember.membershipRole
+        )
+      ) {
+        throw forbidden("Cannot unsuspend member with equal or higher role");
+      }
 
-    const isAdmin = req.actor.userId ? await access.isInstanceAdmin(req.actor.userId) : false;
-    if (!isAdmin && !access.canModifyMember(actorMembership?.membershipRole ?? null, targetMember.membershipRole)) {
-      throw forbidden("Cannot unsuspend member with equal or higher role");
+      const unsuspended = await access.unsuspendMember(
+        companyId,
+        memberId,
+        req.actor.userId ?? "system"
+      );
+      if (!unsuspended) throw notFound("Member not found");
+      res.json(unsuspended);
     }
-
-    const unsuspended = await access.unsuspendMember(companyId, memberId, req.actor.userId ?? "system");
-    if (!unsuspended) throw notFound("Member not found");
-    res.json(unsuspended);
-  });
+  );
 
   router.post(
     "/admin/users/:userId/promote-instance-admin",
@@ -2984,20 +3106,25 @@ export function accessRoutes(
     const newEmailService = createEmailService({
       provider: (existingEmail.provider as "resend" | "none") ?? "none",
       resendApiKey: existingEmail.resendApiKey as string | undefined,
-      fromAddress: (existingEmail.fromAddress as string) ?? "Paperclip <noreply@paperclip.dev>",
+      fromAddress:
+        (existingEmail.fromAddress as string) ??
+        "Paperclip <noreply@paperclip.dev>",
     });
     req.app.locals.emailService = newEmailService;
 
     res.json({
       provider: existingEmail.provider ?? "none",
-      fromAddress: existingEmail.fromAddress ?? "Paperclip <noreply@paperclip.dev>",
+      fromAddress:
+        existingEmail.fromAddress ?? "Paperclip <noreply@paperclip.dev>",
       configured: newEmailService.isConfigured(),
     });
   });
 
   router.get("/admin/config/email", async (req, res) => {
     await assertInstanceAdmin(req);
-    const emailService = req.app.locals.emailService as EmailService | undefined;
+    const emailService = req.app.locals.emailService as
+      | EmailService
+      | undefined;
     res.json({
       configured: emailService?.isConfigured() ?? false,
     });

@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { buildPaperclipEnv } from "../adapters/utils.js";
+import {
+  buildPaperclipEnv,
+  readPaperclipInvokeContext,
+} from "../adapters/utils.js";
 
 const ORIGINAL_PAPERCLIP_API_URL = process.env.PAPERCLIP_API_URL;
 const ORIGINAL_PAPERCLIP_LISTEN_HOST = process.env.PAPERCLIP_LISTEN_HOST;
@@ -8,13 +11,16 @@ const ORIGINAL_HOST = process.env.HOST;
 const ORIGINAL_PORT = process.env.PORT;
 
 afterEach(() => {
-  if (ORIGINAL_PAPERCLIP_API_URL === undefined) delete process.env.PAPERCLIP_API_URL;
+  if (ORIGINAL_PAPERCLIP_API_URL === undefined)
+    delete process.env.PAPERCLIP_API_URL;
   else process.env.PAPERCLIP_API_URL = ORIGINAL_PAPERCLIP_API_URL;
 
-  if (ORIGINAL_PAPERCLIP_LISTEN_HOST === undefined) delete process.env.PAPERCLIP_LISTEN_HOST;
+  if (ORIGINAL_PAPERCLIP_LISTEN_HOST === undefined)
+    delete process.env.PAPERCLIP_LISTEN_HOST;
   else process.env.PAPERCLIP_LISTEN_HOST = ORIGINAL_PAPERCLIP_LISTEN_HOST;
 
-  if (ORIGINAL_PAPERCLIP_LISTEN_PORT === undefined) delete process.env.PAPERCLIP_LISTEN_PORT;
+  if (ORIGINAL_PAPERCLIP_LISTEN_PORT === undefined)
+    delete process.env.PAPERCLIP_LISTEN_PORT;
   else process.env.PAPERCLIP_LISTEN_PORT = ORIGINAL_PAPERCLIP_LISTEN_PORT;
 
   if (ORIGINAL_HOST === undefined) delete process.env.HOST;
@@ -54,5 +60,54 @@ describe("buildPaperclipEnv", () => {
     const env = buildPaperclipEnv({ id: "agent-1", companyId: "company-1" });
 
     expect(env.PAPERCLIP_API_URL).toBe("http://[::1]:3101");
+  });
+
+  it("publishes canonical issue task scope and the issue-only compatibility alias", () => {
+    const env = buildPaperclipEnv(
+      { id: "agent-1", companyId: "company-1" },
+      {
+        runId: "run-1",
+        taskKey: "issue:issue-1",
+      }
+    );
+
+    expect(env.PAPERCLIP_RUN_ID).toBe("run-1");
+    expect(env.PAPERCLIP_TASK_KEY).toBe("issue:issue-1");
+    expect(env.PAPERCLIP_TASK_ID).toBe("issue-1");
+  });
+
+  it("does not publish PAPERCLIP_TASK_ID for non-issue task scopes", () => {
+    const env = buildPaperclipEnv(
+      { id: "agent-1", companyId: "company-1" },
+      {
+        taskKey: "conversation:conversation-1",
+      }
+    );
+
+    expect(env.PAPERCLIP_TASK_KEY).toBe("conversation:conversation-1");
+    expect(env.PAPERCLIP_TASK_ID).toBeUndefined();
+  });
+});
+
+describe("readPaperclipInvokeContext", () => {
+  it("promotes issue ids into canonical taskKey values", () => {
+    const result = readPaperclipInvokeContext({
+      issueId: "issue-1",
+      wakeReason: "issue_assigned",
+      issueIds: ["issue-1", "issue-2"],
+    });
+
+    expect(result.taskKey).toBe("issue:issue-1");
+    expect(result.issueId).toBe("issue-1");
+    expect(result.wakeReason).toBe("issue_assigned");
+    expect(result.linkedIssueIds).toEqual(["issue-1", "issue-2"]);
+  });
+
+  it("upgrades legacy bare-uuid task keys to canonical issue task keys", () => {
+    const result = readPaperclipInvokeContext({
+      taskKey: "11111111-1111-4111-8111-111111111111",
+    });
+
+    expect(result.taskKey).toBe("issue:11111111-1111-4111-8111-111111111111");
   });
 });

@@ -9,6 +9,7 @@ import {
   asStringArray,
   parseObject,
   buildPaperclipEnv,
+  readPaperclipInvokeContext,
   redactEnvForLogs,
   ensureAbsoluteDirectory,
   ensureCommandResolvable,
@@ -37,13 +38,19 @@ function firstNonEmptyLine(text: string): string {
   );
 }
 
-function hasNonEmptyEnvValue(env: Record<string, string>, key: string): boolean {
+function hasNonEmptyEnvValue(
+  env: Record<string, string>,
+  key: string
+): boolean {
   const raw = env[key];
   return typeof raw === "string" && raw.trim().length > 0;
 }
 
-function resolveCursorBillingType(env: Record<string, string>): "api" | "subscription" {
-  return hasNonEmptyEnvValue(env, "CURSOR_API_KEY") || hasNonEmptyEnvValue(env, "OPENAI_API_KEY")
+function resolveCursorBillingType(
+  env: Record<string, string>
+): "api" | "subscription" {
+  return hasNonEmptyEnvValue(env, "CURSOR_API_KEY") ||
+    hasNonEmptyEnvValue(env, "OPENAI_API_KEY")
     ? "api"
     : "subscription";
 }
@@ -64,7 +71,8 @@ function resolveProviderFromModel(model: string): string | null {
   if (!trimmed) return null;
   const slash = trimmed.indexOf("/");
   if (slash > 0) return trimmed.slice(0, slash);
-  if (trimmed.includes("sonnet") || trimmed.includes("claude")) return "anthropic";
+  if (trimmed.includes("sonnet") || trimmed.includes("claude"))
+    return "anthropic";
   if (trimmed.startsWith("gpt") || trimmed.startsWith("o")) return "openai";
   return null;
 }
@@ -82,7 +90,9 @@ function renderPaperclipEnvNote(env: Record<string, string>): string {
   if (paperclipKeys.length === 0) return "";
   return [
     "Paperclip runtime note:",
-    `The following PAPERCLIP_* environment variables are available in this run: ${paperclipKeys.join(", ")}`,
+    `The following PAPERCLIP_* environment variables are available in this run: ${paperclipKeys.join(
+      ", "
+    )}`,
     "Do not assume these variables are missing without checking your shell environment.",
     "",
     "",
@@ -102,10 +112,11 @@ type EnsureCursorSkillsInjectedOptions = {
 
 export async function ensureCursorSkillsInjected(
   onLog: AdapterExecutionContext["onLog"],
-  options: EnsureCursorSkillsInjectedOptions = {},
+  options: EnsureCursorSkillsInjectedOptions = {}
 ) {
-  const skillsEntries = options.skillsEntries
-    ?? (options.skillsDir
+  const skillsEntries =
+    options.skillsEntries ??
+    (options.skillsDir
       ? (await fs.readdir(options.skillsDir, { withFileTypes: true }))
           .filter((entry) => entry.isDirectory())
           .map((entry) => ({
@@ -122,7 +133,9 @@ export async function ensureCursorSkillsInjected(
   } catch (err) {
     await onLog(
       "stderr",
-      `[paperclip] Failed to prepare Cursor skills directory ${skillsHome}: ${err instanceof Error ? err.message : String(err)}\n`,
+      `[paperclip] Failed to prepare Cursor skills directory ${skillsHome}: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`
     );
     return;
   }
@@ -133,14 +146,20 @@ export async function ensureCursorSkillsInjected(
   for (const skillName of removedSkills) {
     await onLog(
       "stderr",
-      `[paperclip] Removed maintainer-only Cursor skill "${skillName}" from ${skillsHome}\n`,
+      `[paperclip] Removed maintainer-only Cursor skill "${skillName}" from ${skillsHome}\n`
     );
   }
-  const linkSkill = options.linkSkill ?? ((source: string, target: string) => fs.symlink(source, target));
+  const linkSkill =
+    options.linkSkill ??
+    ((source: string, target: string) => fs.symlink(source, target));
   for (const entry of skillsEntries) {
     const target = path.join(skillsHome, entry.runtimeName);
     try {
-      const result = await ensurePaperclipSkillSymlink(entry.source, target, linkSkill);
+      const result = await ensurePaperclipSkillSymlink(
+        entry.source,
+        target,
+        linkSkill
+      );
       if (result === "skipped") continue;
 
       await onLog(
@@ -161,7 +180,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const promptTemplate = asString(
     config.promptTemplate,
-    "You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work.",
+    "You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work."
   );
   const command = asString(config.command, "agent");
   const model = asString(config.model, DEFAULT_CURSOR_LOCAL_MODEL).trim();
@@ -176,12 +195,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const agentHome = asString(workspaceContext.agentHome, "");
   const workspaceHints = Array.isArray(context.paperclipWorkspaces)
     ? context.paperclipWorkspaces.filter(
-        (value): value is Record<string, unknown> => typeof value === "object" && value !== null,
+        (value): value is Record<string, unknown> =>
+          typeof value === "object" && value !== null
       )
     : [];
   const configuredCwd = asString(config.cwd, "");
-  const useConfiguredInsteadOfAgentHome = workspaceSource === "agent_home" && configuredCwd.length > 0;
-  const effectiveWorkspaceCwd = useConfiguredInsteadOfAgentHome ? "" : workspaceCwd;
+  const useConfiguredInsteadOfAgentHome =
+    workspaceSource === "agent_home" && configuredCwd.length > 0;
+  const effectiveWorkspaceCwd = useConfiguredInsteadOfAgentHome
+    ? ""
+    : workspaceCwd;
   const cwd = effectiveWorkspaceCwd || configuredCwd || process.cwd();
   await ensureAbsoluteDirectory(cwd, { createIfMissing: true });
   const cursorSkillEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
@@ -192,50 +215,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const envConfig = parseObject(config.env);
   const hasExplicitApiKey =
-    typeof envConfig.PAPERCLIP_API_KEY === "string" && envConfig.PAPERCLIP_API_KEY.trim().length > 0;
-  const env: Record<string, string> = { ...buildPaperclipEnv(agent) };
-  env.PAPERCLIP_RUN_ID = runId;
-  const wakeTaskId =
-    (typeof context.taskId === "string" && context.taskId.trim().length > 0 && context.taskId.trim()) ||
-    (typeof context.issueId === "string" && context.issueId.trim().length > 0 && context.issueId.trim()) ||
-    null;
-  const wakeReason =
-    typeof context.wakeReason === "string" && context.wakeReason.trim().length > 0
-      ? context.wakeReason.trim()
-      : null;
-  const wakeCommentId =
-    (typeof context.wakeCommentId === "string" && context.wakeCommentId.trim().length > 0 && context.wakeCommentId.trim()) ||
-    (typeof context.commentId === "string" && context.commentId.trim().length > 0 && context.commentId.trim()) ||
-    null;
-  const approvalId =
-    typeof context.approvalId === "string" && context.approvalId.trim().length > 0
-      ? context.approvalId.trim()
-      : null;
-  const approvalStatus =
-    typeof context.approvalStatus === "string" && context.approvalStatus.trim().length > 0
-      ? context.approvalStatus.trim()
-      : null;
-  const linkedIssueIds = Array.isArray(context.issueIds)
-    ? context.issueIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-    : [];
-  if (wakeTaskId) {
-    env.PAPERCLIP_TASK_ID = wakeTaskId;
-  }
-  if (wakeReason) {
-    env.PAPERCLIP_WAKE_REASON = wakeReason;
-  }
-  if (wakeCommentId) {
-    env.PAPERCLIP_WAKE_COMMENT_ID = wakeCommentId;
-  }
-  if (approvalId) {
-    env.PAPERCLIP_APPROVAL_ID = approvalId;
-  }
-  if (approvalStatus) {
-    env.PAPERCLIP_APPROVAL_STATUS = approvalStatus;
-  }
-  if (linkedIssueIds.length > 0) {
-    env.PAPERCLIP_LINKED_ISSUE_IDS = linkedIssueIds.join(",");
-  }
+    typeof envConfig.PAPERCLIP_API_KEY === "string" &&
+    envConfig.PAPERCLIP_API_KEY.trim().length > 0;
+  const env: Record<string, string> = {
+    ...buildPaperclipEnv(agent, {
+      runId,
+      ...readPaperclipInvokeContext(context),
+    }),
+  };
   if (effectiveWorkspaceCwd) {
     env.PAPERCLIP_WORKSPACE_CWD = effectiveWorkspaceCwd;
   }
@@ -282,40 +269,49 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const autoTrustEnabled = !hasCursorTrustBypassArg(extraArgs);
 
   const runtimeSessionParams = parseObject(runtime.sessionParams);
-  const runtimeSessionId = asString(runtimeSessionParams.sessionId, runtime.sessionId ?? "");
+  const runtimeSessionId = asString(
+    runtimeSessionParams.sessionId,
+    runtime.sessionId ?? ""
+  );
   const runtimeSessionCwd = asString(runtimeSessionParams.cwd, "");
   const canResumeSession =
     runtimeSessionId.length > 0 &&
-    (runtimeSessionCwd.length === 0 || path.resolve(runtimeSessionCwd) === path.resolve(cwd));
+    (runtimeSessionCwd.length === 0 ||
+      path.resolve(runtimeSessionCwd) === path.resolve(cwd));
   const sessionId = canResumeSession ? runtimeSessionId : null;
   if (runtimeSessionId && !canResumeSession) {
     await onLog(
-      "stdout",
-      `[paperclip] Cursor session "${runtimeSessionId}" was saved for cwd "${runtimeSessionCwd}" and will not be resumed in "${cwd}".\n`,
+      "stderr",
+      `[paperclip] Cursor session "${runtimeSessionId}" was saved for cwd "${runtimeSessionCwd}" and will not be resumed in "${cwd}".\n`
     );
   }
 
   const instructionsFilePath = asString(config.instructionsFilePath, "").trim();
-  const instructionsDir = instructionsFilePath ? `${path.dirname(instructionsFilePath)}/` : "";
+  const instructionsDir = instructionsFilePath
+    ? `${path.dirname(instructionsFilePath)}/`
+    : "";
   let instructionsPrefix = "";
   let instructionsChars = 0;
   if (instructionsFilePath) {
     try {
-      const instructionsContents = await fs.readFile(instructionsFilePath, "utf8");
+      const instructionsContents = await fs.readFile(
+        instructionsFilePath,
+        "utf8"
+      );
       instructionsPrefix =
         `${instructionsContents}\n\n` +
         `The above agent instructions were loaded from ${instructionsFilePath}. ` +
         `Resolve any relative file references from ${instructionsDir}.\n\n`;
       instructionsChars = instructionsPrefix.length;
       await onLog(
-        "stdout",
-        `[paperclip] Loaded agent instructions file: ${instructionsFilePath}\n`,
+        "stderr",
+        `[paperclip] Loaded agent instructions file: ${instructionsFilePath}\n`
       );
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       await onLog(
-        "stdout",
-        `[paperclip] Warning: could not read agent instructions file "${instructionsFilePath}": ${reason}\n`,
+        "stderr",
+        `[paperclip] Warning: could not read agent instructions file "${instructionsFilePath}": ${reason}\n`
       );
     }
   }
@@ -329,12 +325,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (instructionsPrefix.length > 0) {
       notes.push(
         `Loaded agent instructions from ${instructionsFilePath}`,
-        `Prepended instructions + path directive to prompt (relative references from ${instructionsDir}).`,
+        `Prepended instructions + path directive to prompt (relative references from ${instructionsDir}).`
       );
       return notes;
     }
     notes.push(
-      `Configured instructionsFilePath ${instructionsFilePath}, but file could not be read; continuing without injected instructions.`,
+      `Configured instructionsFilePath ${instructionsFilePath}, but file could not be read; continuing without injected instructions.`
     );
     return notes;
   })();
@@ -354,12 +350,20 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     !sessionId && bootstrapPromptTemplate.trim().length > 0
       ? renderTemplate(bootstrapPromptTemplate, templateData).trim()
       : "";
-  const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
+  const sessionHandoffNote = asString(
+    context.paperclipSessionHandoffMarkdown,
+    ""
+  ).trim();
+  const linkedConversationMemoryNote = asString(
+    context.paperclipLinkedConversationMemoryMarkdown,
+    ""
+  ).trim();
   const paperclipEnvNote = renderPaperclipEnvNote(env);
   const prompt = joinPromptSections([
     instructionsPrefix,
     renderedBootstrapPrompt,
     sessionHandoffNote,
+    linkedConversationMemoryNote,
     paperclipEnvNote,
     renderedPrompt,
   ]);
@@ -368,6 +372,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     instructionsChars,
     bootstrapPromptChars: renderedBootstrapPrompt.length,
     sessionHandoffChars: sessionHandoffNote.length,
+    linkedConversationMemoryChars: linkedConversationMemoryNote.length,
     runtimeNoteChars: paperclipEnvNote.length,
     heartbeatPromptChars: renderedPrompt.length,
   };
@@ -458,7 +463,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       };
       parsed: ReturnType<typeof parseCursorJsonl>;
     },
-    clearSessionOnMissingSession = false,
+    clearSessionOnMissingSession = false
   ): AdapterExecutionResult => {
     if (attempt.proc.timedOut) {
       return {
@@ -470,7 +475,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       };
     }
 
-    const resolvedSessionId = attempt.parsed.sessionId ?? runtimeSessionId ?? runtime.sessionId ?? null;
+    const resolvedSessionId =
+      attempt.parsed.sessionId ?? runtimeSessionId ?? runtime.sessionId ?? null;
     const resolvedSessionParams = resolvedSessionId
       ? ({
           sessionId: resolvedSessionId,
@@ -480,7 +486,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           ...(workspaceRepoRef ? { repoRef: workspaceRepoRef } : {}),
         } as Record<string, unknown>)
       : null;
-    const parsedError = typeof attempt.parsed.errorMessage === "string" ? attempt.parsed.errorMessage.trim() : "";
+    const parsedError =
+      typeof attempt.parsed.errorMessage === "string"
+        ? attempt.parsed.errorMessage.trim()
+        : "";
     const stderrLine = firstNonEmptyLine(attempt.proc.stderr);
     const fallbackErrorMessage =
       parsedError ||
@@ -492,9 +501,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       signal: attempt.proc.signal,
       timedOut: false,
       errorMessage:
-        (attempt.proc.exitCode ?? 0) === 0
-          ? null
-          : fallbackErrorMessage,
+        (attempt.proc.exitCode ?? 0) === 0 ? null : fallbackErrorMessage,
       usage: attempt.parsed.usage,
       sessionId: resolvedSessionId,
       sessionParams: resolvedSessionParams,
@@ -521,8 +528,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     isCursorUnknownSessionError(initial.proc.stdout, initial.proc.stderr)
   ) {
     await onLog(
-      "stdout",
-      `[paperclip] Cursor resume session "${sessionId}" is unavailable; retrying with a fresh session.\n`,
+      "stderr",
+      `[paperclip] Cursor resume session "${sessionId}" is unavailable; retrying with a fresh session.\n`
     );
     const retry = await runAttempt(null);
     return toResult(retry, true);

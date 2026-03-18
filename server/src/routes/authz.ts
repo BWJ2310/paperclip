@@ -1,4 +1,5 @@
 import type { Request } from "express";
+import { getBoardActorUserId } from "../auth/board-actor.js";
 import { forbidden, unauthorized } from "../errors.js";
 
 export function assertBoard(req: Request) {
@@ -14,7 +15,11 @@ export function assertCompanyAccess(req: Request, companyId: string) {
   if (req.actor.type === "agent" && req.actor.companyId !== companyId) {
     throw forbidden("Agent key cannot access another company");
   }
-  if (req.actor.type === "board" && req.actor.source !== "local_implicit" && !req.actor.isInstanceAdmin) {
+  if (
+    req.actor.type === "board" &&
+    req.actor.source !== "local_implicit" &&
+    !req.actor.isInstanceAdmin
+  ) {
     const allowedCompanies = req.actor.companyIds ?? [];
     if (!allowedCompanies.includes(companyId)) {
       throw forbidden("User does not have access to this company");
@@ -37,7 +42,7 @@ export function getActorInfo(req: Request) {
 
   return {
     actorType: "user" as const,
-    actorId: req.actor.userId ?? "board",
+    actorId: getBoardActorUserId(req),
     agentId: null,
     runId: req.actor.runId ?? null,
   };

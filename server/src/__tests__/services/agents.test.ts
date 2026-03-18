@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import { getTestDb, cleanDb, type TestDb } from "../helpers/test-db.js";
 import { agentService } from "../../services/agents.js";
-import { companies, agentApiKeys } from "@paperclipai/db";
+import { companies, agentApiKeys, agents } from "@paperclipai/db";
 import { eq } from "drizzle-orm";
 import { createHash, randomUUID } from "node:crypto";
 
@@ -17,7 +17,10 @@ describe("agentService", () => {
     await cleanDb();
     const [co] = await testDb.db
       .insert(companies)
-      .values({ name: "Test Co", issuePrefix: `T${randomUUID().slice(0, 4).toUpperCase()}` })
+      .values({
+        name: "Test Co",
+        issuePrefix: `T${randomUUID().slice(0, 4).toUpperCase()}`,
+      })
       .returning();
     companyId = co.id;
   });
@@ -41,6 +44,44 @@ describe("agentService", () => {
       expect(agent.name).toBe("Test Agent");
       expect(agent.companyId).toBe(companyId);
       expect(agent.urlKey).toBeDefined();
+    });
+
+    it("canonicalizes legacy heartbeat wake policy keys before persisting", async () => {
+      const agent = await svc().create(companyId, {
+        name: "Legacy Wake Agent",
+        role: "general",
+        adapterType: "process",
+        runtimeConfig: {
+          heartbeat: {
+            enabled: true,
+            intervalSec: 300,
+            wakeOnDemand: false,
+            wakeOnAssignment: true,
+          },
+        },
+        budgetMonthlyCents: 0,
+        spentMonthlyCents: 0,
+      });
+
+      expect(
+        (agent.runtimeConfig as Record<string, unknown>).heartbeat
+      ).toEqual({
+        enabled: true,
+        intervalSec: 300,
+        wakeOnSignal: false,
+      });
+
+      const [stored] = await testDb.db
+        .select({ runtimeConfig: agents.runtimeConfig })
+        .from(agents)
+        .where(eq(agents.id, agent.id));
+
+      expect(stored).toBeDefined();
+      expect((stored.runtimeConfig as Record<string, any>).heartbeat).toEqual({
+        enabled: true,
+        intervalSec: 300,
+        wakeOnSignal: false,
+      });
     });
   });
 
@@ -119,6 +160,53 @@ describe("agentService", () => {
       const updated = await svc().update(agent.id, { name: "After" });
       expect(updated).not.toBeNull();
       expect(updated!.name).toBe("After");
+    });
+
+    it("rewrites legacy heartbeat wake policy keys to wakeOnSignal", async () => {
+      const agent = await svc().create(companyId, {
+        name: "Patch Me",
+        role: "general",
+        adapterType: "process",
+        runtimeConfig: {
+          heartbeat: {
+            enabled: true,
+            intervalSec: 300,
+            wakeOnSignal: true,
+          },
+        },
+        budgetMonthlyCents: 0,
+        spentMonthlyCents: 0,
+      });
+
+      const updated = await svc().update(agent.id, {
+        runtimeConfig: {
+          heartbeat: {
+            enabled: true,
+            intervalSec: 600,
+            wakeOnAutomation: false,
+          },
+        },
+      });
+
+      expect(updated).not.toBeNull();
+      expect(
+        (updated!.runtimeConfig as Record<string, unknown>).heartbeat
+      ).toEqual({
+        enabled: true,
+        intervalSec: 600,
+        wakeOnSignal: false,
+      });
+
+      const [stored] = await testDb.db
+        .select({ runtimeConfig: agents.runtimeConfig })
+        .from(agents)
+        .where(eq(agents.id, agent.id));
+
+      expect((stored.runtimeConfig as Record<string, any>).heartbeat).toEqual({
+        enabled: true,
+        intervalSec: 600,
+        wakeOnSignal: false,
+      });
     });
   });
 

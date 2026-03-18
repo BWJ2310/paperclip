@@ -1,4 +1,10 @@
-import type { Project, ProjectWorkspace } from "@paperclipai/shared";
+import {
+  companyProjectsPath,
+  type LinkedConversationSummary,
+  type ListProjectsQuery,
+  type Project,
+  type ProjectWorkspace,
+} from "@paperclipai/shared";
 import { api } from "./client";
 
 function withCompanyScope(path: string, companyId?: string) {
@@ -12,8 +18,17 @@ function projectPath(id: string, companyId?: string, suffix = "") {
 }
 
 export const projectsApi = {
-  list: (companyId: string) => api.get<Project[]>(`/companies/${companyId}/projects`),
+  list: (companyId: string, query?: ListProjectsQuery) => {
+    const params = new URLSearchParams();
+    const trimmedQuery = query?.q?.trim();
+    if (trimmedQuery) params.set("q", trimmedQuery);
+    if (query?.limit !== undefined) params.set("limit", String(query.limit));
+    const qs = params.toString();
+    return api.get<Project[]>(`${companyProjectsPath(companyId)}${qs ? `?${qs}` : ""}`);
+  },
   get: (id: string, companyId?: string) => api.get<Project>(projectPath(id, companyId)),
+  listLinkedConversations: (id: string, companyId?: string) =>
+    api.get<LinkedConversationSummary[]>(projectPath(id, companyId, "/linked-conversations")),
   create: (companyId: string, data: Record<string, unknown>) =>
     api.post<Project>(`/companies/${companyId}/projects`, data),
   update: (id: string, data: Record<string, unknown>, companyId?: string) =>

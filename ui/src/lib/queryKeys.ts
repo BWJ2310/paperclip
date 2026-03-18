@@ -47,6 +47,8 @@ export const queryKeys = {
     liveRuns: (issueId: string) => ["issues", "live-runs", issueId] as const,
     activeRun: (issueId: string) => ["issues", "active-run", issueId] as const,
     workProducts: (issueId: string) => ["issues", "work-products", issueId] as const,
+    linkedConversations: (issueId: string) =>
+      ["issues", "linked-conversations", issueId] as const,
   },
   routines: {
     list: (companyId: string) => ["routines", companyId] as const,
@@ -59,13 +61,29 @@ export const queryKeys = {
       ["execution-workspaces", companyId, filters ?? {}] as const,
     detail: (id: string) => ["execution-workspaces", "detail", id] as const,
   },
+  conversations: {
+    list: (companyId: string, status?: string) =>
+      ["conversations", companyId, status ?? "active"] as const,
+    detail: (conversationId: string) =>
+      ["conversations", "detail", conversationId] as const,
+    messages: (
+      conversationId: string,
+      params?: Record<string, unknown> | null
+    ) => ["conversations", "messages", conversationId, params ?? {}] as const,
+    readState: (conversationId: string) =>
+      ["conversations", "read-state", conversationId] as const,
+  },
   projects: {
     list: (companyId: string) => ["projects", companyId] as const,
     detail: (id: string) => ["projects", "detail", id] as const,
+    linkedConversations: (projectId: string) =>
+      ["projects", "linked-conversations", projectId] as const,
   },
   goals: {
     list: (companyId: string) => ["goals", companyId] as const,
     detail: (id: string) => ["goals", "detail", id] as const,
+    linkedConversations: (goalId: string) =>
+      ["goals", "linked-conversations", goalId] as const,
   },
   budgets: {
     overview: (companyId: string) => ["budgets", "overview", companyId] as const,

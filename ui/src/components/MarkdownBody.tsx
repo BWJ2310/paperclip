@@ -1,7 +1,30 @@
-import { Fragment, isValidElement, useEffect, useId, useState, type CSSProperties, type ReactNode } from "react";
-import Markdown, { type Components } from "react-markdown";
+import {
+  Fragment,
+  isValidElement,
+  useEffect,
+  useId,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import Markdown, {
+  defaultUrlTransform,
+  type Components,
+} from "react-markdown";
+import {
+  Link as RouterLink,
+  useInRouterContext,
+  useLocation,
+} from "react-router-dom";
 import remarkGfm from "remark-gfm";
-import { parseProjectMentionHref } from "@paperclipai/shared";
+import {
+  parseStructuredMentionHref,
+  type ParsedStructuredMentionHref,
+} from "@paperclipai/shared";
+import {
+  applyCompanyPrefix,
+  extractCompanyPrefixFromPath,
+} from "../lib/company-routes";
 import { cn } from "../lib/utils";
 import { useTheme } from "../context/ThemeContext";
 
@@ -10,6 +33,7 @@ interface MarkdownBodyProps {
   className?: string;
   /** Optional resolver for relative image paths (e.g. within export packages) */
   resolveImageSrc?: (src: string) => string | null;
+  mentionMode?: "legacy" | "structured";
 }
 
 let mermaidLoaderPromise: Promise<typeof import("mermaid").default> | null = null;
@@ -30,7 +54,10 @@ function flattenText(value: ReactNode): string {
 
 function extractMermaidSource(children: ReactNode): string | null {
   if (!isValidElement(children)) return null;
-  const childProps = children.props as { className?: unknown; children?: ReactNode };
+  const childProps = children.props as {
+    className?: unknown;
+    children?: ReactNode;
+  };
   if (typeof childProps.className !== "string") return null;
   if (!/\blanguage-mermaid\b/i.test(childProps.className)) return null;
   return flattenText(childProps.children).replace(/\n$/, "");
@@ -59,7 +86,101 @@ function mentionChipStyle(color: string | null): CSSProperties | undefined {
   };
 }
 
-function MermaidDiagramBlock({ source, darkMode }: { source: string; darkMode: boolean }) {
+function structuredMentionBoardPath(parsed: ParsedStructuredMentionHref): string {
+  switch (parsed.kind) {
+    case "agent":
+      return `/agents/${parsed.targetId}`;
+    case "issue":
+      return `/issues/${parsed.targetId}`;
+    case "goal":
+      return `/goals/${parsed.targetId}`;
+    case "project":
+      return `/projects/${parsed.targetId}`;
+  }
+}
+
+function resolveStructuredMentionBoardHref(
+  parsed: ParsedStructuredMentionHref,
+  currentPathname: string | null | undefined
+): string {
+  const companyPrefix = currentPathname
+    ? extractCompanyPrefixFromPath(currentPathname)
+    : null;
+  return applyCompanyPrefix(structuredMentionBoardPath(parsed), companyPrefix);
+}
+
+function StructuredMentionAnchor({
+  parsed,
+  children,
+}: {
+  parsed: ParsedStructuredMentionHref;
+  children: ReactNode;
+}) {
+  const currentPathname =
+    typeof window !== "undefined" ? window.location.pathname : null;
+  const href = resolveStructuredMentionBoardHref(parsed, currentPathname);
+  return (
+    <a
+      href={href}
+      className={cn(
+        "paperclip-mention-chip",
+        parsed.kind === "project" && "paperclip-project-mention-chip",
+      )}
+      style={mentionChipStyle(parsed.color)}
+    >
+      {children}
+    </a>
+  );
+}
+
+function StructuredMentionRouterLink({
+  parsed,
+  children,
+}: {
+  parsed: ParsedStructuredMentionHref;
+  children: ReactNode;
+}) {
+  const location = useLocation();
+  const to = resolveStructuredMentionBoardHref(parsed, location.pathname);
+  return (
+    <RouterLink
+      to={to}
+      className={cn(
+        "paperclip-mention-chip",
+        parsed.kind === "project" && "paperclip-project-mention-chip",
+      )}
+      style={mentionChipStyle(parsed.color)}
+    >
+      {children}
+    </RouterLink>
+  );
+}
+
+function StructuredMentionLink({
+  parsed,
+  children,
+}: {
+  parsed: ParsedStructuredMentionHref;
+  children: ReactNode;
+}) {
+  const inRouterContext = useInRouterContext();
+  if (inRouterContext) {
+    return (
+      <StructuredMentionRouterLink parsed={parsed}>
+        {children}
+      </StructuredMentionRouterLink>
+    );
+  }
+  return <StructuredMentionAnchor parsed={parsed}>{children}</StructuredMentionAnchor>;
+}
+
+function MermaidDiagramBlock({
+  source,
+  darkMode,
+}: {
+  source: string;
+  darkMode: boolean;
+}) {
   const renderId = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -78,7 +199,10 @@ function MermaidDiagramBlock({ source, darkMode }: { source: string; darkMode: b
           fontFamily: "inherit",
           suppressErrorRendering: true,
         });
-        const rendered = await mermaid.render(`paperclip-mermaid-${renderId}`, source);
+        const rendered = await mermaid.render(
+          `paperclip-mermaid-${renderId}`,
+          source,
+        );
         if (!active) return;
         setSvg(rendered.svg);
       })
@@ -102,7 +226,12 @@ function MermaidDiagramBlock({ source, darkMode }: { source: string; darkMode: b
         <div dangerouslySetInnerHTML={{ __html: svg }} />
       ) : (
         <>
-          <p className={cn("paperclip-mermaid-status", error && "paperclip-mermaid-status-error")}>
+          <p
+            className={cn(
+              "paperclip-mermaid-status",
+              error && "paperclip-mermaid-status-error",
+            )}
+          >
             {error ? `Unable to render Mermaid diagram: ${error}` : "Rendering Mermaid diagram..."}
           </p>
           <pre className="paperclip-mermaid-source">
@@ -130,33 +259,40 @@ function highlightMentions(children: ReactNode): ReactNode {
     );
   }
   if (Array.isArray(children)) {
-    return children.map((child, index) => <Fragment key={index}>{highlightMentions(child)}</Fragment>);
+    return children.map((child, index) => (
+      <Fragment key={index}>{highlightMentions(child)}</Fragment>
+    ));
   }
   return children;
 }
 
-export function MarkdownBody({ children, className, resolveImageSrc }: MarkdownBodyProps) {
+export function MarkdownBody({
+  children,
+  className,
+  resolveImageSrc,
+  mentionMode = "legacy",
+}: MarkdownBodyProps) {
   const { theme } = useTheme();
   const components: Components = {
     pre: ({ node: _node, children: preChildren, ...preProps }) => {
       const mermaidSource = extractMermaidSource(preChildren);
       if (mermaidSource) {
-        return <MermaidDiagramBlock source={mermaidSource} darkMode={theme === "dark"} />;
+        return (
+          <MermaidDiagramBlock
+            source={mermaidSource}
+            darkMode={theme === "dark"}
+          />
+        );
       }
       return <pre {...preProps}>{preChildren}</pre>;
     },
     a: ({ href, children: linkChildren }) => {
-      const parsed = href ? parseProjectMentionHref(href) : null;
+      const parsed = href ? parseStructuredMentionHref(href) : null;
       if (parsed) {
-        const label = linkChildren;
         return (
-          <a
-            href={`/projects/${parsed.projectId}`}
-            className="paperclip-project-mention-chip"
-            style={mentionChipStyle(parsed.color)}
-          >
-            {label}
-          </a>
+          <StructuredMentionLink parsed={parsed}>
+            {linkChildren}
+          </StructuredMentionLink>
         );
       }
       return (
@@ -166,10 +302,18 @@ export function MarkdownBody({ children, className, resolveImageSrc }: MarkdownB
       );
     },
     p: ({ node: _node, children: pChildren, ...pProps }) => {
-      return <p {...pProps}>{highlightMentions(pChildren)}</p>;
+      return (
+        <p {...pProps}>
+          {mentionMode === "legacy" ? highlightMentions(pChildren) : pChildren}
+        </p>
+      );
     },
     li: ({ node: _node, children: liChildren, ...liProps }) => {
-      return <li {...liProps}>{highlightMentions(liChildren)}</li>;
+      return (
+        <li {...liProps}>
+          {mentionMode === "legacy" ? highlightMentions(liChildren) : liChildren}
+        </li>
+      );
     },
   };
 
@@ -188,7 +332,13 @@ export function MarkdownBody({ children, className, resolveImageSrc }: MarkdownB
         className,
       )}
     >
-      <Markdown remarkPlugins={[remarkGfm]} components={components}>
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        urlTransform={(url) =>
+          parseStructuredMentionHref(url) ? url : defaultUrlTransform(url)
+        }
+        components={components}
+      >
         {children}
       </Markdown>
     </div>

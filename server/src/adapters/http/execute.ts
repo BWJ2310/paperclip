@@ -1,7 +1,17 @@
-import type { AdapterExecutionContext, AdapterExecutionResult } from "../types.js";
-import { asString, asNumber, parseObject } from "../utils.js";
+import type {
+  AdapterExecutionContext,
+  AdapterExecutionResult,
+} from "../types.js";
+import {
+  asString,
+  asNumber,
+  parseObject,
+  readPaperclipInvokeContext,
+} from "../utils.js";
 
-export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
+export async function execute(
+  ctx: AdapterExecutionContext
+): Promise<AdapterExecutionResult> {
   const { config, runId, agent, context } = ctx;
   const url = asString(config.url, "");
   if (!url) throw new Error("HTTP adapter missing url");
@@ -10,10 +20,22 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const timeoutMs = asNumber(config.timeoutMs, 0);
   const headers = parseObject(config.headers) as Record<string, string>;
   const payloadTemplate = parseObject(config.payloadTemplate);
-  const body = { ...payloadTemplate, agentId: agent.id, runId, context };
+  const paperclipContext = readPaperclipInvokeContext(context);
+  const body = {
+    ...payloadTemplate,
+    agentId: agent.id,
+    runId,
+    context: {
+      ...context,
+      ...(paperclipContext.taskKey
+        ? { taskKey: paperclipContext.taskKey }
+        : {}),
+    },
+  };
 
   const controller = new AbortController();
-  const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  const timer =
+    timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
 
   try {
     const res = await fetch(url, {

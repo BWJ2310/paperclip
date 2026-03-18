@@ -4,9 +4,14 @@ import { createRequire } from "node:module";
 import type { Duplex } from "node:stream";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agentApiKeys, companyMemberships, instanceUserRoles } from "@paperclipai/db";
+import {
+  agentApiKeys,
+  companyMemberships,
+  instanceUserRoles,
+} from "@paperclipai/db";
 import type { DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
+import { LOCAL_BOARD_USER_ID } from "../auth/board-actor.js";
 import { logger } from "../middleware/logger.js";
 import { subscribeCompanyLiveEvents } from "../services/live-events.js";
 
@@ -23,13 +28,16 @@ interface WsSocket {
 
 interface WsServer {
   clients: Set<WsSocket>;
-  on(event: "connection", listener: (socket: WsSocket, req: IncomingMessage) => void): void;
+  on(
+    event: "connection",
+    listener: (socket: WsSocket, req: IncomingMessage) => void
+  ): void;
   on(event: "close", listener: () => void): void;
   handleUpgrade(
     req: IncomingMessage,
     socket: Duplex,
     head: Buffer,
-    callback: (ws: WsSocket) => void,
+    callback: (ws: WsSocket) => void
   ): void;
   emit(event: "connection", ws: WsSocket, req: IncomingMessage): boolean;
 }
@@ -56,7 +64,9 @@ function hashToken(token: string) {
 
 function rejectUpgrade(socket: Duplex, statusLine: string, message: string) {
   const safe = message.replace(/[\r\n]+/g, " ").trim();
-  socket.write(`HTTP/1.1 ${statusLine}\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\n${safe}`);
+  socket.write(
+    `HTTP/1.1 ${statusLine}\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\n${safe}`
+  );
   socket.destroy();
 }
 
@@ -99,8 +109,10 @@ async function authorizeUpgrade(
   url: URL,
   opts: {
     deploymentMode: DeploymentMode;
-    resolveSessionFromHeaders?: (headers: Headers) => Promise<BetterAuthSessionResult | null>;
-  },
+    resolveSessionFromHeaders?: (
+      headers: Headers
+    ) => Promise<BetterAuthSessionResult | null>;
+  }
 ): Promise<UpgradeContext | null> {
   const queryToken = url.searchParams.get("token")?.trim() ?? "";
   const authToken = parseBearerToken(req.headers.authorization);
@@ -112,15 +124,20 @@ async function authorizeUpgrade(
       return {
         companyId,
         actorType: "board",
-        actorId: "board",
+        actorId: LOCAL_BOARD_USER_ID,
       };
     }
 
-    if (opts.deploymentMode !== "authenticated" || !opts.resolveSessionFromHeaders) {
+    if (
+      opts.deploymentMode !== "authenticated" ||
+      !opts.resolveSessionFromHeaders
+    ) {
       return null;
     }
 
-    const session = await opts.resolveSessionFromHeaders(headersFromIncomingMessage(req));
+    const session = await opts.resolveSessionFromHeaders(
+      headersFromIncomingMessage(req)
+    );
     const userId = session?.user?.id;
     if (!userId) return null;
 
@@ -128,7 +145,12 @@ async function authorizeUpgrade(
       db
         .select({ id: instanceUserRoles.id })
         .from(instanceUserRoles)
-        .where(and(eq(instanceUserRoles.userId, userId), eq(instanceUserRoles.role, "instance_admin")))
+        .where(
+          and(
+            eq(instanceUserRoles.userId, userId),
+            eq(instanceUserRoles.role, "instance_admin")
+          )
+        )
         .then((rows) => rows[0] ?? null),
       db
         .select({ companyId: companyMemberships.companyId })
@@ -137,12 +159,14 @@ async function authorizeUpgrade(
           and(
             eq(companyMemberships.principalType, "user"),
             eq(companyMemberships.principalId, userId),
-            eq(companyMemberships.status, "active"),
-          ),
+            eq(companyMemberships.status, "active")
+          )
         ),
     ]);
 
-    const hasCompanyMembership = memberships.some((row) => row.companyId === companyId);
+    const hasCompanyMembership = memberships.some(
+      (row) => row.companyId === companyId
+    );
     if (!roleRow && !hasCompanyMembership) return null;
 
     return {
@@ -156,7 +180,9 @@ async function authorizeUpgrade(
   const key = await db
     .select()
     .from(agentApiKeys)
-    .where(and(eq(agentApiKeys.keyHash, tokenHash), isNull(agentApiKeys.revokedAt)))
+    .where(
+      and(eq(agentApiKeys.keyHash, tokenHash), isNull(agentApiKeys.revokedAt))
+    )
     .then((rows) => rows[0] ?? null);
 
   if (!key || key.companyId !== companyId) {
@@ -180,8 +206,10 @@ export function setupLiveEventsWebSocketServer(
   db: Db,
   opts: {
     deploymentMode: DeploymentMode;
-    resolveSessionFromHeaders?: (headers: Headers) => Promise<BetterAuthSessionResult | null>;
-  },
+    resolveSessionFromHeaders?: (
+      headers: Headers
+    ) => Promise<BetterAuthSessionResult | null>;
+  }
 ) {
   const wss = new WebSocketServer({ noServer: true });
   const cleanupByClient = new Map<WsSocket, () => void>();
@@ -205,7 +233,7 @@ export function setupLiveEventsWebSocketServer(
       return;
     }
 
-    const unsubscribe = subscribeCompanyLiveEvents(context.companyId, (event) => {
+    const unsubscribe = subscribeCompanyLiveEvents(context, (event) => {
       if (socket.readyState !== WebSocket.OPEN) return;
       socket.send(JSON.stringify(event));
     });
@@ -225,7 +253,10 @@ export function setupLiveEventsWebSocketServer(
     });
 
     socket.on("error", (err: Error) => {
-      logger.warn({ err, companyId: context.companyId }, "live websocket client error");
+      logger.warn(
+        { err, companyId: context.companyId },
+        "live websocket client error"
+      );
     });
   });
 
@@ -264,7 +295,10 @@ export function setupLiveEventsWebSocketServer(
         });
       })
       .catch((err) => {
-        logger.error({ err, path: req.url }, "failed websocket upgrade authorization");
+        logger.error(
+          { err, path: req.url },
+          "failed websocket upgrade authorization"
+        );
         rejectUpgrade(socket, "500 Internal Server Error", "upgrade failed");
       });
   });

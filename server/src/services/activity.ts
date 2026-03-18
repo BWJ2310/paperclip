@@ -1,6 +1,11 @@
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { activityLog, authUsers, heartbeatRuns, issues } from "@paperclipai/db";
+import { activityLog, authUsers, conversationParticipants, heartbeatRuns, issues } from "@paperclipai/db";
+import {
+  buildIssueTaskKey,
+  deriveCanonicalTaskKey,
+  readIssueIdFromTaskKey,
+} from "@paperclipai/shared";
 
 export interface ActivityFilters {
   companyId: string;
@@ -12,10 +17,14 @@ export interface ActivityFilters {
 export function activityService(db: Db) {
   const issueIdAsText = sql<string>`${issues.id}::text`;
 
-  async function enrichActivityWithActorNames<T extends { actorType: string; actorId: string }>(
-    rows: T[],
-  ): Promise<(T & { actorName: string | null })[]> {
-    const userActorIds = [...new Set(rows.filter((r) => r.actorType === "user").map((r) => r.actorId))];
+  async function enrichActivityWithActorNames<
+    T extends { actorType: string; actorId: string }
+  >(rows: T[]): Promise<(T & { actorName: string | null })[]> {
+    const userActorIds = [
+      ...new Set(
+        rows.filter((r) => r.actorType === "user").map((r) => r.actorId)
+      ),
+    ];
     const userMap = new Map<string, string>();
     if (userActorIds.length > 0) {
       const users = await db
@@ -31,7 +40,10 @@ export function activityService(db: Db) {
   }
 
   return {
-    list: async (filters: ActivityFilters) => {
+    list: async (
+      filters: ActivityFilters,
+      viewer?: { type: "board" | "agent" | "none"; agentId?: string | null }
+    ) => {
       const conditions = [eq(activityLog.companyId, filters.companyId)];
 
       if (filters.agentId) {
@@ -51,21 +63,40 @@ export function activityService(db: Db) {
           issues,
           and(
             eq(activityLog.entityType, sql`'issue'`),
-            eq(activityLog.entityId, issueIdAsText),
-          ),
+            eq(activityLog.entityId, issueIdAsText)
+          )
         )
         .where(
           and(
             ...conditions,
             or(
               sql`${activityLog.entityType} != 'issue'`,
-              isNull(issues.hiddenAt),
-            ),
-          ),
+              isNull(issues.hiddenAt)
+            )
+          )
         )
         .orderBy(desc(activityLog.createdAt))
         .then((r) => r.map((row) => row.activityLog));
-      return enrichActivityWithActorNames(rows);
+
+      const filteredRows =
+        viewer?.type === "agent" && viewer.agentId
+          ? await db
+              .select({ conversationId: conversationParticipants.conversationId })
+              .from(conversationParticipants)
+              .where(eq(conversationParticipants.agentId, viewer.agentId))
+              .then((participantRows) => {
+                const visibleConversationIds = new Set(
+                  participantRows.map((row) => row.conversationId)
+                );
+                return rows.filter(
+                  (row) =>
+                    row.entityType !== "conversation" ||
+                    visibleConversationIds.has(row.entityId)
+                );
+              })
+          : rows;
+
+      return enrichActivityWithActorNames(filteredRows);
     },
 
     forIssue: async (issueId: string) => {
@@ -75,15 +106,16 @@ export function activityService(db: Db) {
         .where(
           and(
             eq(activityLog.entityType, "issue"),
-            eq(activityLog.entityId, issueId),
-          ),
+            eq(activityLog.entityId, issueId)
+          )
         )
         .orderBy(desc(activityLog.createdAt));
       return enrichActivityWithActorNames(rows);
     },
 
-    runsForIssue: (companyId: string, issueId: string) =>
-      db
+    runsForIssue: (companyId: string, issueId: string) => {
+      const issueTaskKey = buildIssueTaskKey(issueId);
+      return db
         .select({
           runId: heartbeatRuns.id,
           status: heartbeatRuns.status,
@@ -100,7 +132,9 @@ export function activityService(db: Db) {
           and(
             eq(heartbeatRuns.companyId, companyId),
             or(
-              sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+              issueTaskKey
+                ? sql`${heartbeatRuns.contextSnapshot} ->> 'taskKey' = ${issueTaskKey}`
+                : sql`false`,
               sql`exists (
                 select 1
                 from ${activityLog}
@@ -108,11 +142,12 @@ export function activityService(db: Db) {
                   and ${activityLog.entityType} = 'issue'
                   and ${activityLog.entityId} = ${issueId}
                   and ${activityLog.runId} = ${heartbeatRuns.id}
-              )`,
-            ),
-          ),
+              )`
+            )
+          )
         )
-        .orderBy(desc(heartbeatRuns.createdAt)),
+        .orderBy(desc(heartbeatRuns.createdAt));
+    },
 
     issuesForRun: async (runId: string) => {
       const run = await db
@@ -140,18 +175,18 @@ export function activityService(db: Db) {
             eq(activityLog.companyId, run.companyId),
             eq(activityLog.runId, runId),
             eq(activityLog.entityType, "issue"),
-            isNull(issues.hiddenAt),
-          ),
+            isNull(issues.hiddenAt)
+          )
         )
         .orderBy(issueIdAsText);
 
-      const context = run.contextSnapshot;
-      const contextIssueId =
-        context && typeof context === "object" && typeof (context as Record<string, unknown>).issueId === "string"
-          ? ((context as Record<string, unknown>).issueId as string)
-          : null;
+      const context = run.contextSnapshot as Record<string, unknown> | null;
+      const contextIssueId = readIssueIdFromTaskKey(
+        deriveCanonicalTaskKey(context)
+      );
       if (!contextIssueId) return fromActivity;
-      if (fromActivity.some((issue) => issue.issueId === contextIssueId)) return fromActivity;
+      if (fromActivity.some((issue) => issue.issueId === contextIssueId))
+        return fromActivity;
 
       const fromContext = await db
         .select({
@@ -166,8 +201,8 @@ export function activityService(db: Db) {
           and(
             eq(issues.companyId, run.companyId),
             eq(issues.id, contextIssueId),
-            isNull(issues.hiddenAt),
-          ),
+            isNull(issues.hiddenAt)
+          )
         )
         .then((rows) => rows[0] ?? null);
 

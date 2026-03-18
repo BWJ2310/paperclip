@@ -203,7 +203,12 @@ async function withAgentStartLock<T>(agentId: string, fn: () => Promise<T>) {
 }
 
 interface WakeupOptions {
-  source?: "timer" | "assignment" | "on_demand" | "automation";
+  source?:
+    | "timer"
+    | "assignment"
+    | "on_demand"
+    | "automation"
+    | "conversation_message";
   triggerDetail?: "manual" | "ping" | "callback" | "system";
   reason?: string | null;
   payload?: Record<string, unknown> | null;
@@ -3446,10 +3451,24 @@ export function heartbeatService(db: Db) {
     return wakeupIds.length;
   }
 
-  async function cancelRunInternal(runId: string, reason = "Cancelled by control plane") {
+  async function cancelRunInternal(
+    runId: string,
+    reasonOrOptions:
+      | string
+      | { error?: string | null; message?: string | null } = "Cancelled by control plane"
+  ) {
     const run = await getRun(runId);
     if (!run) throw notFound("Heartbeat run not found");
     if (run.status !== "running" && run.status !== "queued") return run;
+
+    const cancelError =
+      typeof reasonOrOptions === "string"
+        ? reasonOrOptions
+        : readNonEmptyString(reasonOrOptions.error) ?? "cancelled";
+    const cancelMessage =
+      typeof reasonOrOptions === "string"
+        ? "run cancelled"
+        : readNonEmptyString(reasonOrOptions.message) ?? "run cancelled";
 
     const running = runningProcesses.get(run.id);
     if (running) {
@@ -3464,13 +3483,13 @@ export function heartbeatService(db: Db) {
 
     const cancelled = await setRunStatus(run.id, "cancelled", {
       finishedAt: new Date(),
-      error: reason,
+      error: cancelError,
       errorCode: "cancelled",
     });
 
     await setWakeupStatus(run.wakeupRequestId, "cancelled", {
       finishedAt: new Date(),
-      error: reason,
+      error: cancelError,
     });
 
     if (cancelled) {
@@ -3478,7 +3497,7 @@ export function heartbeatService(db: Db) {
         eventType: "lifecycle",
         stream: "system",
         level: "warn",
-        message: "run cancelled",
+        message: cancelMessage,
       });
       await releaseIssueExecutionAndPromote(cancelled);
     }
@@ -3664,7 +3683,12 @@ export function heartbeatService(db: Db) {
 
     invoke: async (
       agentId: string,
-      source: "timer" | "assignment" | "on_demand" | "automation" = "on_demand",
+      source:
+        | "timer"
+        | "assignment"
+        | "on_demand"
+        | "automation"
+        | "conversation_message" = "on_demand",
       contextSnapshot: Record<string, unknown> = {},
       triggerDetail: "manual" | "ping" | "callback" | "system" = "manual",
       actor?: { actorType?: "user" | "agent" | "system"; actorId?: string | null },
@@ -3720,7 +3744,10 @@ export function heartbeatService(db: Db) {
       return { checked, enqueued, skipped };
     },
 
-    cancelRun: (runId: string) => cancelRunInternal(runId),
+    cancelRun: (
+      runId: string,
+      opts?: { error?: string | null; message?: string | null }
+    ) => cancelRunInternal(runId, opts ?? undefined),
 
     cancelActiveForAgent: (agentId: string) => cancelActiveForAgentInternal(agentId),
 

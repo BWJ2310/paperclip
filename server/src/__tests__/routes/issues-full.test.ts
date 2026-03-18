@@ -68,6 +68,10 @@ const mockDocumentService = vi.hoisted(() => ({
   deleteIssueDocument: vi.fn(),
 }));
 
+const mockConversationService = vi.hoisted(() => ({
+  listLinkedConversations: vi.fn(),
+}));
+
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
 vi.mock("../../services/index.js", () => ({
@@ -79,6 +83,7 @@ vi.mock("../../services/index.js", () => ({
   goalService: () => mockGoalService,
   issueApprovalService: () => mockIssueApprovalService,
   documentService: () => mockDocumentService,
+  conversationService: () => mockConversationService,
   logActivity: mockLogActivity,
 }));
 
@@ -133,13 +138,17 @@ describe("issueRoutes", () => {
   describe("GET /companies/:companyId/issues", () => {
     it("lists issues for company", async () => {
       mockIssueService.list.mockResolvedValue([{ id: "i1", title: "Bug" }]);
-      const res = await request(createApp()).get("/api/companies/company-1/issues");
+      const res = await request(createApp()).get(
+        "/api/companies/company-1/issues"
+      );
       expect(res.status).toBe(200);
       expect(res.body).toHaveLength(1);
     });
 
     it("returns 403 for wrong company", async () => {
-      const res = await request(createApp()).get("/api/companies/other-company/issues");
+      const res = await request(createApp()).get(
+        "/api/companies/other-company/issues"
+      );
       expect(res.status).toBe(403);
     });
   });
@@ -154,7 +163,11 @@ describe("issueRoutes", () => {
   describe("GET /issues/:id", () => {
     it("returns an issue", async () => {
       mockIssueService.getById.mockResolvedValue({
-        id: "i1", companyId: "company-1", title: "Bug", projectId: null, goalId: null,
+        id: "i1",
+        companyId: "company-1",
+        title: "Bug",
+        projectId: null,
+        goalId: null,
       });
       const res = await request(createApp()).get("/api/issues/i1");
       expect(res.status).toBe(200);
@@ -170,7 +183,11 @@ describe("issueRoutes", () => {
 
   describe("POST /companies/:companyId/issues (create)", () => {
     it("creates an issue", async () => {
-      mockIssueService.create.mockResolvedValue({ id: "i2", companyId: "company-1", title: "New" });
+      mockIssueService.create.mockResolvedValue({
+        id: "i2",
+        companyId: "company-1",
+        title: "New",
+      });
       const res = await request(createApp())
         .post("/api/companies/company-1/issues")
         .send({ title: "New", type: "task" });
@@ -187,34 +204,42 @@ describe("issueRoutes", () => {
         status: "todo",
         assigneeAgentId: null,
       });
-      mockIssueService.processMentionNotifications.mockImplementation(async (args: { wakeups: Map<string, unknown> }) => {
-        const { wakeups } = args;
-        wakeups.set("agent-mentioned", {
-          source: "automation",
-          triggerDetail: "system",
-          reason: "issue_comment_mentioned",
-          payload: { issueId: "i2" },
-          requestedByActorType: "user",
-          requestedByActorId: "user-1",
-          contextSnapshot: {
-            issueId: "i2",
-            taskId: "i2",
-            wakeReason: "issue_comment_mentioned",
-            source: "issue.create.mention",
-          },
-        });
-      });
+      mockIssueService.processMentionNotifications.mockImplementation(
+        async (args: { wakeups: Map<string, unknown> }) => {
+          const { wakeups } = args;
+          wakeups.set("agent-mentioned", {
+            source: "automation",
+            triggerDetail: "system",
+            reason: "issue_comment_mentioned",
+            payload: { taskKey: "issue:i2" },
+            requestedByActorType: "user",
+            requestedByActorId: "user-1",
+            contextSnapshot: {
+              taskKey: "issue:i2",
+              wakeReason: "issue_comment_mentioned",
+              source: "issue.create.mention",
+            },
+          });
+        }
+      );
 
       const res = await request(createApp())
         .post("/api/companies/company-1/issues")
-        .send({ title: "New", description: "Please sync with @Genie DevRel.", type: "task" });
+        .send({
+          title: "New",
+          description: "Please sync with @Genie DevRel.",
+          type: "task",
+        });
 
       await new Promise((resolve) => setImmediate(resolve));
 
       expect(res.status).toBe(201);
-      expect(mockIssueService.processMentionNotifications).toHaveBeenCalledTimes(1);
+      expect(
+        mockIssueService.processMentionNotifications
+      ).toHaveBeenCalledTimes(1);
 
-      const call = mockIssueService.processMentionNotifications.mock.calls[0]?.[0];
+      const call =
+        mockIssueService.processMentionNotifications.mock.calls[0]?.[0];
       expect(call).toMatchObject({
         companyId: "company-1",
         issueId: "i2",
@@ -236,8 +261,8 @@ describe("issueRoutes", () => {
         "agent-mentioned",
         expect.objectContaining({
           reason: "issue_comment_mentioned",
-          payload: { issueId: "i2" },
-        }),
+          payload: { taskKey: "issue:i2" },
+        })
       );
     });
   });
@@ -245,10 +270,17 @@ describe("issueRoutes", () => {
   describe("PATCH /issues/:id (update)", () => {
     it("updates an issue", async () => {
       mockIssueService.getById.mockResolvedValue({
-        id: "i1", companyId: "company-1", title: "Old", status: "open",
+        id: "i1",
+        companyId: "company-1",
+        title: "Old",
+        status: "open",
         assigneeAgentId: null,
       });
-      mockIssueService.update.mockResolvedValue({ id: "i1", companyId: "company-1", title: "Updated" });
+      mockIssueService.update.mockResolvedValue({
+        id: "i1",
+        companyId: "company-1",
+        title: "Updated",
+      });
       const res = await request(createApp())
         .patch("/api/issues/i1")
         .send({ title: "Updated" });
@@ -269,13 +301,27 @@ describe("issueRoutes", () => {
 
     it("checks out an issue", async () => {
       mockIssueService.getById.mockResolvedValue({
-        id: "i1", companyId: "company-1", status: "open", assigneeAgentId: AGENT_UUID,
+        id: "i1",
+        companyId: "company-1",
+        status: "open",
+        assigneeAgentId: AGENT_UUID,
       });
-      mockIssueService.checkout.mockResolvedValue({ id: "i1", status: "in_progress" });
-      mockAgentService.getById.mockResolvedValue({ id: AGENT_UUID, companyId: "company-1" });
-      const res = await request(createApp({
-        type: "agent", agentId: AGENT_UUID, companyId: "company-1", runId: "run-1",
-      }))
+      mockIssueService.checkout.mockResolvedValue({
+        id: "i1",
+        status: "in_progress",
+      });
+      mockAgentService.getById.mockResolvedValue({
+        id: AGENT_UUID,
+        companyId: "company-1",
+      });
+      const res = await request(
+        createApp({
+          type: "agent",
+          agentId: AGENT_UUID,
+          companyId: "company-1",
+          runId: "run-1",
+        })
+      )
         .post("/api/issues/i1/checkout")
         .send({ agentId: AGENT_UUID, expectedStatuses: ["todo"] });
       expect(res.status).toBe(200);
@@ -287,13 +333,23 @@ describe("issueRoutes", () => {
 
     it("releases an issue", async () => {
       mockIssueService.getById.mockResolvedValue({
-        id: "i1", companyId: "company-1", status: "in_progress", assigneeAgentId: AGENT_UUID,
+        id: "i1",
+        companyId: "company-1",
+        status: "in_progress",
+        assigneeAgentId: AGENT_UUID,
       });
-      mockIssueService.assertCheckoutOwner.mockResolvedValue({ adoptedFromRunId: null });
+      mockIssueService.assertCheckoutOwner.mockResolvedValue({
+        adoptedFromRunId: null,
+      });
       mockIssueService.release.mockResolvedValue({ id: "i1", status: "open" });
-      const res = await request(createApp({
-        type: "agent", agentId: AGENT_UUID, companyId: "company-1", runId: "run-1",
-      }))
+      const res = await request(
+        createApp({
+          type: "agent",
+          agentId: AGENT_UUID,
+          companyId: "company-1",
+          runId: "run-1",
+        })
+      )
         .post("/api/issues/i1/release")
         .send({});
       expect(res.status).toBe(200);
@@ -307,7 +363,10 @@ describe("issueRoutes", () => {
 
     it("allows assignment within scope subtree", async () => {
       mockIssueService.getById.mockResolvedValue({
-        id: "i1", companyId: "company-1", title: "Task", status: "open",
+        id: "i1",
+        companyId: "company-1",
+        title: "Task",
+        status: "open",
         assigneeAgentId: null,
       });
       mockAccessService.canUser.mockResolvedValue(true);
@@ -317,7 +376,9 @@ describe("issueRoutes", () => {
       });
       mockAgentService.getChainOfCommand.mockResolvedValue([{ id: CEO_AGENT }]);
       mockIssueService.update.mockResolvedValue({
-        id: "i1", companyId: "company-1", assigneeAgentId: TARGET_AGENT,
+        id: "i1",
+        companyId: "company-1",
+        assigneeAgentId: TARGET_AGENT,
       });
       const res = await request(createApp())
         .patch("/api/issues/i1")
@@ -327,7 +388,10 @@ describe("issueRoutes", () => {
 
     it("returns 403 when assigning outside scope subtree", async () => {
       mockIssueService.getById.mockResolvedValue({
-        id: "i1", companyId: "company-1", title: "Task", status: "open",
+        id: "i1",
+        companyId: "company-1",
+        title: "Task",
+        status: "open",
         assigneeAgentId: null,
       });
       mockAccessService.canUser.mockResolvedValue(true);
@@ -335,7 +399,9 @@ describe("issueRoutes", () => {
         granted: true,
         scope: { subtree: CEO_AGENT },
       });
-      mockAgentService.getChainOfCommand.mockResolvedValue([{ id: OTHER_AGENT }]);
+      mockAgentService.getChainOfCommand.mockResolvedValue([
+        { id: OTHER_AGENT },
+      ]);
       const res = await request(createApp())
         .patch("/api/issues/i1")
         .send({ assigneeAgentId: TARGET_AGENT });
@@ -345,16 +411,28 @@ describe("issueRoutes", () => {
 
   describe("GET /companies/:companyId/labels", () => {
     it("lists labels", async () => {
-      mockIssueService.listLabels.mockResolvedValue([{ id: "l1", name: "bug" }]);
-      const res = await request(createApp()).get("/api/companies/company-1/labels");
+      mockIssueService.listLabels.mockResolvedValue([
+        { id: "l1", name: "bug" },
+      ]);
+      const res = await request(createApp()).get(
+        "/api/companies/company-1/labels"
+      );
       expect(res.status).toBe(200);
     });
   });
 
   describe("DELETE /labels/:labelId", () => {
     it("deletes a label", async () => {
-      mockIssueService.getLabelById.mockResolvedValue({ id: "l1", companyId: "company-1", name: "bug" });
-      mockIssueService.deleteLabel.mockResolvedValue({ id: "l1", companyId: "company-1", name: "bug" });
+      mockIssueService.getLabelById.mockResolvedValue({
+        id: "l1",
+        companyId: "company-1",
+        name: "bug",
+      });
+      mockIssueService.deleteLabel.mockResolvedValue({
+        id: "l1",
+        companyId: "company-1",
+        name: "bug",
+      });
       const res = await request(createApp()).delete("/api/labels/l1");
       expect(res.status).toBe(200);
     });

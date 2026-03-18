@@ -2,9 +2,10 @@ import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { projects, projectGoals, goals, projectWorkspaces, workspaceRuntimeServices } from "@paperclipai/db";
 import {
-  PROJECT_COLORS,
   deriveProjectUrlKey,
+  PROJECT_COLORS,
   isUuidLike,
+  type ListProjectsQuery,
   normalizeProjectUrlKey,
   type ProjectCodebase,
   type ProjectExecutionWorkspacePolicy,
@@ -55,6 +56,56 @@ interface ProjectShortnameRow {
 
 interface ResolveProjectNameOptions {
   excludeProjectId?: string | null;
+}
+
+const PROJECT_SEARCH_LIMIT_DEFAULT = 20;
+
+function compareAlphabetically(a: string, b: string) {
+  return a.localeCompare(b, undefined, { sensitivity: "base" });
+}
+
+function normalizeProjectListQuery(input?: ListProjectsQuery | null) {
+  const q =
+    typeof input?.q === "string" && input.q.trim().length > 0
+      ? input.q.trim()
+      : null;
+  const limit = Math.max(
+    1,
+    Math.min(
+      PROJECT_SEARCH_LIMIT_DEFAULT,
+      Math.floor(input?.limit ?? PROJECT_SEARCH_LIMIT_DEFAULT)
+    )
+  );
+  return { q, limit };
+}
+
+function matchesProjectQuery(row: ProjectRow, normalizedQuery: string) {
+  const urlKey = deriveProjectUrlKey(row.name, row.id).toLowerCase();
+  return (
+    row.name.toLowerCase().includes(normalizedQuery) ||
+    urlKey.includes(normalizedQuery)
+  );
+}
+
+function isProjectPrefixMatch(row: ProjectRow, normalizedQuery: string) {
+  const urlKey = deriveProjectUrlKey(row.name, row.id).toLowerCase();
+  return (
+    row.name.toLowerCase().startsWith(normalizedQuery) ||
+    urlKey.startsWith(normalizedQuery)
+  );
+}
+
+function sortProjectsForSearch(rows: ProjectRow[], normalizedQuery: string) {
+  return [...rows].sort((left, right) => {
+    const leftPrefix = isProjectPrefixMatch(left, normalizedQuery);
+    const rightPrefix = isProjectPrefixMatch(right, normalizedQuery);
+    if (leftPrefix !== rightPrefix) return leftPrefix ? -1 : 1;
+
+    const nameOrder = compareAlphabetically(left.name, right.name);
+    if (nameOrder !== 0) return nameOrder;
+
+    return left.id.localeCompare(right.id);
+  });
 }
 
 /** Batch-load goal refs for a set of projects. */
@@ -392,9 +443,24 @@ async function ensureSinglePrimaryWorkspace(
 
 export function projectService(db: Db) {
   return {
-    list: async (companyId: string): Promise<ProjectWithGoals[]> => {
-      const rows = await db.select().from(projects).where(eq(projects.companyId, companyId));
-      const withGoals = await attachGoals(db, rows);
+    list: async (
+      companyId: string,
+      input?: ListProjectsQuery | null
+    ): Promise<ProjectWithGoals[]> => {
+      const { q, limit } = normalizeProjectListQuery(input);
+      const rows = await db
+        .select()
+        .from(projects)
+        .where(eq(projects.companyId, companyId));
+
+      const filteredRows = q
+        ? sortProjectsForSearch(
+            rows.filter((row) => matchesProjectQuery(row, q.toLowerCase())),
+            q.toLowerCase()
+          ).slice(0, limit)
+        : rows;
+
+      const withGoals = await attachGoals(db, filteredRows);
       return attachWorkspaces(db, withGoals);
     },
 

@@ -7,6 +7,7 @@ import type {
   IssueDocument,
   IssueLabel,
   IssueWorkProduct,
+  LinkedConversationSummary,
   UpsertIssueDocument,
 } from "@paperclipai/shared";
 import { api } from "./client";
@@ -93,6 +94,8 @@ export const issuesApi = {
   },
   deleteAttachment: (id: string) => api.delete<{ ok: true }>(`/attachments/${id}`),
   listApprovals: (id: string) => api.get<Approval[]>(`/issues/${id}/approvals`),
+  listLinkedConversations: (id: string) =>
+    api.get<LinkedConversationSummary[]>(`/issues/${id}/linked-conversations`),
   linkApproval: (id: string, approvalId: string) =>
     api.post<Approval[]>(`/issues/${id}/approvals`, { approvalId }),
   unlinkApproval: (id: string, approvalId: string) =>

@@ -84,7 +84,9 @@ export const updateAgentInstructionsPathSchema = z.object({
   adapterConfigKey: z.string().trim().min(1).optional(),
 });
 
-export type UpdateAgentInstructionsPath = z.infer<typeof updateAgentInstructionsPathSchema>;
+export type UpdateAgentInstructionsPath = z.infer<
+  typeof updateAgentInstructionsPathSchema
+>;
 
 export const createAgentKeySchema = z.object({
   name: z.string().min(1).default("default"),
@@ -93,14 +95,23 @@ export const createAgentKeySchema = z.object({
 export type CreateAgentKey = z.infer<typeof createAgentKeySchema>;
 
 export const wakeAgentSchema = z.object({
-  source: z.enum(["timer", "assignment", "on_demand", "automation"]).optional().default("on_demand"),
+  source: z
+    .enum([
+      "timer",
+      "assignment",
+      "on_demand",
+      "automation",
+      "conversation_message",
+    ])
+    .optional()
+    .default("on_demand"),
   triggerDetail: z.enum(["manual", "ping", "callback", "system"]).optional(),
   reason: z.string().optional().nullable(),
   payload: z.record(z.unknown()).optional().nullable(),
   idempotencyKey: z.string().optional().nullable(),
   forceFreshSession: z.preprocess(
     (value) => (value === null ? undefined : value),
-    z.boolean().optional().default(false),
+    z.boolean().optional().default(false)
   ),
 });
 
@@ -116,11 +127,15 @@ export const testAdapterEnvironmentSchema = z.object({
   adapterConfig: adapterConfigSchema.optional().default({}),
 });
 
-export type TestAdapterEnvironment = z.infer<typeof testAdapterEnvironmentSchema>;
+export type TestAdapterEnvironment = z.infer<
+  typeof testAdapterEnvironmentSchema
+>;
 
 export const updateAgentPermissionsSchema = z.object({
   canCreateAgents: z.boolean(),
   canAssignTasks: z.boolean(),
 });
 
-export type UpdateAgentPermissions = z.infer<typeof updateAgentPermissionsSchema>;
+export type UpdateAgentPermissions = z.infer<
+  typeof updateAgentPermissionsSchema
+>;

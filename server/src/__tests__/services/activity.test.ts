@@ -2,7 +2,13 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import { getTestDb, cleanDb, type TestDb } from "../helpers/test-db.js";
 import { activityService } from "../../services/activity.js";
 import { logActivity } from "../../services/activity-log.js";
-import { agents, companies, activityLog } from "@paperclipai/db";
+import {
+  activityLog,
+  agents,
+  companies,
+  heartbeatRuns,
+  issues,
+} from "@paperclipai/db";
 import { randomUUID } from "node:crypto";
 
 describe("activityService & logActivity", () => {
@@ -17,7 +23,10 @@ describe("activityService & logActivity", () => {
     await cleanDb();
     const [co] = await testDb.db
       .insert(companies)
-      .values({ name: "Activity Co", issuePrefix: `X${randomUUID().slice(0, 4).toUpperCase()}` })
+      .values({
+        name: "Activity Co",
+        issuePrefix: `X${randomUUID().slice(0, 4).toUpperCase()}`,
+      })
       .returning();
     companyId = co.id;
   });
@@ -118,7 +127,15 @@ describe("activityService & logActivity", () => {
       const svc = activityService(testDb.db);
       const [ag] = await testDb.db
         .insert(agents)
-        .values({ companyId, name: "Logger", role: "general", adapterType: "process", budgetMonthlyCents: 0, spentMonthlyCents: 0, status: "idle" })
+        .values({
+          companyId,
+          name: "Logger",
+          role: "general",
+          adapterType: "process",
+          budgetMonthlyCents: 0,
+          spentMonthlyCents: 0,
+          status: "idle",
+        })
         .returning();
       const agentId = ag.id;
       await logActivity(testDb.db, {
@@ -213,6 +230,39 @@ describe("activityService & logActivity", () => {
       const result = await svc.runsForIssue(companyId, randomUUID());
       expect(result.length).toBe(0);
     });
+
+    it("matches canonical issue task keys", async () => {
+      const svc = activityService(testDb.db);
+      const issueId = randomUUID();
+      const agentId = randomUUID();
+      await testDb.db.insert(agents).values({
+        id: agentId,
+        companyId,
+        name: "Runner",
+        role: "general",
+        adapterType: "process",
+        budgetMonthlyCents: 0,
+        spentMonthlyCents: 0,
+        status: "idle",
+      });
+      await testDb.db.insert(issues).values({
+        id: issueId,
+        companyId,
+        title: "Canonical issue",
+        status: "todo",
+        priority: "medium",
+      });
+      await testDb.db.insert(heartbeatRuns).values({
+        companyId,
+        agentId,
+        invocationSource: "assignment",
+        status: "running",
+        contextSnapshot: { taskKey: `issue:${issueId}` },
+      });
+
+      const result = await svc.runsForIssue(companyId, issueId);
+      expect(result).toHaveLength(1);
+    });
   });
 
   // ── issuesForRun ────────────────────────────────────────────────────
@@ -222,6 +272,42 @@ describe("activityService & logActivity", () => {
       const svc = activityService(testDb.db);
       const result = await svc.issuesForRun(randomUUID());
       expect(result).toEqual([]);
+    });
+
+    it("resolves issues from canonical issue task keys", async () => {
+      const svc = activityService(testDb.db);
+      const issueId = randomUUID();
+      const agentId = randomUUID();
+      const runId = randomUUID();
+      await testDb.db.insert(agents).values({
+        id: agentId,
+        companyId,
+        name: "Runner",
+        role: "general",
+        adapterType: "process",
+        budgetMonthlyCents: 0,
+        spentMonthlyCents: 0,
+        status: "idle",
+      });
+      await testDb.db.insert(issues).values({
+        id: issueId,
+        companyId,
+        title: "Canonical issue",
+        status: "todo",
+        priority: "medium",
+      });
+      await testDb.db.insert(heartbeatRuns).values({
+        id: runId,
+        companyId,
+        agentId,
+        invocationSource: "assignment",
+        status: "running",
+        contextSnapshot: { taskKey: `issue:${issueId}` },
+      });
+
+      const result = await svc.issuesForRun(runId);
+      expect(result).toHaveLength(1);
+      expect(result[0]?.issueId).toBe(issueId);
     });
   });
 

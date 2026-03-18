@@ -27,15 +27,22 @@ import {
   thematicBreakPlugin,
   type RealmPlugin,
 } from "@mdxeditor/editor";
-import { buildProjectMentionHref, parseProjectMentionHref } from "@paperclipai/shared";
+import {
+  buildStructuredMentionHref,
+  parseStructuredMentionHref,
+  type StructuredMentionKind,
+} from "@paperclipai/shared";
 import { cn } from "../lib/utils";
+import { resolveStructuredMentionSession } from "../lib/structured-mention-picker";
 
 /* ---- Mention types ---- */
+
+type MentionOptionKind = StructuredMentionKind | "user";
 
 export interface MentionOption {
   id: string;
   name: string;
-  kind?: "agent" | "project" | "user";
+  kind?: MentionOptionKind;
   projectId?: string;
   projectColor?: string | null;
 }
@@ -53,6 +60,11 @@ interface MarkdownEditorProps {
   bordered?: boolean;
   /** List of mentionable entities. Enables @-mention autocomplete. */
   mentions?: MentionOption[];
+  loadMentions?: (
+    query: string,
+    kindFilter: MentionFilterKind
+  ) => Promise<MentionOption[]>;
+  mentionMode?: "legacy" | "structured";
   /** Called on Cmd/Ctrl+Enter */
   onSubmit?: () => void;
 }
@@ -104,6 +116,36 @@ const FALLBACK_CODE_BLOCK_DESCRIPTOR: CodeBlockEditorDescriptor = {
   Editor: CodeMirrorEditor,
 };
 
+const STRUCTURED_MENTION_KIND_LABELS: Record<StructuredMentionKind, string> = {
+  agent: "Agent",
+  issue: "Issue",
+  goal: "Goal",
+  project: "Project",
+};
+
+type MentionFilterKind = MentionOptionKind | "all";
+
+function filterMentionOptions(params: {
+  mentions: MentionOption[];
+  query: string;
+  mentionMode: "legacy" | "structured";
+  kindFilter: MentionFilterKind;
+}) {
+  const normalizedQuery = params.query.toLowerCase();
+  return params.mentions
+    .filter((option) => {
+      if (
+        params.mentionMode === "structured" &&
+        params.kindFilter !== "all" &&
+        option.kind !== params.kindFilter
+      ) {
+        return false;
+      }
+      return option.name.toLowerCase().includes(normalizedQuery);
+    })
+    .slice(0, 8);
+}
+
 function detectMention(container: HTMLElement): MentionState | null {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return null;
@@ -150,17 +192,49 @@ function detectMention(container: HTMLElement): MentionState | null {
   };
 }
 
-function mentionMarkdown(option: MentionOption): string {
-  if (option.kind === "project" && option.projectId) {
-    return `[@${option.name}](${buildProjectMentionHref(option.projectId, option.projectColor ?? null)}) `;
+function mentionMarkdown(
+  option: MentionOption,
+  mentionMode: "legacy" | "structured"
+): string {
+  const targetId = option.projectId ?? option.id;
+  if (
+    mentionMode === "structured" &&
+    option.kind &&
+    option.kind !== "user" &&
+    targetId
+  ) {
+    return `[@${option.name}](${buildStructuredMentionHref(option.kind, targetId, {
+      color: option.kind === "project" ? option.projectColor ?? null : null,
+    })}) `;
+  }
+  if (option.kind === "project" && targetId) {
+    return `[@${option.name}](${buildStructuredMentionHref("project", targetId, {
+      color: option.projectColor ?? null,
+    })}) `;
   }
   return `@${option.name} `;
 }
 
 /** Replace `@<query>` in the markdown string with the selected mention token. */
-function applyMention(markdown: string, query: string, option: MentionOption): string {
+function applyMention(
+  markdown: string,
+  query: string,
+  option: MentionOption,
+  mentionMode: "legacy" | "structured"
+): string {
   const search = `@${query}`;
-  const replacement = mentionMarkdown(option);
+  const replacement = mentionMarkdown(option, mentionMode);
+  const idx = markdown.lastIndexOf(search);
+  if (idx === -1) return markdown;
+  return markdown.slice(0, idx) + replacement + markdown.slice(idx + search.length);
+}
+
+function replaceMentionQueryText(
+  markdown: string,
+  query: string,
+  replacement: string
+): string {
+  const search = `@${query}`;
   const idx = markdown.lastIndexOf(search);
   if (idx === -1) return markdown;
   return markdown.slice(0, idx) + replacement + markdown.slice(idx + search.length);
@@ -203,6 +277,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
   imageUploadHandler,
   bordered = true,
   mentions,
+  loadMentions,
+  mentionMode = "legacy",
   onSubmit,
 }: MarkdownEditorProps, forwardedRef) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -220,22 +296,77 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
   const [mentionState, setMentionState] = useState<MentionState | null>(null);
   const mentionStateRef = useRef<MentionState | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
-  const mentionActive = mentionState !== null && mentions && mentions.length > 0;
+  const [mentionKindFilter, setMentionKindFilter] =
+    useState<MentionFilterKind>("all");
+  const [loadedMentions, setLoadedMentions] = useState<MentionOption[]>([]);
+  const mentionActive =
+    mentionState !== null &&
+    (Boolean(loadMentions) || Boolean((mentions ?? []).length > 0));
   const projectColorById = useMemo(() => {
     const map = new Map<string, string | null>();
     for (const mention of mentions ?? []) {
-      if (mention.kind === "project" && mention.projectId) {
-        map.set(mention.projectId, mention.projectColor ?? null);
+      if (mention.kind === "project") {
+        map.set(mention.projectId ?? mention.id, mention.projectColor ?? null);
       }
     }
     return map;
   }, [mentions]);
+  const structuredMentionSession = useMemo(() => {
+    if (mentionMode !== "structured" || !mentionState) return null;
+    return resolveStructuredMentionSession(mentionState.query);
+  }, [mentionMode, mentionState]);
 
   const filteredMentions = useMemo(() => {
-    if (!mentionState || !mentions) return [];
-    const q = mentionState.query.toLowerCase();
-    return mentions.filter((m) => m.name.toLowerCase().includes(q)).slice(0, 8);
-  }, [mentionState?.query, mentions]);
+    if (!mentionState) return [];
+    if (mentionMode === "structured") {
+      if (!structuredMentionSession || structuredMentionSession.stage !== "entity") {
+        return [];
+      }
+      if (loadMentions) return loadedMentions.slice(0, 8);
+      if (!mentions) return [];
+      return filterMentionOptions({
+        mentions,
+        query: structuredMentionSession.entityQuery,
+        mentionMode,
+        kindFilter: structuredMentionSession.kind,
+      });
+    }
+    if (loadMentions) return loadedMentions.slice(0, 8);
+    if (!mentions) return [];
+    return filterMentionOptions({
+      mentions,
+      query: mentionState.query,
+      mentionMode,
+      kindFilter: mentionKindFilter,
+    });
+  }, [
+    loadedMentions,
+    loadMentions,
+    mentionKindFilter,
+    mentionMode,
+    mentionState,
+    mentions,
+    structuredMentionSession,
+  ]);
+  const structuredKindOptions =
+    structuredMentionSession?.stage === "kind"
+      ? structuredMentionSession.kindOptions
+      : [];
+  const showStructuredKindPicker =
+    mentionMode === "structured" &&
+    mentionState !== null &&
+    structuredMentionSession?.stage === "kind";
+
+  useEffect(() => {
+    setMentionIndex(0);
+  }, [
+    mentionState?.query,
+    showStructuredKindPicker,
+    structuredMentionSession?.stage,
+    structuredMentionSession?.stage === "entity"
+      ? structuredMentionSession.kind
+      : null,
+  ]);
 
   useImperativeHandle(forwardedRef, () => ({
     focus: () => {
@@ -309,16 +440,17 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
     }
   }, [value]);
 
-  const decorateProjectMentions = useCallback(() => {
+  const decorateMentionLinks = useCallback(() => {
     const editable = containerRef.current?.querySelector('[contenteditable="true"]');
     if (!editable) return;
     const links = editable.querySelectorAll("a");
     for (const node of links) {
       const link = node as HTMLAnchorElement;
-      const parsed = parseProjectMentionHref(link.getAttribute("href") ?? "");
+      const parsed = parseStructuredMentionHref(link.getAttribute("href") ?? "");
       if (!parsed) {
-        if (link.dataset.projectMention === "true") {
-          link.dataset.projectMention = "false";
+        if (link.dataset.paperclipMention === "true") {
+          link.dataset.paperclipMention = "false";
+          link.classList.remove("paperclip-mention-chip");
           link.classList.remove("paperclip-project-mention-chip");
           link.removeAttribute("contenteditable");
           link.style.removeProperty("border-color");
@@ -328,22 +460,37 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
         continue;
       }
 
-      const color = parsed.color ?? projectColorById.get(parsed.projectId) ?? null;
-      link.dataset.projectMention = "true";
-      link.classList.add("paperclip-project-mention-chip");
+      const color =
+        parsed.kind === "project"
+          ? parsed.color ?? projectColorById.get(parsed.targetId) ?? null
+          : null;
+      link.dataset.paperclipMention = "true";
+      link.classList.add("paperclip-mention-chip");
+      if (parsed.kind === "project") {
+        link.classList.add("paperclip-project-mention-chip");
+      } else {
+        link.classList.remove("paperclip-project-mention-chip");
+      }
       link.setAttribute("contenteditable", "false");
       const style = mentionChipStyle(color);
       if (style) {
         link.style.borderColor = style.borderColor ?? "";
         link.style.backgroundColor = style.backgroundColor ?? "";
         link.style.color = style.color ?? "";
+      } else {
+        link.style.removeProperty("border-color");
+        link.style.removeProperty("background-color");
+        link.style.removeProperty("color");
       }
     }
   }, [projectColorById]);
 
   // Mention detection: listen for selection changes and input events
   const checkMention = useCallback(() => {
-    if (!mentions || mentions.length === 0 || !containerRef.current) {
+    if (
+      (!loadMentions && (!mentions || mentions.length === 0)) ||
+      !containerRef.current
+    ) {
       mentionStateRef.current = null;
       setMentionState(null);
       return;
@@ -352,14 +499,16 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
     mentionStateRef.current = result;
     if (result) {
       setMentionState(result);
-      setMentionIndex(0);
+      if (mentionMode !== "structured") {
+        setMentionKindFilter("all");
+      }
     } else {
       setMentionState(null);
     }
-  }, [mentions]);
+  }, [loadMentions, mentionMode, mentions]);
 
   useEffect(() => {
-    if (!mentions || mentions.length === 0) return;
+    if (!loadMentions && (!mentions || mentions.length === 0)) return;
 
     const el = containerRef.current;
     // Listen for input events on the container so mention detection
@@ -372,14 +521,51 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
       document.removeEventListener("selectionchange", checkMention);
       el?.removeEventListener("input", onInput, true);
     };
-  }, [checkMention, mentions]);
+  }, [checkMention, loadMentions, mentions]);
+
+  useEffect(() => {
+    if (!loadMentions || !mentionState) {
+      setLoadedMentions([]);
+      return;
+    }
+    let mentionQuery = mentionState.query;
+    let kindFilter: MentionFilterKind = mentionKindFilter;
+    if (mentionMode === "structured") {
+      const entitySession = structuredMentionSession;
+      if (!entitySession || entitySession.stage !== "entity") {
+        setLoadedMentions([]);
+        return;
+      }
+      mentionQuery = entitySession.entityQuery;
+      kindFilter = entitySession.kind;
+    }
+    let cancelled = false;
+    Promise.resolve(loadMentions(mentionQuery, kindFilter))
+      .then((next) => {
+        if (cancelled) return;
+        setLoadedMentions(next);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setLoadedMentions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    loadMentions,
+    mentionKindFilter,
+    mentionMode,
+    mentionState,
+    structuredMentionSession,
+  ]);
 
   useEffect(() => {
     const editable = containerRef.current?.querySelector('[contenteditable="true"]');
     if (!editable) return;
-    decorateProjectMentions();
+    decorateMentionLinks();
     const observer = new MutationObserver(() => {
-      decorateProjectMentions();
+      decorateMentionLinks();
     });
     observer.observe(editable, {
       subtree: true,
@@ -387,12 +573,27 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
       characterData: true,
     });
     return () => observer.disconnect();
-  }, [decorateProjectMentions, value]);
+  }, [decorateMentionLinks, value]);
 
   const replaceMentionFromMarkdown = useCallback(
     (option: MentionOption, state: MentionState) => {
       const current = latestValueRef.current;
-      const next = applyMention(current, state.query, option);
+      const next = applyMention(current, state.query, option, mentionMode);
+      if (next !== current) {
+        latestValueRef.current = next;
+        ref.current?.setMarkdown(next);
+        onChange(next);
+        return true;
+      }
+      return false;
+    },
+    [mentionMode, onChange],
+  );
+
+  const replaceMentionKindFromMarkdown = useCallback(
+    (kind: StructuredMentionKind, state: MentionState) => {
+      const current = latestValueRef.current;
+      const next = replaceMentionQueryText(current, state.query, `@${kind}`);
       if (next !== current) {
         latestValueRef.current = next;
         ref.current?.setMarkdown(next);
@@ -404,6 +605,28 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
     [onChange],
   );
 
+  const selectMentionKind = useCallback(
+    (kind: StructuredMentionKind, stateOverride?: MentionState | null) => {
+      const state =
+        stateOverride !== undefined ? stateOverride : mentionStateRef.current;
+      if (!state) return;
+
+      mentionStateRef.current = null;
+      setMentionState(null);
+
+      requestAnimationFrame(() => {
+        replaceMentionKindFromMarkdown(kind, state);
+        requestAnimationFrame(() => {
+          ref.current?.focus(undefined, { defaultSelection: "rootEnd" });
+          requestAnimationFrame(() => {
+            checkMention();
+          });
+        });
+      });
+    },
+    [checkMention, replaceMentionKindFromMarkdown],
+  );
+
   const selectMention = useCallback(
     (option: MentionOption, stateOverride?: MentionState | null) => {
       // Prefer an explicit stateOverride (passed at render time before the ref
@@ -411,21 +634,23 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
       const state = stateOverride !== undefined ? stateOverride : mentionStateRef.current;
       if (!state) return;
 
-      if (option.kind === "project" && option.projectId) {
-        // Close dropdown immediately, defer mutation (same as non-project path).
+      if (
+        mentionMode === "structured" ||
+        (option.kind === "project" && (option.projectId ?? option.id))
+      ) {
         mentionStateRef.current = null;
         setMentionState(null);
         requestAnimationFrame(() => {
           replaceMentionFromMarkdown(option, state);
           requestAnimationFrame(() => {
             ref.current?.focus(undefined, { defaultSelection: "rootEnd" });
-            decorateProjectMentions();
+            decorateMentionLinks();
           });
         });
         return;
       }
 
-      const replacement = mentionMarkdown(option);
+      const replacement = mentionMarkdown(option, mentionMode);
 
       // Close the mention dropdown immediately (before DOM mutation).
       mentionStateRef.current = null;
@@ -452,7 +677,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
               replaceMentionFromMarkdown(option, state);
               requestAnimationFrame(() => {
                 ref.current?.focus(undefined, { defaultSelection: "rootEnd" });
-                decorateProjectMentions();
+                decorateMentionLinks();
               });
               return;
             }
@@ -460,19 +685,19 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
               latestValueRef.current = next;
               onChange(next);
             }
-            decorateProjectMentions();
+            decorateMentionLinks();
           });
         } else {
           // Fallback: full markdown replacement when DOM node is stale
           replaceMentionFromMarkdown(option, state);
           requestAnimationFrame(() => {
             ref.current?.focus(undefined, { defaultSelection: "rootEnd" });
-            decorateProjectMentions();
+            decorateMentionLinks();
           });
         }
       });
     },
-    [decorateProjectMentions, onChange, replaceMentionFromMarkdown],
+    [decorateMentionLinks, mentionMode, onChange, replaceMentionFromMarkdown],
   );
 
   function hasFilePayload(evt: DragEvent<HTMLDivElement>) {
@@ -517,16 +742,62 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
             setMentionState(null);
             return;
           }
+          const refState = mentionStateRef.current;
+          const refStructuredSession =
+            mentionMode === "structured" && refState
+              ? resolveStructuredMentionSession(refState.query)
+              : null;
+          if (
+            mentionMode === "structured" &&
+            refStructuredSession?.stage === "kind"
+          ) {
+            const effectiveKinds = refStructuredSession.kindOptions;
+            if (effectiveKinds.length > 0) {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                e.stopPropagation();
+                setMentionIndex((prev) =>
+                  Math.min(prev + 1, effectiveKinds.length - 1)
+                );
+                return;
+              }
+              if (e.key === "ArrowUp") {
+                e.preventDefault();
+                e.stopPropagation();
+                setMentionIndex((prev) => Math.max(prev - 1, 0));
+                return;
+              }
+              if (e.key === "Enter" || e.key === "Tab") {
+                e.preventDefault();
+                e.stopPropagation();
+                selectMentionKind(effectiveKinds[mentionIndex], refState);
+                return;
+              }
+            }
+            return;
+          }
           // Arrow / Enter / Tab only when there are filtered results.
           // When React state lags (Dialog context), fall back to computing
           // from the ref so keyboard selection still works.
           const effectiveMentions = filteredMentions.length > 0
             ? filteredMentions
             : (() => {
-                const refState = mentionStateRef.current;
+                if (loadMentions) return loadedMentions.slice(0, 8);
                 if (!refState || !mentions) return [];
-                const q = refState.query.toLowerCase();
-                return mentions.filter((m) => m.name.toLowerCase().includes(q)).slice(0, 8);
+                const query =
+                  mentionMode === "structured" && refStructuredSession?.stage === "entity"
+                    ? refStructuredSession.entityQuery
+                    : refState.query;
+                const kindFilter =
+                  mentionMode === "structured" && refStructuredSession?.stage === "entity"
+                    ? refStructuredSession.kind
+                    : mentionKindFilter;
+                return filterMentionOptions({
+                  mentions,
+                  query,
+                  mentionMode,
+                  kindFilter,
+                });
               })();
           if (effectiveMentions.length > 0) {
             if (e.key === "ArrowDown") {
@@ -588,46 +859,103 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
       />
 
       {/* Mention dropdown */}
-      {mentionActive && filteredMentions.length > 0 && (
+      {mentionActive &&
+        (showStructuredKindPicker ||
+          (mentionMode === "structured"
+            ? structuredMentionSession?.stage === "entity"
+            : filteredMentions.length > 0)) && (
         <div
           className="absolute z-50 min-w-[180px] max-h-[200px] overflow-y-auto rounded-md border border-border bg-popover shadow-md"
           style={{ top: mentionState.top + 4, left: mentionState.left }}
         >
-          {filteredMentions.map((option, i) => (
-            <button
-              key={option.id}
-              type="button"
-              className={cn(
-                "flex items-center gap-2 w-full px-3 py-1.5 text-sm text-left hover:bg-accent/50 transition-colors",
-                i === mentionIndex && "bg-accent",
-              )}
-              onPointerDown={(e) => {
-                e.preventDefault(); // prevent blur
-                selectMention(option, mentionState);
-              }}
-              onMouseEnter={() => setMentionIndex(i)}
-            >
-              {option.kind === "project" && option.projectId ? (
-                <span
-                  className="inline-flex h-2 w-2 rounded-full border border-border/50"
-                  style={{ backgroundColor: option.projectColor ?? "#64748b" }}
-                />
-              ) : (
-                <span className="text-muted-foreground">@</span>
-              )}
-              <span>{option.name}</span>
-              {option.kind === "project" && option.projectId && (
-                <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">
-                  Project
-                </span>
-              )}
-              {option.kind === "user" && (
-                <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">
-                  Person
-                </span>
-              )}
-            </button>
-          ))}
+          {showStructuredKindPicker ? (
+            structuredKindOptions.length > 0 ? (
+              structuredKindOptions.map((kind, i) => (
+                <button
+                  key={kind}
+                  type="button"
+                  className={cn(
+                    "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent/50",
+                    i === mentionIndex && "bg-accent",
+                  )}
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    selectMentionKind(kind, mentionState);
+                  }}
+                  onMouseEnter={() => setMentionIndex(i)}
+                >
+                  <span className="text-muted-foreground">@</span>
+                  <span>{STRUCTURED_MENTION_KIND_LABELS[kind]}</span>
+                  <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Kind
+                  </span>
+                </button>
+              ))
+            ) : (
+              <div className="px-3 py-2 text-sm text-muted-foreground">
+                No mention kinds match.
+              </div>
+            )
+          ) : filteredMentions.length > 0 ? (
+            filteredMentions.map((option, i) => (
+              <button
+                key={option.id}
+                type="button"
+                className={cn(
+                  "flex items-center gap-2 w-full px-3 py-1.5 text-sm text-left hover:bg-accent/50 transition-colors",
+                  i === mentionIndex && "bg-accent",
+                )}
+                onPointerDown={(e) => {
+                  e.preventDefault(); // prevent blur
+                  selectMention(option, mentionState);
+                }}
+                onMouseEnter={() => setMentionIndex(i)}
+              >
+                {option.kind === "project" ? (
+                  <span
+                    className="inline-flex h-2 w-2 rounded-full border border-border/50"
+                    style={{ backgroundColor: option.projectColor ?? "#64748b" }}
+                  />
+                ) : (
+                  <span className="text-muted-foreground">@</span>
+                )}
+                <span>{option.name}</span>
+                {option.kind === "project" && (
+                  <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Project
+                  </span>
+                )}
+                {option.kind === "agent" && (
+                  <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Agent
+                  </span>
+                )}
+                {option.kind === "issue" && (
+                  <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Issue
+                  </span>
+                )}
+                {option.kind === "goal" && (
+                  <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Goal
+                  </span>
+                )}
+                {option.kind === "user" && (
+                  <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Person
+                  </span>
+                )}
+              </button>
+            ))
+          ) : (
+            <div className="px-3 py-2 text-sm text-muted-foreground">
+              No matching{" "}
+              {structuredMentionSession?.stage === "entity"
+                ? STRUCTURED_MENTION_KIND_LABELS[structuredMentionSession.kind].toLowerCase()
+                : "mention"}{" "}
+              results.
+            </div>
+          )}
         </div>
       )}
 

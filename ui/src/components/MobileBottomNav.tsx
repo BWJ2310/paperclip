@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { NavLink, useLocation } from "@/lib/router";
 import {
   House,
+  MessageSquare,
   CircleDot,
   SquarePen,
   Users,
@@ -86,9 +87,9 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
   const items = useMemo<MobileNavItem[]>(
     () => [
       { type: "link", to: "/dashboard", label: "Home", icon: House },
+      { type: "link", to: "conversations", label: "Chats", icon: MessageSquare },
       { type: "link", to: "/issues", label: "Issues", icon: CircleDot },
       { type: "action", label: "Create", icon: SquarePen, onClick: () => openNewIssue() },
-      { type: "link", to: "/agents/all", label: "Agents", icon: Users },
       {
         type: "link",
         to: "/inbox",

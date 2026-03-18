@@ -61,14 +61,20 @@ function withCompanyScope(path: string, companyId?: string) {
 }
 
 function agentPath(id: string, companyId?: string, suffix = "") {
-  return withCompanyScope(`/agents/${encodeURIComponent(id)}${suffix}`, companyId);
+  return withCompanyScope(
+    `/agents/${encodeURIComponent(id)}${suffix}`,
+    companyId
+  );
 }
 
 export const agentsApi = {
-  list: (companyId: string) => api.get<Agent[]>(`/companies/${companyId}/agents`),
+  list: (companyId: string) =>
+    api.get<Agent[]>(`/companies/${companyId}/agents`),
   org: (companyId: string) => api.get<OrgNode[]>(`/companies/${companyId}/org`),
   listConfigurations: (companyId: string) =>
-    api.get<Record<string, unknown>[]>(`/companies/${companyId}/agent-configurations`),
+    api.get<Record<string, unknown>[]>(
+      `/companies/${companyId}/agent-configurations`
+    ),
   get: async (id: string, companyId?: string) => {
     try {
       return await api.get<AgentDetail>(agentPath(id, companyId));
@@ -89,20 +95,35 @@ export const agentsApi = {
 
       const agents = await api.get<Agent[]>(`/companies/${companyId}/agents`);
       const matches = agents.filter(
-        (agent) => agent.status !== "terminated" && normalizeAgentUrlKey(agent.urlKey) === urlKey,
+        (agent) =>
+          agent.status !== "terminated" &&
+          normalizeAgentUrlKey(agent.urlKey) === urlKey
       );
       if (matches.length !== 1) throw error;
       return api.get<AgentDetail>(agentPath(matches[0]!.id, companyId));
     }
   },
   getConfiguration: (id: string, companyId?: string) =>
-    api.get<Record<string, unknown>>(agentPath(id, companyId, "/configuration")),
+    api.get<Record<string, unknown>>(
+      agentPath(id, companyId, "/configuration")
+    ),
   listConfigRevisions: (id: string, companyId?: string) =>
-    api.get<AgentConfigRevision[]>(agentPath(id, companyId, "/config-revisions")),
+    api.get<AgentConfigRevision[]>(
+      agentPath(id, companyId, "/config-revisions")
+    ),
   getConfigRevision: (id: string, revisionId: string, companyId?: string) =>
-    api.get<AgentConfigRevision>(agentPath(id, companyId, `/config-revisions/${revisionId}`)),
-  rollbackConfigRevision: (id: string, revisionId: string, companyId?: string) =>
-    api.post<Agent>(agentPath(id, companyId, `/config-revisions/${revisionId}/rollback`), {}),
+    api.get<AgentConfigRevision>(
+      agentPath(id, companyId, `/config-revisions/${revisionId}`)
+    ),
+  rollbackConfigRevision: (
+    id: string,
+    revisionId: string,
+    companyId?: string
+  ) =>
+    api.post<Agent>(
+      agentPath(id, companyId, `/config-revisions/${revisionId}/rollback`),
+      {}
+    ),
   create: (companyId: string, data: Record<string, unknown>) =>
     api.post<Agent>(`/companies/${companyId}/agents`, data),
   hire: (companyId: string, data: Record<string, unknown>) =>
@@ -148,38 +169,54 @@ export const agentsApi = {
   createKey: (id: string, name: string, companyId?: string) =>
     api.post<AgentKeyCreated>(agentPath(id, companyId, "/keys"), { name }),
   revokeKey: (agentId: string, keyId: string, companyId?: string) =>
-    api.delete<{ ok: true }>(agentPath(agentId, companyId, `/keys/${encodeURIComponent(keyId)}`)),
+    api.delete<{ ok: true }>(
+      agentPath(agentId, companyId, `/keys/${encodeURIComponent(keyId)}`)
+    ),
   runtimeState: (id: string, companyId?: string) =>
     api.get<AgentRuntimeState>(agentPath(id, companyId, "/runtime-state")),
   taskSessions: (id: string, companyId?: string) =>
     api.get<AgentTaskSession[]>(agentPath(id, companyId, "/task-sessions")),
   resetSession: (id: string, taskKey?: string | null, companyId?: string) =>
-    api.post<void>(agentPath(id, companyId, "/runtime-state/reset-session"), { taskKey: taskKey ?? null }),
+    api.post<void>(agentPath(id, companyId, "/runtime-state/reset-session"), {
+      taskKey: taskKey ?? null,
+    }),
   adapterModels: (companyId: string, type: string) =>
     api.get<AdapterModel[]>(
-      `/companies/${encodeURIComponent(companyId)}/adapters/${encodeURIComponent(type)}/models`,
+      `/companies/${encodeURIComponent(
+        companyId
+      )}/adapters/${encodeURIComponent(type)}/models`
     ),
   testEnvironment: (
     companyId: string,
     type: string,
-    data: { adapterConfig: Record<string, unknown> },
+    data: { adapterConfig: Record<string, unknown> }
   ) =>
     api.post<AdapterEnvironmentTestResult>(
       `/companies/${companyId}/adapters/${type}/test-environment`,
-      data,
+      data
     ),
-  invoke: (id: string, companyId?: string) => api.post<HeartbeatRun>(agentPath(id, companyId, "/heartbeat/invoke"), {}),
+  invoke: (id: string, companyId?: string) =>
+    api.post<HeartbeatRun>(agentPath(id, companyId, "/heartbeat/invoke"), {}),
   wakeup: (
     id: string,
     data: {
-      source?: "timer" | "assignment" | "on_demand" | "automation";
+      source?:
+        | "timer"
+        | "assignment"
+        | "on_demand"
+        | "automation"
+        | "conversation_message";
       triggerDetail?: "manual" | "ping" | "callback" | "system";
       reason?: string | null;
       payload?: Record<string, unknown> | null;
       idempotencyKey?: string | null;
     },
-    companyId?: string,
-  ) => api.post<HeartbeatRun | { status: "skipped" }>(agentPath(id, companyId, "/wakeup"), data),
+    companyId?: string
+  ) =>
+    api.post<HeartbeatRun | { status: "skipped" }>(
+      agentPath(id, companyId, "/wakeup"),
+      data
+    ),
   loginWithClaude: (id: string, companyId?: string) =>
     api.post<ClaudeLoginResult>(agentPath(id, companyId, "/claude-login"), {}),
   availableSkills: () =>

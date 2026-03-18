@@ -11,6 +11,7 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { GoalProperties } from "../components/GoalProperties";
 import { GoalTree } from "../components/GoalTree";
+import { LinkedConversationsSection } from "../components/LinkedConversationsSection";
 import { StatusBadge } from "../components/StatusBadge";
 import { InlineEditor } from "../components/InlineEditor";
 import { EntityRow } from "../components/EntityRow";
@@ -50,6 +51,16 @@ export function GoalDetail() {
     queryKey: queryKeys.projects.list(resolvedCompanyId!),
     queryFn: () => projectsApi.list(resolvedCompanyId!),
     enabled: !!resolvedCompanyId
+  });
+
+  const {
+    data: linkedConversations,
+    isLoading: linkedConversationsLoading,
+    error: linkedConversationsError,
+  } = useQuery({
+    queryKey: queryKeys.goals.linkedConversations(goalId!),
+    queryFn: () => goalsApi.listLinkedConversations(goalId!),
+    enabled: !!goalId,
   });
 
   useEffect(() => {
@@ -144,6 +155,21 @@ export function GoalDetail() {
           }}
         />
       </div>
+
+      <LinkedConversationsSection
+        companyId={goal.companyId}
+        targetKind="goal"
+        targetId={goal.id}
+        targetLabel={goal.title}
+        conversations={linkedConversations}
+        isLoading={linkedConversationsLoading}
+        error={(linkedConversationsError as Error | null) ?? null}
+        onChanged={() => {
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.goals.linkedConversations(goal.id),
+          });
+        }}
+      />
 
       <Tabs defaultValue="children">
         <TabsList>

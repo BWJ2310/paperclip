@@ -17,7 +17,10 @@ import {
 import { Shield, User } from "lucide-react";
 import { cn, agentUrl } from "../lib/utils";
 import { roleLabels } from "../components/agent-config-primitives";
-import { AgentConfigForm, type CreateConfigValues } from "../components/AgentConfigForm";
+import {
+  AgentConfigForm,
+  type CreateConfigValues,
+} from "../components/AgentConfigForm";
 import { defaultCreateValues } from "../components/agent-config-defaults";
 import { getUIAdapter } from "../adapters";
 import { AgentIcon } from "../components/AgentIconPicker";
@@ -28,7 +31,9 @@ import {
 import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
 import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
 
-const SUPPORTED_ADVANCED_ADAPTER_TYPES = new Set<CreateConfigValues["adapterType"]>([
+const SUPPORTED_ADVANCED_ADAPTER_TYPES = new Set<
+  CreateConfigValues["adapterType"]
+>([
   "claude_local",
   "codex_local",
   "gemini_local",
@@ -39,7 +44,7 @@ const SUPPORTED_ADVANCED_ADAPTER_TYPES = new Set<CreateConfigValues["adapterType
 ]);
 
 function createValuesForAdapterType(
-  adapterType: CreateConfigValues["adapterType"],
+  adapterType: CreateConfigValues["adapterType"]
 ): CreateConfigValues {
   const { adapterType: _discard, ...defaults } = defaultCreateValues;
   const nextValues: CreateConfigValues = { ...defaults, adapterType };
@@ -88,9 +93,13 @@ export function NewAgent() {
     isFetching: adapterModelsFetching,
   } = useQuery({
     queryKey: selectedCompanyId
-      ? queryKeys.agents.adapterModels(selectedCompanyId, configValues.adapterType)
+      ? queryKeys.agents.adapterModels(
+          selectedCompanyId,
+          configValues.adapterType
+        )
       : ["agents", "none", "adapter-models", configValues.adapterType],
-    queryFn: () => agentsApi.adapterModels(selectedCompanyId!, configValues.adapterType),
+    queryFn: () =>
+      agentsApi.adapterModels(selectedCompanyId!, configValues.adapterType),
     enabled: Boolean(selectedCompanyId),
   });
 
@@ -120,12 +129,18 @@ export function NewAgent() {
   useEffect(() => {
     const requested = presetAdapterType;
     if (!requested) return;
-    if (!SUPPORTED_ADVANCED_ADAPTER_TYPES.has(requested as CreateConfigValues["adapterType"])) {
+    if (
+      !SUPPORTED_ADVANCED_ADAPTER_TYPES.has(
+        requested as CreateConfigValues["adapterType"]
+      )
+    ) {
       return;
     }
     setConfigValues((prev) => {
       if (prev.adapterType === requested) return prev;
-      return createValuesForAdapterType(requested as CreateConfigValues["adapterType"]);
+      return createValuesForAdapterType(
+        requested as CreateConfigValues["adapterType"]
+      );
     });
   }, [presetAdapterType]);
 
@@ -133,12 +148,18 @@ export function NewAgent() {
     mutationFn: (data: Record<string, unknown>) =>
       agentsApi.hire(selectedCompanyId!, data),
     onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.list(selectedCompanyId!) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.approvals.list(selectedCompanyId!) });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.list(selectedCompanyId!),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.approvals.list(selectedCompanyId!),
+      });
       navigate(agentUrl(result.agent));
     },
     onError: (error) => {
-      setFormError(error instanceof Error ? error.message : "Failed to create agent");
+      setFormError(
+        error instanceof Error ? error.message : "Failed to create agent"
+      );
     },
   });
 
@@ -153,19 +174,23 @@ export function NewAgent() {
     if (configValues.adapterType === "opencode_local") {
       const selectedModel = configValues.model.trim();
       if (!selectedModel) {
-        setFormError("OpenCode requires an explicit model in provider/model format.");
+        setFormError(
+          "OpenCode requires an explicit model in provider/model format."
+        );
         return;
       }
       if (adapterModelsError) {
         setFormError(
           adapterModelsError instanceof Error
             ? adapterModelsError.message
-            : "Failed to load OpenCode models.",
+            : "Failed to load OpenCode models."
         );
         return;
       }
       if (adapterModelsLoading || adapterModelsFetching) {
-        setFormError("OpenCode models are still loading. Please wait and try again.");
+        setFormError(
+          "OpenCode models are still loading. Please wait and try again."
+        );
         return;
       }
       const discovered = adapterModels ?? [];
@@ -173,7 +198,7 @@ export function NewAgent() {
         setFormError(
           discovered.length === 0
             ? "No OpenCode models discovered. Run `opencode models` and authenticate providers."
-            : `Configured OpenCode model is unavailable: ${selectedModel}`,
+            : `Configured OpenCode model is unavailable: ${selectedModel}`
         );
         return;
       }
@@ -190,7 +215,7 @@ export function NewAgent() {
         heartbeat: {
           enabled: configValues.heartbeatEnabled,
           intervalSec: configValues.intervalSec,
-          wakeOnDemand: true,
+          wakeOnSignal: true,
           cooldownSec: 10,
           maxConcurrentRuns: 1,
         },
@@ -265,7 +290,10 @@ export function NewAgent() {
                     "flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50",
                     r === role && "bg-accent"
                   )}
-                  onClick={() => { setRole(r); setRoleOpen(false); }}
+                  onClick={() => {
+                    setRole(r);
+                    setRoleOpen(false);
+                  }}
                 >
                   {roleLabels[r] ?? r}
                 </button>
@@ -284,7 +312,10 @@ export function NewAgent() {
               >
                 {currentReportsTo ? (
                   <>
-                    <AgentIcon icon={currentReportsTo.icon} className="h-3 w-3 text-muted-foreground" />
+                    <AgentIcon
+                      icon={currentReportsTo.icon}
+                      className="h-3 w-3 text-muted-foreground"
+                    />
                     {`Reports to ${currentReportsTo.name}`}
                   </>
                 ) : (
@@ -301,7 +332,10 @@ export function NewAgent() {
                   "flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50",
                   !reportsTo && "bg-accent"
                 )}
-                onClick={() => { setReportsTo(""); setReportsToOpen(false); }}
+                onClick={() => {
+                  setReportsTo("");
+                  setReportsToOpen(false);
+                }}
               >
                 No manager
               </button>
@@ -312,11 +346,19 @@ export function NewAgent() {
                     "flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 truncate",
                     a.id === reportsTo && "bg-accent"
                   )}
-                  onClick={() => { setReportsTo(a.id); setReportsToOpen(false); }}
+                  onClick={() => {
+                    setReportsTo(a.id);
+                    setReportsToOpen(false);
+                  }}
                 >
-                  <AgentIcon icon={a.icon} className="shrink-0 h-3 w-3 text-muted-foreground" />
+                  <AgentIcon
+                    icon={a.icon}
+                    className="shrink-0 h-3 w-3 text-muted-foreground"
+                  />
                   {a.name}
-                  <span className="text-muted-foreground ml-auto">{roleLabels[a.role] ?? a.role}</span>
+                  <span className="text-muted-foreground ml-auto">
+                    {roleLabels[a.role] ?? a.role}
+                  </span>
                 </button>
               ))}
             </PopoverContent>
@@ -327,7 +369,9 @@ export function NewAgent() {
         <AgentConfigForm
           mode="create"
           values={configValues}
-          onChange={(patch) => setConfigValues((prev) => ({ ...prev, ...patch }))}
+          onChange={(patch) =>
+            setConfigValues((prev) => ({ ...prev, ...patch }))
+          }
           adapterModels={adapterModels}
         />
 
@@ -372,13 +416,19 @@ export function NewAgent() {
         {/* Footer */}
         <div className="border-t border-border px-4 py-3">
           {isFirstAgent && (
-            <p className="text-xs text-muted-foreground mb-2">This will be the CEO</p>
+            <p className="text-xs text-muted-foreground mb-2">
+              This will be the CEO
+            </p>
           )}
           {formError && (
             <p className="text-xs text-destructive mb-2">{formError}</p>
           )}
           <div className="flex items-center justify-end gap-2">
-            <Button variant="outline" size="sm" onClick={() => navigate("/agents")}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate("/agents")}
+            >
               Cancel
             </Button>
             <Button

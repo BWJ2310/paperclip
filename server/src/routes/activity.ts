@@ -39,7 +39,10 @@ export function activityRoutes(db: Db) {
       entityType: req.query.entityType as string | undefined,
       entityId: req.query.entityId as string | undefined,
     };
-    const result = await svc.list(filters);
+    const result = await svc.list(filters, {
+      type: req.actor.type,
+      agentId: req.actor.type === "agent" ? req.actor.agentId : null,
+    });
     res.json(result);
   });
 

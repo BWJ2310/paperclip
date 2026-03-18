@@ -18,10 +18,15 @@ const mockProjectService = vi.hoisted(() => ({
   listByIds: vi.fn(),
 }));
 
+const mockConversationService = vi.hoisted(() => ({
+  listLinkedConversations: vi.fn(),
+}));
+
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
 vi.mock("../../services/index.js", () => ({
   projectService: () => mockProjectService,
+  conversationService: () => mockConversationService,
   logActivity: mockLogActivity,
 }));
 
@@ -56,6 +61,21 @@ describe("projectRoutes", () => {
       const res = await request(createApp()).get("/api/companies/company-1/projects");
       expect(res.status).toBe(200);
       expect(res.body).toHaveLength(1);
+      expect(mockProjectService.list).toHaveBeenCalledWith("company-1", {
+        limit: 20,
+      });
+    });
+
+    it("passes trimmed q and capped limit through the query contract", async () => {
+      mockProjectService.list.mockResolvedValue([]);
+      const res = await request(createApp()).get(
+        "/api/companies/company-1/projects?q=%20auth%20&limit=99",
+      );
+      expect(res.status).toBe(200);
+      expect(mockProjectService.list).toHaveBeenCalledWith("company-1", {
+        q: "auth",
+        limit: 20,
+      });
     });
 
     it("returns 403 for wrong company", async () => {

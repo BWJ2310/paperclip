@@ -18,6 +18,7 @@ export {
   renderTemplate,
   redactEnvForLogs,
   buildPaperclipEnv,
+  readPaperclipInvokeContext,
   defaultPathForPlatform,
   ensurePathInEnv,
   ensureAbsoluteDirectory,
@@ -38,7 +39,7 @@ export async function runChildProcess(
     timeoutSec: number;
     graceSec: number;
     onLog: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
-  },
+  }
 ): Promise<RunProcessResult> {
   return _runChildProcess(runId, command, args, {
     ...opts,

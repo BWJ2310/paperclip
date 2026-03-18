@@ -30,18 +30,21 @@ type ChildProcessWithEvents = ChildProcess & {
   on(event: "error", listener: (err: Error) => void): ChildProcess;
   on(
     event: "close",
-    listener: (code: number | null, signal: NodeJS.Signals | null) => void,
+    listener: (code: number | null, signal: NodeJS.Signals | null) => void
   ): ChildProcess;
 };
 
 export const runningProcesses = new Map<string, RunningProcess>();
 export const MAX_CAPTURE_BYTES = 4 * 1024 * 1024;
 export const MAX_EXCERPT_BYTES = 32 * 1024;
-const SENSITIVE_ENV_KEY = /(key|token|secret|password|passwd|authorization|cookie)/i;
+const SENSITIVE_ENV_KEY =
+  /(key|token|secret|password|passwd|authorization|cookie)/i;
 const PAPERCLIP_SKILL_ROOT_RELATIVE_CANDIDATES = [
   "../../skills",
   "../../../../../skills",
 ];
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface PaperclipSkillEntry {
   key: string;
@@ -68,6 +71,24 @@ interface PersistentSkillSnapshotOptions {
   externalConflictDetail: string;
   externalDetail: string;
   warnings?: string[];
+}
+
+export interface PaperclipInvokeContext {
+  taskKey: string | null;
+  issueId: string | null;
+  wakeReason: string | null;
+  wakeCommentId: string | null;
+  approvalId: string | null;
+  approvalStatus: string | null;
+  linkedIssueIds: string[];
+  conversationId: string | null;
+  conversationMessageId: string | null;
+  conversationMessageSequence: number | null;
+  conversationResponseMode: string | null;
+  conversationTargetKind: string | null;
+  conversationTargetId: string | null;
+  linkedConversationMemoryMarkdown: string | null;
+  linkedConversationRefs: Array<Record<string, unknown>>;
 }
 
 function normalizePathSlashes(value: string): string {
@@ -140,8 +161,48 @@ export function asBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
+function readNonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
+}
+
+function readPositiveInteger(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.floor(parsed);
+    }
+  }
+  return null;
+}
+
+function buildIssueTaskKey(issueId: string | null | undefined): string | null {
+  const normalizedIssueId = readNonEmptyString(issueId);
+  return normalizedIssueId ? `issue:${normalizedIssueId}` : null;
+}
+
+function parseTaskKey(
+  taskKey: string | null | undefined
+): { kind: string; id: string } | null {
+  const normalizedTaskKey = readNonEmptyString(taskKey);
+  if (!normalizedTaskKey) return null;
+  const delimiterIndex = normalizedTaskKey.indexOf(":");
+  if (delimiterIndex <= 0 || delimiterIndex >= normalizedTaskKey.length - 1)
+    return null;
+  return {
+    kind: normalizedTaskKey.slice(0, delimiterIndex),
+    id: normalizedTaskKey.slice(delimiterIndex + 1),
+  };
+}
+
 export function asStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 export function parseJson(value: string): Record<string, unknown> | null {
@@ -152,17 +213,30 @@ export function parseJson(value: string): Record<string, unknown> | null {
   }
 }
 
-export function appendWithCap(prev: string, chunk: string, cap = MAX_CAPTURE_BYTES) {
+export function appendWithCap(
+  prev: string,
+  chunk: string,
+  cap = MAX_CAPTURE_BYTES
+) {
   const combined = prev + chunk;
-  return combined.length > cap ? combined.slice(combined.length - cap) : combined;
+  return combined.length > cap
+    ? combined.slice(combined.length - cap)
+    : combined;
 }
 
-export function resolvePathValue(obj: Record<string, unknown>, dottedPath: string) {
+export function resolvePathValue(
+  obj: Record<string, unknown>,
+  dottedPath: string
+) {
   const parts = dottedPath.split(".");
   let cursor: unknown = obj;
 
   for (const part of parts) {
-    if (typeof cursor !== "object" || cursor === null || Array.isArray(cursor)) {
+    if (
+      typeof cursor !== "object" ||
+      cursor === null ||
+      Array.isArray(cursor)
+    ) {
       return "";
     }
     cursor = (cursor as Record<string, unknown>)[part];
@@ -170,7 +244,8 @@ export function resolvePathValue(obj: Record<string, unknown>, dottedPath: strin
 
   if (cursor === null || cursor === undefined) return "";
   if (typeof cursor === "string") return cursor;
-  if (typeof cursor === "number" || typeof cursor === "boolean") return String(cursor);
+  if (typeof cursor === "number" || typeof cursor === "boolean")
+    return String(cursor);
 
   try {
     return JSON.stringify(cursor);
@@ -179,13 +254,18 @@ export function resolvePathValue(obj: Record<string, unknown>, dottedPath: strin
   }
 }
 
-export function renderTemplate(template: string, data: Record<string, unknown>) {
-  return template.replace(/{{\s*([a-zA-Z0-9_.-]+)\s*}}/g, (_, path) => resolvePathValue(data, path));
+export function renderTemplate(
+  template: string,
+  data: Record<string, unknown>
+) {
+  return template.replace(/{{\s*([a-zA-Z0-9_.-]+)\s*}}/g, (_, path) =>
+    resolvePathValue(data, path)
+  );
 }
 
 export function joinPromptSections(
   sections: Array<string | null | undefined>,
-  separator = "\n\n",
+  separator = "\n\n"
 ) {
   return sections
     .map((value) => (typeof value === "string" ? value.trim() : ""))
@@ -193,7 +273,9 @@ export function joinPromptSections(
     .join(separator);
 }
 
-export function redactEnvForLogs(env: Record<string, string>): Record<string, string> {
+export function redactEnvForLogs(
+  env: Record<string, string>
+): Record<string, string> {
   const redacted: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
     redacted[key] = SENSITIVE_ENV_KEY.test(key) ? "***REDACTED***" : value;
@@ -201,11 +283,106 @@ export function redactEnvForLogs(env: Record<string, string>): Record<string, st
   return redacted;
 }
 
-export function buildPaperclipEnv(agent: { id: string; companyId: string }): Record<string, string> {
+export function readPaperclipInvokeContext(
+  context: Record<string, unknown> | null | undefined
+): PaperclipInvokeContext {
+  const issueId =
+    readNonEmptyString(context?.issueId) ?? readNonEmptyString(context?.taskId);
+  const rawTaskKey = readNonEmptyString(context?.taskKey);
+  const taskKey =
+    parseTaskKey(rawTaskKey) !== null
+      ? rawTaskKey
+      : rawTaskKey && UUID_RE.test(rawTaskKey)
+      ? buildIssueTaskKey(rawTaskKey)
+      : buildIssueTaskKey(issueId) ?? rawTaskKey;
+  const linkedIssueIds = Array.isArray(context?.issueIds)
+    ? context.issueIds.filter(
+        (value): value is string =>
+          typeof value === "string" && value.trim().length > 0
+      )
+    : [];
+  const conversationId =
+    readNonEmptyString(context?.paperclipConversationId) ??
+    readNonEmptyString(context?.conversationId);
+  const conversationMessageId =
+    readNonEmptyString(context?.paperclipConversationMessageId) ??
+    readNonEmptyString(context?.conversationMessageId);
+  const conversationMessageSequence =
+    readPositiveInteger(context?.paperclipConversationMessageSequence) ??
+    readPositiveInteger(context?.conversationMessageSequence);
+  const conversationResponseMode =
+    readNonEmptyString(context?.paperclipConversationResponseMode) ??
+    readNonEmptyString(context?.conversationResponseMode) ??
+    readNonEmptyString(context?.responseMode);
+  const conversationTargetKind =
+    readNonEmptyString(context?.paperclipConversationTargetKind) ??
+    readNonEmptyString(context?.conversationTargetKind);
+  const conversationTargetId =
+    readNonEmptyString(context?.paperclipConversationTargetId) ??
+    readNonEmptyString(context?.conversationTargetId);
+  const linkedConversationMemoryMarkdown = readNonEmptyString(
+    context?.paperclipLinkedConversationMemoryMarkdown
+  );
+  const linkedConversationRefs = Array.isArray(
+    context?.paperclipLinkedConversationRefs
+  )
+    ? context.paperclipLinkedConversationRefs.filter(
+        (value): value is Record<string, unknown> =>
+          typeof value === "object" && value !== null && !Array.isArray(value)
+      )
+    : [];
+
+  return {
+    taskKey,
+    issueId,
+    wakeReason: readNonEmptyString(context?.wakeReason),
+    wakeCommentId:
+      readNonEmptyString(context?.wakeCommentId) ??
+      readNonEmptyString(context?.commentId),
+    approvalId: readNonEmptyString(context?.approvalId),
+    approvalStatus: readNonEmptyString(context?.approvalStatus),
+    linkedIssueIds,
+    conversationId,
+    conversationMessageId,
+    conversationMessageSequence,
+    conversationResponseMode,
+    conversationTargetKind:
+      conversationTargetKind && conversationTargetId
+        ? conversationTargetKind
+        : null,
+    conversationTargetId:
+      conversationTargetKind && conversationTargetId ? conversationTargetId : null,
+    linkedConversationMemoryMarkdown,
+    linkedConversationRefs,
+  };
+}
+
+export function buildPaperclipEnv(
+  agent: { id: string; companyId: string },
+  options?: {
+    runId?: string | null;
+    taskKey?: string | null;
+    issueId?: string | null;
+    wakeReason?: string | null;
+    wakeCommentId?: string | null;
+    approvalId?: string | null;
+    approvalStatus?: string | null;
+    linkedIssueIds?: string[];
+    conversationId?: string | null;
+    conversationMessageId?: string | null;
+    conversationMessageSequence?: number | null;
+    conversationResponseMode?: string | null;
+    conversationTargetKind?: string | null;
+    conversationTargetId?: string | null;
+    linkedConversationMemoryMarkdown?: string | null;
+    linkedConversationRefs?: Array<Record<string, unknown>>;
+  }
+): Record<string, string> {
   const resolveHostForUrl = (rawHost: string): string => {
     const host = rawHost.trim();
     if (!host || host === "0.0.0.0" || host === "::") return "localhost";
-    if (host.includes(":") && !host.startsWith("[") && !host.endsWith("]")) return `[${host}]`;
+    if (host.includes(":") && !host.startsWith("[") && !host.endsWith("]"))
+      return `[${host}]`;
     return host;
   };
   const vars: Record<string, string> = {
@@ -213,11 +390,84 @@ export function buildPaperclipEnv(agent: { id: string; companyId: string }): Rec
     PAPERCLIP_COMPANY_ID: agent.companyId,
   };
   const runtimeHost = resolveHostForUrl(
-    process.env.PAPERCLIP_LISTEN_HOST ?? process.env.HOST ?? "localhost",
+    process.env.PAPERCLIP_LISTEN_HOST ?? process.env.HOST ?? "localhost"
   );
-  const runtimePort = process.env.PAPERCLIP_LISTEN_PORT ?? process.env.PORT ?? "3100";
-  const apiUrl = process.env.PAPERCLIP_API_URL ?? `http://${runtimeHost}:${runtimePort}`;
+  const runtimePort =
+    process.env.PAPERCLIP_LISTEN_PORT ?? process.env.PORT ?? "3100";
+  const apiUrl =
+    process.env.PAPERCLIP_API_URL ?? `http://${runtimeHost}:${runtimePort}`;
   vars.PAPERCLIP_API_URL = apiUrl;
+  const taskKey = readNonEmptyString(options?.taskKey);
+  const taskKeyIssueId =
+    parseTaskKey(taskKey)?.kind === "issue"
+      ? parseTaskKey(taskKey)?.id ?? null
+      : null;
+  const issueId = readNonEmptyString(options?.issueId) ?? taskKeyIssueId;
+
+  if (readNonEmptyString(options?.runId))
+    vars.PAPERCLIP_RUN_ID = readNonEmptyString(options?.runId)!;
+  if (taskKey) vars.PAPERCLIP_TASK_KEY = taskKey;
+  if (issueId) vars.PAPERCLIP_TASK_ID = issueId;
+  if (readNonEmptyString(options?.wakeReason)) {
+    vars.PAPERCLIP_WAKE_REASON = readNonEmptyString(options?.wakeReason)!;
+  }
+  if (readNonEmptyString(options?.wakeCommentId)) {
+    vars.PAPERCLIP_WAKE_COMMENT_ID = readNonEmptyString(
+      options?.wakeCommentId
+    )!;
+  }
+  if (readNonEmptyString(options?.approvalId)) {
+    vars.PAPERCLIP_APPROVAL_ID = readNonEmptyString(options?.approvalId)!;
+  }
+  if (readNonEmptyString(options?.approvalStatus)) {
+    vars.PAPERCLIP_APPROVAL_STATUS = readNonEmptyString(
+      options?.approvalStatus
+    )!;
+  }
+  if (readNonEmptyString(options?.conversationId)) {
+    vars.PAPERCLIP_CONVERSATION_ID = readNonEmptyString(
+      options?.conversationId
+    )!;
+  }
+  if (readNonEmptyString(options?.conversationMessageId)) {
+    vars.PAPERCLIP_CONVERSATION_MESSAGE_ID = readNonEmptyString(
+      options?.conversationMessageId
+    )!;
+  }
+  if (readPositiveInteger(options?.conversationMessageSequence)) {
+    vars.PAPERCLIP_CONVERSATION_MESSAGE_SEQUENCE = String(
+      readPositiveInteger(options?.conversationMessageSequence)
+    );
+  }
+  if (readNonEmptyString(options?.conversationResponseMode)) {
+    vars.PAPERCLIP_CONVERSATION_RESPONSE_MODE = readNonEmptyString(
+      options?.conversationResponseMode
+    )!;
+  }
+  if (
+    readNonEmptyString(options?.conversationTargetKind) &&
+    readNonEmptyString(options?.conversationTargetId)
+  ) {
+    vars.PAPERCLIP_CONVERSATION_TARGET_KIND = readNonEmptyString(
+      options?.conversationTargetKind
+    )!;
+    vars.PAPERCLIP_CONVERSATION_TARGET_ID = readNonEmptyString(
+      options?.conversationTargetId
+    )!;
+  }
+  if ((options?.linkedIssueIds ?? []).length > 0) {
+    vars.PAPERCLIP_LINKED_ISSUE_IDS = options!.linkedIssueIds!.join(",");
+  }
+  if (readNonEmptyString(options?.linkedConversationMemoryMarkdown)) {
+    vars.PAPERCLIP_LINKED_CONVERSATION_MEMORY_MARKDOWN = readNonEmptyString(
+      options?.linkedConversationMemoryMarkdown
+    )!;
+  }
+  if ((options?.linkedConversationRefs ?? []).length > 0) {
+    vars.PAPERCLIP_LINKED_CONVERSATION_REFS_JSON = JSON.stringify(
+      options!.linkedConversationRefs!
+    );
+  }
   return vars;
 }
 
@@ -234,17 +484,26 @@ function windowsPathExts(env: NodeJS.ProcessEnv): string[] {
 
 async function pathExists(candidate: string) {
   try {
-    await fs.access(candidate, process.platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK);
+    await fs.access(
+      candidate,
+      process.platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK
+    );
     return true;
   } catch {
     return false;
   }
 }
 
-async function resolveCommandPath(command: string, cwd: string, env: NodeJS.ProcessEnv): Promise<string | null> {
+async function resolveCommandPath(
+  command: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv
+): Promise<string | null> {
   const hasPathSeparator = command.includes("/") || command.includes("\\");
   if (hasPathSeparator) {
-    const absolute = path.isAbsolute(command) ? command : path.resolve(cwd, command);
+    const absolute = path.isAbsolute(command)
+      ? command
+      : path.resolve(cwd, command);
     return (await pathExists(absolute)) ? absolute : null;
   }
 
@@ -252,7 +511,8 @@ async function resolveCommandPath(command: string, cwd: string, env: NodeJS.Proc
   const delimiter = process.platform === "win32" ? ";" : ":";
   const dirs = pathValue.split(delimiter).filter(Boolean);
   const exts = process.platform === "win32" ? windowsPathExts(env) : [""];
-  const hasExtension = process.platform === "win32" && path.extname(command).length > 0;
+  const hasExtension =
+    process.platform === "win32" && path.extname(command).length > 0;
 
   for (const dir of dirs) {
     const candidates =
@@ -279,7 +539,7 @@ async function resolveSpawnTarget(
   command: string,
   args: string[],
   cwd: string,
-  env: NodeJS.ProcessEnv,
+  env: NodeJS.ProcessEnv
 ): Promise<SpawnTarget> {
   const resolved = await resolveCommandPath(command, cwd, env);
   const executable = resolved ?? command;
@@ -290,7 +550,10 @@ async function resolveSpawnTarget(
 
   if (/\.(cmd|bat)$/i.test(executable)) {
     const shell = env.ComSpec || process.env.ComSpec || "cmd.exe";
-    const commandLine = [quoteForCmd(executable), ...args.map(quoteForCmd)].join(" ");
+    const commandLine = [
+      quoteForCmd(executable),
+      ...args.map(quoteForCmd),
+    ].join(" ");
     return {
       command: shell,
       args: ["/d", "/s", "/c", commandLine],
@@ -308,7 +571,7 @@ export function ensurePathInEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 export async function ensureAbsoluteDirectory(
   cwd: string,
-  opts: { createIfMissing?: boolean } = {},
+  opts: { createIfMissing?: boolean } = {}
 ) {
   if (!path.isAbsolute(cwd)) {
     throw new Error(`Working directory must be an absolute path: "${cwd}"`);
@@ -345,10 +608,12 @@ export async function ensureAbsoluteDirectory(
 
 export async function resolvePaperclipSkillsDir(
   moduleDir: string,
-  additionalCandidates: string[] = [],
+  additionalCandidates: string[] = []
 ): Promise<string | null> {
   const candidates = [
-    ...PAPERCLIP_SKILL_ROOT_RELATIVE_CANDIDATES.map((relativePath) => path.resolve(moduleDir, relativePath)),
+    ...PAPERCLIP_SKILL_ROOT_RELATIVE_CANDIDATES.map((relativePath) =>
+      path.resolve(moduleDir, relativePath)
+    ),
     ...additionalCandidates.map((candidate) => path.resolve(candidate)),
   ];
   const seenRoots = new Set<string>();
@@ -356,7 +621,10 @@ export async function resolvePaperclipSkillsDir(
   for (const root of candidates) {
     if (seenRoots.has(root)) continue;
     seenRoots.add(root);
-    const isDirectory = await fs.stat(root).then((stats) => stats.isDirectory()).catch(() => false);
+    const isDirectory = await fs
+      .stat(root)
+      .then((stats) => stats.isDirectory())
+      .catch(() => false);
     if (isDirectory) return root;
   }
 
@@ -365,7 +633,7 @@ export async function resolvePaperclipSkillsDir(
 
 export async function listPaperclipSkillEntries(
   moduleDir: string,
-  additionalCandidates: string[] = [],
+  additionalCandidates: string[] = []
 ): Promise<PaperclipSkillEntry[]> {
   const root = await resolvePaperclipSkillsDir(moduleDir, additionalCandidates);
   if (!root) return [];
@@ -636,8 +904,10 @@ export function writePaperclipSkillSyncPreference(
 export async function ensurePaperclipSkillSymlink(
   source: string,
   target: string,
-  linkSkill: (source: string, target: string) => Promise<void> = (linkSource, linkTarget) =>
-    fs.symlink(linkSource, linkTarget),
+  linkSkill: (source: string, target: string) => Promise<void> = (
+    linkSource,
+    linkTarget
+  ) => fs.symlink(linkSource, linkTarget)
 ): Promise<"created" | "repaired" | "skipped"> {
   const existing = await fs.lstat(target).catch(() => null);
   if (!existing) {
@@ -657,7 +927,10 @@ export async function ensurePaperclipSkillSymlink(
     return "skipped";
   }
 
-  const linkedPathExists = await fs.stat(resolvedLinkedPath).then(() => true).catch(() => false);
+  const linkedPathExists = await fs
+    .stat(resolvedLinkedPath)
+    .then(() => true)
+    .catch(() => false);
   if (linkedPathExists) {
     return "skipped";
   }
@@ -669,7 +942,7 @@ export async function ensurePaperclipSkillSymlink(
 
 export async function removeMaintainerOnlySkillSymlinks(
   skillsHome: string,
-  allowedSkillNames: Iterable<string>,
+  allowedSkillNames: Iterable<string>
 ): Promise<string[]> {
   const allowed = new Set(Array.from(allowedSkillNames));
   try {
@@ -705,12 +978,20 @@ export async function removeMaintainerOnlySkillSymlinks(
   }
 }
 
-export async function ensureCommandResolvable(command: string, cwd: string, env: NodeJS.ProcessEnv) {
+export async function ensureCommandResolvable(
+  command: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv
+) {
   const resolved = await resolveCommandPath(command, cwd, env);
   if (resolved) return;
   if (command.includes("/") || command.includes("\\")) {
-    const absolute = path.isAbsolute(command) ? command : path.resolve(cwd, command);
-    throw new Error(`Command is not executable: "${command}" (resolved: "${absolute}")`);
+    const absolute = path.isAbsolute(command)
+      ? command
+      : path.resolve(cwd, command);
+    throw new Error(
+      `Command is not executable: "${command}" (resolved: "${absolute}")`
+    );
   }
   throw new Error(`Command not found in PATH: "${command}"`);
 }
@@ -728,9 +1009,11 @@ export async function runChildProcess(
     onLogError?: (err: unknown, runId: string, message: string) => void;
     onSpawn?: (meta: { pid: number; startedAt: string }) => Promise<void>;
     stdin?: string;
-  },
+  }
 ): Promise<RunProcessResult> {
-  const onLogError = opts.onLogError ?? ((err, id, msg) => console.warn({ err, runId: id }, msg));
+  const onLogError =
+    opts.onLogError ??
+    ((err, id, msg) => console.warn({ err, runId: id }, msg));
 
   return new Promise<RunProcessResult>((resolve, reject) => {
     const rawMerged: NodeJS.ProcessEnv = { ...process.env, ...opts.env };
@@ -797,7 +1080,9 @@ export async function runChildProcess(
           stdout = appendWithCap(stdout, text);
           logChain = logChain
             .then(() => opts.onLog("stdout", text))
-            .catch((err) => onLogError(err, runId, "failed to append stdout log chunk"));
+            .catch((err) =>
+              onLogError(err, runId, "failed to append stdout log chunk")
+            );
         });
 
         child.stderr?.on("data", (chunk: unknown) => {
@@ -805,7 +1090,9 @@ export async function runChildProcess(
           stderr = appendWithCap(stderr, text);
           logChain = logChain
             .then(() => opts.onLog("stderr", text))
-            .catch((err) => onLogError(err, runId, "failed to append stderr log chunk"));
+            .catch((err) =>
+              onLogError(err, runId, "failed to append stderr log chunk")
+            );
         });
 
         child.on("error", (err: Error) => {
@@ -820,21 +1107,24 @@ export async function runChildProcess(
           reject(new Error(msg));
         });
 
-        child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
-          if (timeout) clearTimeout(timeout);
-          runningProcesses.delete(runId);
-          void logChain.finally(() => {
-            resolve({
-              exitCode: code,
-              signal,
-              timedOut,
-              stdout,
-              stderr,
-              pid: child.pid ?? null,
-              startedAt,
+        child.on(
+          "close",
+          (code: number | null, signal: NodeJS.Signals | null) => {
+            if (timeout) clearTimeout(timeout);
+            runningProcesses.delete(runId);
+            void logChain.finally(() => {
+              resolve({
+                exitCode: code,
+                signal,
+                timedOut,
+                stdout,
+                stderr,
+                pid: child.pid ?? null,
+                startedAt,
+              });
             });
-          });
-        });
+          }
+        );
       })
       .catch(reject);
   });

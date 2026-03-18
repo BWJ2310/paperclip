@@ -7,6 +7,7 @@ import { useSidebar } from "../context/SidebarContext";
 import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
 import { projectsApi } from "../api/projects";
+import { conversationsApi } from "../api/conversations";
 import { queryKeys } from "../lib/queryKeys";
 import {
   CommandDialog,
@@ -22,6 +23,7 @@ import {
   Bot,
   Hexagon,
   Target,
+  MessageSquare,
   LayoutDashboard,
   Inbox,
   DollarSign,
@@ -84,6 +86,12 @@ export function CommandPalette() {
     () => allProjects.filter((p) => !p.archivedAt),
     [allProjects],
   );
+
+  const { data: conversations = [] } = useQuery({
+    queryKey: queryKeys.conversations.list(selectedCompanyId!),
+    queryFn: () => conversationsApi.list(selectedCompanyId!),
+    enabled: !!selectedCompanyId && open,
+  });
 
   function go(path: string) {
     setOpen(false);
@@ -153,6 +161,10 @@ export function CommandPalette() {
           <CommandItem onSelect={() => go("/issues")}>
             <CircleDot className="mr-2 h-4 w-4" />
             Issues
+          </CommandItem>
+          <CommandItem onSelect={() => go("conversations")}>
+            <MessageSquare className="mr-2 h-4 w-4" />
+            Conversations
           </CommandItem>
           <CommandItem onSelect={() => go("/projects")}>
             <Hexagon className="mr-2 h-4 w-4" />
@@ -228,6 +240,23 @@ export function CommandPalette() {
                 <CommandItem key={project.id} onSelect={() => go(projectUrl(project))}>
                   <Hexagon className="mr-2 h-4 w-4" />
                   {project.name}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </>
+        )}
+
+        {conversations.length > 0 && (
+          <>
+            <CommandSeparator />
+            <CommandGroup heading="Conversations">
+              {conversations.slice(0, 10).map((conversation) => (
+                <CommandItem
+                  key={conversation.id}
+                  onSelect={() => go(`conversations/${conversation.id}`)}
+                >
+                  <MessageSquare className="mr-2 h-4 w-4" />
+                  {conversation.title}
                 </CommandItem>
               ))}
             </CommandGroup>

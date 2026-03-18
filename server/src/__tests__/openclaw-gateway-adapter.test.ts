@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
-import { execute, testEnvironment } from "@paperclipai/adapter-openclaw-gateway/server";
+import {
+  execute,
+  testEnvironment,
+} from "@paperclipai/adapter-openclaw-gateway/server";
 import {
   buildOpenClawGatewayConfig,
   parseOpenClawGatewayStdoutLine,
@@ -10,7 +13,7 @@ import type { AdapterExecutionContext } from "@paperclipai/adapter-utils";
 
 function buildContext(
   config: Record<string, unknown>,
-  overrides?: Partial<AdapterExecutionContext>,
+  overrides?: Partial<AdapterExecutionContext>
 ): AdapterExecutionContext {
   return {
     runId: "run-123",
@@ -29,7 +32,7 @@ function buildContext(
     },
     config,
     context: {
-      taskId: "task-123",
+      taskKey: "issue:issue-123",
       issueId: "issue-123",
       wakeReason: "issue_assigned",
       issueIds: ["issue-123"],
@@ -53,7 +56,7 @@ async function createMockGatewayServer(options?: {
         type: "event",
         event: "connect.challenge",
         payload: { nonce: "nonce-123" },
-      }),
+      })
     );
 
     socket.on("message", (raw) => {
@@ -77,11 +80,18 @@ async function createMockGatewayServer(options?: {
               type: "hello-ok",
               protocol: 3,
               server: { version: "test", connId: "conn-1" },
-              features: { methods: ["connect", "agent", "agent.wait"], events: ["agent"] },
+              features: {
+                methods: ["connect", "agent", "agent.wait"],
+                events: ["agent"],
+              },
               snapshot: { version: 1, ts: Date.now() },
-              policy: { maxPayload: 1_000_000, maxBufferedBytes: 1_000_000, tickIntervalMs: 30_000 },
+              policy: {
+                maxPayload: 1_000_000,
+                maxBufferedBytes: 1_000_000,
+                tickIntervalMs: 30_000,
+              },
             },
-          }),
+          })
         );
         return;
       }
@@ -103,7 +113,7 @@ async function createMockGatewayServer(options?: {
               status: "accepted",
               acceptedAt: Date.now(),
             },
-          }),
+          })
         );
 
         socket.send(
@@ -117,7 +127,7 @@ async function createMockGatewayServer(options?: {
               ts: Date.now(),
               data: { delta: "cha" },
             },
-          }),
+          })
         );
         socket.send(
           JSON.stringify({
@@ -130,7 +140,7 @@ async function createMockGatewayServer(options?: {
               ts: Date.now(),
               data: { delta: "chacha" },
             },
-          }),
+          })
         );
         return;
       }
@@ -147,7 +157,7 @@ async function createMockGatewayServer(options?: {
               startedAt: 1,
               endedAt: 2,
             },
-          }),
+          })
         );
       }
     });
@@ -187,7 +197,7 @@ async function createMockGatewayServerWithPairing() {
         type: "event",
         event: "connect.challenge",
         payload: { nonce: "nonce-123" },
-      }),
+      })
     );
 
     socket.on("message", (raw) => {
@@ -202,7 +212,9 @@ async function createMockGatewayServerWithPairing() {
       if (frame.type !== "req") return;
 
       if (frame.method === "connect") {
-        const device = frame.params?.device as Record<string, unknown> | undefined;
+        const device = frame.params?.device as
+          | Record<string, unknown>
+          | undefined;
         const deviceId = typeof device?.id === "string" ? device.id : null;
         if (deviceId) {
           lastSeenDeviceId = deviceId;
@@ -223,7 +235,7 @@ async function createMockGatewayServerWithPairing() {
                   reason: "not-paired",
                 },
               },
-            }),
+            })
           );
           socket.close(1008, "pairing required");
           return;
@@ -239,13 +251,23 @@ async function createMockGatewayServerWithPairing() {
               protocol: 3,
               server: { version: "test", connId: "conn-1" },
               features: {
-                methods: ["connect", "agent", "agent.wait", "device.pair.list", "device.pair.approve"],
+                methods: [
+                  "connect",
+                  "agent",
+                  "agent.wait",
+                  "device.pair.list",
+                  "device.pair.approve",
+                ],
                 events: ["agent"],
               },
               snapshot: { version: 1, ts: Date.now() },
-              policy: { maxPayload: 1_000_000, maxBufferedBytes: 1_000_000, tickIntervalMs: 30_000 },
+              policy: {
+                maxPayload: 1_000_000,
+                maxBufferedBytes: 1_000_000,
+                tickIntervalMs: 30_000,
+              },
             },
-          }),
+          })
         );
         return;
       }
@@ -265,9 +287,12 @@ async function createMockGatewayServerWithPairing() {
                       deviceId: lastSeenDeviceId ?? "device-unknown",
                     },
                   ],
-              paired: approved && lastSeenDeviceId ? [{ deviceId: lastSeenDeviceId }] : [],
+              paired:
+                approved && lastSeenDeviceId
+                  ? [{ deviceId: lastSeenDeviceId }]
+                  : [],
             },
-          }),
+          })
         );
         return;
       }
@@ -281,7 +306,7 @@ async function createMockGatewayServerWithPairing() {
               id: frame.id,
               ok: false,
               error: { code: "INVALID_REQUEST", message: "unknown requestId" },
-            }),
+            })
           );
           return;
         }
@@ -297,7 +322,7 @@ async function createMockGatewayServerWithPairing() {
                 deviceId: lastSeenDeviceId ?? "device-unknown",
               },
             },
-          }),
+          })
         );
         return;
       }
@@ -319,7 +344,7 @@ async function createMockGatewayServerWithPairing() {
               status: "accepted",
               acceptedAt: Date.now(),
             },
-          }),
+          })
         );
         socket.send(
           JSON.stringify({
@@ -332,7 +357,7 @@ async function createMockGatewayServerWithPairing() {
               ts: Date.now(),
               data: { delta: "ok" },
             },
-          }),
+          })
         );
         return;
       }
@@ -349,7 +374,7 @@ async function createMockGatewayServerWithPairing() {
               startedAt: 1,
               endedAt: 2,
             },
-          }),
+          })
         );
       }
     });
@@ -418,7 +443,7 @@ describe("openclaw gateway adapter execute", () => {
               logs.push(chunk);
             },
             context: {
-              taskId: "task-123",
+              taskKey: "issue:issue-123",
               issueId: "issue-123",
               wakeReason: "issue_assigned",
               issueIds: ["issue-123"],
@@ -440,8 +465,8 @@ describe("openclaw gateway adapter execute", () => {
                 },
               ],
             },
-          },
-        ),
+          }
+        )
       );
 
       expect(result.exitCode).toBe(0);
@@ -454,10 +479,23 @@ describe("openclaw gateway adapter execute", () => {
       expect(payload?.idempotencyKey).toBe("run-123");
       expect(payload?.sessionKey).toBe("paperclip:issue:issue-123");
       expect(String(payload?.message ?? "")).toContain("wake now");
-      expect(String(payload?.message ?? "")).toContain("PAPERCLIP_RUN_ID=run-123");
-      expect(String(payload?.message ?? "")).toContain("PAPERCLIP_TASK_ID=task-123");
+      expect(String(payload?.message ?? "")).toContain(
+        "PAPERCLIP_RUN_ID=run-123"
+      );
+      expect(String(payload?.message ?? "")).toContain(
+        "PAPERCLIP_TASK_KEY=issue:issue-123"
+      );
+      expect(String(payload?.message ?? "")).toContain(
+        "PAPERCLIP_TASK_ID=issue-123"
+      );
 
-      expect(logs.some((entry) => entry.includes("[openclaw-gateway:event] run=run-123 stream=assistant"))).toBe(true);
+      expect(
+        logs.some((entry) =>
+          entry.includes(
+            "[openclaw-gateway:event] run=run-123 stream=assistant"
+          )
+        )
+      ).toBe(true);
     } finally {
       await gateway.close();
     }
@@ -498,7 +536,7 @@ describe("openclaw gateway adapter execute", () => {
             "x-openclaw-token": "gateway-token",
           },
           waitTimeoutMs: 2000,
-        }),
+        })
       );
 
       expect(result.exitCode).toBe(0);
@@ -538,16 +576,22 @@ describe("openclaw gateway adapter execute", () => {
             onLog: async (_stream, chunk) => {
               logs.push(chunk);
             },
-          },
-        ),
+          }
+        )
       );
 
       expect(result.exitCode).toBe(0);
       expect(result.summary).toContain("ok");
-      expect(logs.some((entry) => entry.includes("pairing required; attempting automatic pairing approval"))).toBe(
-        true,
-      );
-      expect(logs.some((entry) => entry.includes("auto-approved pairing request"))).toBe(true);
+      expect(
+        logs.some((entry) =>
+          entry.includes(
+            "pairing required; attempting automatic pairing approval"
+          )
+        )
+      ).toBe(true);
+      expect(
+        logs.some((entry) => entry.includes("auto-approved pairing request"))
+      ).toBe(true);
       expect(gateway.getAgentPayload()).toBeTruthy();
     } finally {
       await gateway.close();
@@ -606,7 +650,7 @@ describe("openclaw gateway ui build config", () => {
             },
           ],
         },
-      }),
+      })
     );
   });
 });
@@ -620,6 +664,10 @@ describe("openclaw gateway testEnvironment", () => {
     });
 
     expect(result.status).toBe("fail");
-    expect(result.checks.some((check) => check.code === "openclaw_gateway_url_missing")).toBe(true);
+    expect(
+      result.checks.some(
+        (check) => check.code === "openclaw_gateway_url_missing"
+      )
+    ).toBe(true);
   });
 });

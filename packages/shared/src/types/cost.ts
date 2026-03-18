@@ -8,6 +8,7 @@ export interface CostEvent {
   projectId: string | null;
   goalId: string | null;
   heartbeatRunId: string | null;
+  conversationId: string | null;
   billingCode: string | null;
   provider: string;
   biller: string;

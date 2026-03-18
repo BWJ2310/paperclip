@@ -21,6 +21,7 @@ import { InlineEditor } from "../components/InlineEditor";
 import { CommentThread } from "../components/CommentThread";
 import { IssueDocumentsSection } from "../components/IssueDocumentsSection";
 import { IssueProperties } from "../components/IssueProperties";
+import { LinkedConversationsSection } from "../components/LinkedConversationsSection";
 import { LiveRunWidget } from "../components/LiveRunWidget";
 import type { MentionOption } from "../components/MarkdownEditor";
 import { ScrollToBottom } from "../components/ScrollToBottom";
@@ -221,6 +222,16 @@ export function IssueDetail() {
     enabled: !!issueId,
   });
   const resolvedCompanyId = issue?.companyId ?? selectedCompanyId;
+
+  const {
+    data: linkedConversations,
+    isLoading: linkedConversationsLoading,
+    error: linkedConversationsError,
+  } = useQuery({
+    queryKey: queryKeys.issues.linkedConversations(issueId!),
+    queryFn: () => issuesApi.listLinkedConversations(issueId!),
+    enabled: !!issueId,
+  });
 
   const { data: comments } = useQuery({
     queryKey: queryKeys.issues.comments(issueId!),
@@ -918,6 +929,21 @@ export function IssueDetail() {
         className="space-y-3"
         itemClassName="rounded-lg border border-border p-3"
         missingBehavior="placeholder"
+      />
+
+      <LinkedConversationsSection
+        companyId={issue.companyId}
+        targetKind="issue"
+        targetId={issue.id}
+        targetLabel={issue.identifier ?? issue.title}
+        conversations={linkedConversations}
+        isLoading={linkedConversationsLoading}
+        error={(linkedConversationsError as Error | null) ?? null}
+        onChanged={() => {
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.issues.linkedConversations(issue.id),
+          });
+        }}
       />
 
       <IssueDocumentsSection

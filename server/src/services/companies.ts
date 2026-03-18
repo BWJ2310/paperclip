@@ -1,6 +1,7 @@
 import { and, count, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
+  agentTargetConversationMemory,
   companies,
   companyLogos,
   assets,
@@ -9,6 +10,13 @@ import {
   agentRuntimeState,
   agentTaskSessions,
   agentWakeupRequests,
+  conversationMessageRefs,
+  conversationMessages,
+  conversationParticipants,
+  conversationReadStates,
+  conversationTargetLinks,
+  conversationTargetSuppressions,
+  conversations,
   issues,
   issueComments,
   projects,
@@ -262,6 +270,27 @@ export function companyService(db: Db) {
         await tx.delete(agentWakeupRequests).where(eq(agentWakeupRequests.companyId, id));
         await tx.delete(agentApiKeys).where(eq(agentApiKeys.companyId, id));
         await tx.delete(agentRuntimeState).where(eq(agentRuntimeState.companyId, id));
+        await tx
+          .delete(agentTargetConversationMemory)
+          .where(eq(agentTargetConversationMemory.companyId, id));
+        await tx
+          .delete(conversationReadStates)
+          .where(eq(conversationReadStates.companyId, id));
+        await tx
+          .delete(conversationTargetSuppressions)
+          .where(eq(conversationTargetSuppressions.companyId, id));
+        await tx
+          .delete(conversationTargetLinks)
+          .where(eq(conversationTargetLinks.companyId, id));
+        await tx
+          .delete(conversationMessageRefs)
+          .where(eq(conversationMessageRefs.companyId, id));
+        await tx
+          .delete(conversationMessages)
+          .where(eq(conversationMessages.companyId, id));
+        await tx
+          .delete(conversationParticipants)
+          .where(eq(conversationParticipants.companyId, id));
         await tx.delete(issueComments).where(eq(issueComments.companyId, id));
         await tx.delete(costEvents).where(eq(costEvents.companyId, id));
         await tx.delete(financeEvents).where(eq(financeEvents.companyId, id));
@@ -275,6 +304,7 @@ export function companyService(db: Db) {
         await tx.delete(issues).where(eq(issues.companyId, id));
         await tx.delete(companyLogos).where(eq(companyLogos.companyId, id));
         await tx.delete(assets).where(eq(assets.companyId, id));
+        await tx.delete(conversations).where(eq(conversations.companyId, id));
         await tx.delete(goals).where(eq(goals.companyId, id));
         await tx.delete(projects).where(eq(projects.companyId, id));
         await tx.delete(agents).where(eq(agents.companyId, id));

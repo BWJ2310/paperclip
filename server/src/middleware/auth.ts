@@ -2,10 +2,16 @@ import { createHash } from "node:crypto";
 import type { Request, RequestHandler } from "express";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agentApiKeys, agents, companyMemberships, instanceUserRoles } from "@paperclipai/db";
+import {
+  agentApiKeys,
+  agents,
+  companyMemberships,
+  instanceUserRoles,
+} from "@paperclipai/db";
 import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
 import type { DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
+import { LOCAL_BOARD_USER_ID } from "../auth/board-actor.js";
 import { logger } from "./logger.js";
 
 function hashToken(token: string) {
@@ -17,11 +23,19 @@ interface ActorMiddlewareOptions {
   resolveSession?: (req: Request) => Promise<BetterAuthSessionResult | null>;
 }
 
-export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHandler {
+export function actorMiddleware(
+  db: Db,
+  opts: ActorMiddlewareOptions
+): RequestHandler {
   return async (req, _res, next) => {
     req.actor =
       opts.deploymentMode === "local_trusted"
-        ? { type: "board", userId: "local-board", isInstanceAdmin: true, source: "local_implicit" }
+        ? {
+            type: "board",
+            userId: LOCAL_BOARD_USER_ID,
+            isInstanceAdmin: true,
+            source: "local_implicit",
+          }
         : { type: "none", source: "none" };
 
     const runIdHeader = req.header("x-paperclip-run-id");
@@ -35,7 +49,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         } catch (err) {
           logger.warn(
             { err, method: req.method, url: req.originalUrl },
-            "Failed to resolve auth session from request headers",
+            "Failed to resolve auth session from request headers"
           );
         }
         if (session?.user?.id) {
@@ -44,7 +58,12 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
             db
               .select({ id: instanceUserRoles.id })
               .from(instanceUserRoles)
-              .where(and(eq(instanceUserRoles.userId, userId), eq(instanceUserRoles.role, "instance_admin")))
+              .where(
+                and(
+                  eq(instanceUserRoles.userId, userId),
+                  eq(instanceUserRoles.role, "instance_admin")
+                )
+              )
               .then((rows) => rows[0] ?? null),
             db
               .select({ companyId: companyMemberships.companyId })
@@ -53,8 +72,8 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
                 and(
                   eq(companyMemberships.principalType, "user"),
                   eq(companyMemberships.principalId, userId),
-                  eq(companyMemberships.status, "active"),
-                ),
+                  eq(companyMemberships.status, "active")
+                )
               ),
           ]);
           req.actor = {
@@ -84,7 +103,9 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
     const key = await db
       .select()
       .from(agentApiKeys)
-      .where(and(eq(agentApiKeys.keyHash, tokenHash), isNull(agentApiKeys.revokedAt)))
+      .where(
+        and(eq(agentApiKeys.keyHash, tokenHash), isNull(agentApiKeys.revokedAt))
+      )
       .then((rows) => rows[0] ?? null);
 
     if (!key) {
@@ -105,7 +126,10 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         return;
       }
 
-      if (agentRecord.status === "terminated" || agentRecord.status === "pending_approval") {
+      if (
+        agentRecord.status === "terminated" ||
+        agentRecord.status === "pending_approval"
+      ) {
         next();
         return;
       }
@@ -133,7 +157,11 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       .where(eq(agents.id, key.agentId))
       .then((rows) => rows[0] ?? null);
 
-    if (!agentRecord || agentRecord.status === "terminated" || agentRecord.status === "pending_approval") {
+    if (
+      !agentRecord ||
+      agentRecord.status === "terminated" ||
+      agentRecord.status === "pending_approval"
+    ) {
       next();
       return;
     }

@@ -68,7 +68,9 @@ const mockIssueService = vi.hoisted(() => ({
 
 const mockSecretService = vi.hoisted(() => ({
   normalizeHireApprovalPayloadForPersistence: vi.fn(),
-  normalizeAdapterConfigForPersistence: vi.fn().mockImplementation((_, config) => config),
+  normalizeAdapterConfigForPersistence: vi
+    .fn()
+    .mockImplementation((_, config) => config),
   resolveAdapterConfigForRuntime: vi.fn(),
 }));
 
@@ -108,10 +110,33 @@ vi.mock("@paperclipai/adapter-cursor-local", () => ({
 }));
 
 vi.mock("@paperclipai/adapter-opencode-local/server", () => ({
-  ensureOpenCodeModelConfiguredAndAvailable: vi.fn().mockResolvedValue(undefined),
+  ensureOpenCodeModelConfiguredAndAvailable: vi
+    .fn()
+    .mockResolvedValue(undefined),
 }));
 
-function createApp(actorOverrides: Record<string, unknown> = {}) {
+function createDbStub(companyOverrides: Record<string, unknown> = {}) {
+  return {
+    select: () => ({
+      from: () => ({
+        where: () =>
+          Promise.resolve([
+            {
+              id: COMPANY_ID,
+              name: "Test Company",
+              requireBoardApprovalForNewAgents: true,
+              ...companyOverrides,
+            },
+          ]),
+      }),
+    }),
+  };
+}
+
+function createApp(
+  actorOverrides: Record<string, unknown> = {},
+  db = createDbStub()
+) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
@@ -125,7 +150,7 @@ function createApp(actorOverrides: Record<string, unknown> = {}) {
     };
     next();
   });
-  app.use("/api", agentRoutes({} as any));
+  app.use("/api", agentRoutes(db as any));
   app.use(errorHandler);
   return app;
 }
@@ -141,24 +166,38 @@ describe("agentRoutes", () => {
 
   describe("GET /companies/:companyId/agents", () => {
     it("lists agents for company", async () => {
-      mockAgentService.list.mockResolvedValue([{ id: AGENT_ID, name: "Agent 1" }]);
-      const res = await request(createApp()).get(`/api/companies/${COMPANY_ID}/agents`);
+      mockAgentService.list.mockResolvedValue([
+        { id: AGENT_ID, name: "Agent 1" },
+      ]);
+      const res = await request(createApp()).get(
+        `/api/companies/${COMPANY_ID}/agents`
+      );
       expect(res.status).toBe(200);
       expect(res.body).toHaveLength(1);
     });
 
     it("returns 403 for wrong company", async () => {
-      const res = await request(createApp()).get("/api/companies/other-company/agents");
+      const res = await request(createApp()).get(
+        "/api/companies/other-company/agents"
+      );
       expect(res.status).toBe(403);
     });
   });
 
   describe("GET /agents/me", () => {
     it("returns current agent", async () => {
-      mockAgentService.getById.mockResolvedValue({ id: AGENT_ID, companyId: COMPANY_ID, name: "MyAgent" });
-      const res = await request(createApp({
-        type: "agent", agentId: AGENT_ID, companyId: COMPANY_ID,
-      })).get("/api/agents/me");
+      mockAgentService.getById.mockResolvedValue({
+        id: AGENT_ID,
+        companyId: COMPANY_ID,
+        name: "MyAgent",
+      });
+      const res = await request(
+        createApp({
+          type: "agent",
+          agentId: AGENT_ID,
+          companyId: COMPANY_ID,
+        })
+      ).get("/api/agents/me");
       expect(res.status).toBe(200);
       expect(res.body.name).toBe("MyAgent");
     });
@@ -171,7 +210,11 @@ describe("agentRoutes", () => {
 
   describe("GET /agents/:id", () => {
     it("returns an agent by id", async () => {
-      mockAgentService.getById.mockResolvedValue({ id: AGENT_ID, companyId: COMPANY_ID, name: "Agent" });
+      mockAgentService.getById.mockResolvedValue({
+        id: AGENT_ID,
+        companyId: COMPANY_ID,
+        name: "Agent",
+      });
       const res = await request(createApp()).get(`/api/agents/${AGENT_ID}`);
       expect(res.status).toBe(200);
       expect(res.body.name).toBe("Agent");
@@ -186,7 +229,11 @@ describe("agentRoutes", () => {
 
   describe("POST /companies/:companyId/agents (direct create)", () => {
     it("creates an agent for instance admin board user", async () => {
-      mockAgentService.create.mockResolvedValue({ id: AGENT_ID_2, companyId: COMPANY_ID, name: "New Agent" });
+      mockAgentService.create.mockResolvedValue({
+        id: AGENT_ID_2,
+        companyId: COMPANY_ID,
+        name: "New Agent",
+      });
       mockAccessService.ensureMembership.mockResolvedValue(undefined);
       mockAccessService.setPrincipalGrants.mockResolvedValue(undefined);
       const res = await request(createApp({ isInstanceAdmin: true }))
@@ -202,7 +249,11 @@ describe("agentRoutes", () => {
     });
 
     it("allows non-admin board user to create directly", async () => {
-      mockAgentService.create.mockResolvedValue({ id: AGENT_ID_2, companyId: COMPANY_ID, name: "New Agent" });
+      mockAgentService.create.mockResolvedValue({
+        id: AGENT_ID_2,
+        companyId: COMPANY_ID,
+        name: "New Agent",
+      });
       const res = await request(createApp())
         .post(`/api/companies/${COMPANY_ID}/agents`)
         .send({
@@ -214,15 +265,55 @@ describe("agentRoutes", () => {
       expect(res.status).toBe(201);
     });
 
+    it("normalizes legacy wake-policy keys before create", async () => {
+      mockAgentService.create.mockResolvedValue({
+        id: AGENT_ID_2,
+        companyId: COMPANY_ID,
+        name: "New Agent",
+      });
+      const res = await request(createApp())
+        .post(`/api/companies/${COMPANY_ID}/agents`)
+        .send({
+          name: "New Agent",
+          role: "general",
+          adapterType: "process",
+          adapterConfig: {},
+          runtimeConfig: {
+            heartbeat: {
+              wakeOnDemand: false,
+              intervalSec: 300,
+            },
+          },
+        });
+      expect(res.status).toBe(201);
+      expect(mockAgentService.create).toHaveBeenCalledWith(
+        COMPANY_ID,
+        expect.objectContaining({
+          runtimeConfig: {
+            heartbeat: {
+              wakeOnSignal: false,
+              intervalSec: 300,
+            },
+          },
+        })
+      );
+    });
+
     it("returns 403 for agent actor without agents:create permission", async () => {
       mockAgentService.getById.mockResolvedValue({
-        id: AGENT_ID, companyId: COMPANY_ID, role: "general",
+        id: AGENT_ID,
+        companyId: COMPANY_ID,
+        role: "general",
         permissions: null,
       });
       mockAccessService.hasPermission.mockResolvedValue({ granted: false });
-      const res = await request(createApp({
-        type: "agent", agentId: AGENT_ID, companyId: COMPANY_ID,
-      }))
+      const res = await request(
+        createApp({
+          type: "agent",
+          agentId: AGENT_ID,
+          companyId: COMPANY_ID,
+        })
+      )
         .post(`/api/companies/${COMPANY_ID}/agents`)
         .send({
           name: "New Agent",
@@ -234,9 +325,13 @@ describe("agentRoutes", () => {
     });
 
     it("returns 403 for agent from wrong company", async () => {
-      const res = await request(createApp({
-        type: "agent", agentId: AGENT_ID, companyId: "other-company",
-      }))
+      const res = await request(
+        createApp({
+          type: "agent",
+          agentId: AGENT_ID,
+          companyId: "other-company",
+        })
+      )
         .post(`/api/companies/${COMPANY_ID}/agents`)
         .send({
           name: "New Agent",
@@ -248,14 +343,128 @@ describe("agentRoutes", () => {
     });
   });
 
+  describe("POST /companies/:companyId/agent-hires", () => {
+    it("normalizes legacy wake-policy keys for persisted config and approval snapshots", async () => {
+      mockAgentService.create.mockResolvedValue({
+        id: AGENT_ID_2,
+        companyId: COMPANY_ID,
+        name: "New Agent",
+        role: "general",
+        adapterType: "process",
+        adapterConfig: {},
+        runtimeConfig: {},
+        budgetMonthlyCents: 0,
+      });
+      mockApprovalService.create.mockResolvedValue({
+        id: "approval-1",
+        type: "hire_agent",
+      });
+
+      const res = await request(createApp())
+        .post(`/api/companies/${COMPANY_ID}/agent-hires`)
+        .send({
+          name: "New Agent",
+          role: "general",
+          adapterType: "process",
+          adapterConfig: {},
+          runtimeConfig: {
+            heartbeat: {
+              wakeOnAutomation: false,
+              intervalSec: 300,
+            },
+          },
+        });
+
+      expect(res.status).toBe(201);
+      expect(mockAgentService.create).toHaveBeenCalledWith(
+        COMPANY_ID,
+        expect.objectContaining({
+          runtimeConfig: {
+            heartbeat: {
+              wakeOnSignal: false,
+              intervalSec: 300,
+            },
+          },
+        })
+      );
+      expect(mockApprovalService.create).toHaveBeenCalledWith(
+        COMPANY_ID,
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            runtimeConfig: {
+              heartbeat: {
+                wakeOnSignal: false,
+                intervalSec: 300,
+              },
+            },
+            requestedConfigurationSnapshot: expect.objectContaining({
+              runtimeConfig: {
+                heartbeat: {
+                  wakeOnSignal: false,
+                  intervalSec: 300,
+                },
+              },
+            }),
+          }),
+        })
+      );
+    });
+  });
+
   describe("PATCH /agents/:id", () => {
     it("updates an agent for board user", async () => {
-      mockAgentService.getById.mockResolvedValue({ id: AGENT_ID, companyId: COMPANY_ID, name: "Old" });
-      mockAgentService.update.mockResolvedValue({ id: AGENT_ID, companyId: COMPANY_ID, name: "New" });
+      mockAgentService.getById.mockResolvedValue({
+        id: AGENT_ID,
+        companyId: COMPANY_ID,
+        name: "Old",
+      });
+      mockAgentService.update.mockResolvedValue({
+        id: AGENT_ID,
+        companyId: COMPANY_ID,
+        name: "New",
+      });
       const res = await request(createApp())
         .patch(`/api/agents/${AGENT_ID}`)
         .send({ name: "New" });
       expect(res.status).toBe(200);
+    });
+
+    it("normalizes legacy wake-policy keys before patching runtimeConfig", async () => {
+      mockAgentService.getById.mockResolvedValue({
+        id: AGENT_ID,
+        companyId: COMPANY_ID,
+        name: "Old",
+        adapterType: "process",
+        adapterConfig: {},
+      });
+      mockAgentService.update.mockResolvedValue({
+        id: AGENT_ID,
+        companyId: COMPANY_ID,
+        name: "New",
+      });
+      const res = await request(createApp())
+        .patch(`/api/agents/${AGENT_ID}`)
+        .send({
+          runtimeConfig: {
+            heartbeat: {
+              wakeOnAssignment: false,
+              intervalSec: 300,
+            },
+          },
+        });
+      expect(res.status).toBe(200);
+      expect(mockAgentService.update).toHaveBeenCalledWith(
+        AGENT_ID,
+        expect.objectContaining({
+          runtimeConfig: {
+            heartbeat: {
+              wakeOnSignal: false,
+              intervalSec: 300,
+            },
+          },
+        }),
+        expect.any(Object)
+      );
     });
 
     it("returns 404 for nonexistent agent", async () => {
@@ -269,7 +478,10 @@ describe("agentRoutes", () => {
 
   describe("DELETE /agents/:id", () => {
     it("deletes an agent", async () => {
-      mockAgentService.getById.mockResolvedValue({ id: AGENT_ID, companyId: COMPANY_ID });
+      mockAgentService.getById.mockResolvedValue({
+        id: AGENT_ID,
+        companyId: COMPANY_ID,
+      });
       mockAgentService.remove.mockResolvedValue({ id: AGENT_ID });
       const res = await request(createApp()).delete(`/api/agents/${AGENT_ID}`);
       expect(res.status).toBe(200);
@@ -278,18 +490,30 @@ describe("agentRoutes", () => {
 
   describe("POST /agents/:id/pause", () => {
     it("pauses an agent", async () => {
-      mockAgentService.pause.mockResolvedValue({ id: AGENT_ID, companyId: COMPANY_ID, status: "paused" });
+      mockAgentService.pause.mockResolvedValue({
+        id: AGENT_ID,
+        companyId: COMPANY_ID,
+        status: "paused",
+      });
       mockHeartbeatService.cancelActiveForAgent.mockResolvedValue(undefined);
-      const res = await request(createApp()).post(`/api/agents/${AGENT_ID}/pause`);
+      const res = await request(createApp()).post(
+        `/api/agents/${AGENT_ID}/pause`
+      );
       expect(res.status).toBe(200);
     });
   });
 
   describe("POST /agents/:id/terminate", () => {
     it("terminates an agent", async () => {
-      mockAgentService.terminate.mockResolvedValue({ id: AGENT_ID, companyId: COMPANY_ID, status: "terminated" });
+      mockAgentService.terminate.mockResolvedValue({
+        id: AGENT_ID,
+        companyId: COMPANY_ID,
+        status: "terminated",
+      });
       mockHeartbeatService.cancelActiveForAgent.mockResolvedValue(undefined);
-      const res = await request(createApp()).post(`/api/agents/${AGENT_ID}/terminate`);
+      const res = await request(createApp()).post(
+        `/api/agents/${AGENT_ID}/terminate`
+      );
       expect(res.status).toBe(200);
     });
   });
@@ -297,14 +521,19 @@ describe("agentRoutes", () => {
   describe("GET /agents/:id/keys", () => {
     it("lists api keys for an agent", async () => {
       mockAgentService.listKeys.mockResolvedValue([{ id: "k1" }]);
-      const res = await request(createApp()).get(`/api/agents/${AGENT_ID}/keys`);
+      const res = await request(createApp()).get(
+        `/api/agents/${AGENT_ID}/keys`
+      );
       expect(res.status).toBe(200);
     });
   });
 
   describe("POST /agents/:id/wakeup", () => {
     it("wakes up an agent", async () => {
-      mockAgentService.getById.mockResolvedValue({ id: AGENT_ID, companyId: COMPANY_ID });
+      mockAgentService.getById.mockResolvedValue({
+        id: AGENT_ID,
+        companyId: COMPANY_ID,
+      });
       mockHeartbeatService.wakeup.mockResolvedValue({ id: "run-1" });
       const res = await request(createApp())
         .post(`/api/agents/${AGENT_ID}/wakeup`)
@@ -314,12 +543,34 @@ describe("agentRoutes", () => {
     });
 
     it("returns 202 when wakeup is skipped", async () => {
-      mockAgentService.getById.mockResolvedValue({ id: AGENT_ID, companyId: COMPANY_ID });
+      mockAgentService.getById.mockResolvedValue({
+        id: AGENT_ID,
+        companyId: COMPANY_ID,
+      });
       mockHeartbeatService.wakeup.mockResolvedValue(null);
       const res = await request(createApp())
         .post(`/api/agents/${AGENT_ID}/wakeup`)
         .send({ reason: "test" });
       expect(res.status).toBe(202);
+    });
+
+    it("accepts conversation_message as a canonical wake source", async () => {
+      mockAgentService.getById.mockResolvedValue({
+        id: AGENT_ID,
+        companyId: COMPANY_ID,
+      });
+      mockHeartbeatService.wakeup.mockResolvedValue({ id: "run-1" });
+      const res = await request(createApp())
+        .post(`/api/agents/${AGENT_ID}/wakeup`)
+        .send({ source: "conversation_message", reason: "reply" });
+      expect(res.status).toBe(202);
+      expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
+        AGENT_ID,
+        expect.objectContaining({
+          source: "conversation_message",
+          reason: "reply",
+        })
+      );
     });
   });
 });

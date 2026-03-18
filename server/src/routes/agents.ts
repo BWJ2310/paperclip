@@ -38,6 +38,7 @@ import {
   issueApprovalService,
   issueService,
   logActivity,
+  normalizeAgentRuntimeConfigForPersistence,
   secretService,
   syncInstructionsBundleConfigFromFilePath,
   workspaceOperationService,
@@ -1333,6 +1334,9 @@ export function agentRoutes(db: Db) {
     const createdAgent = await svc.create(companyId, {
       ...createInput,
       adapterConfig: normalizedAdapterConfig,
+      runtimeConfig: normalizeAgentRuntimeConfigForPersistence(
+        req.body.runtimeConfig
+      ),
       status: "idle",
       spentMonthlyCents: 0,
       lastHeartbeatAt: null,

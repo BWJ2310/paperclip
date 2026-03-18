@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
-import { useParams, useNavigate, Link, Navigate, useBeforeUnload } from "@/lib/router";
+import {
+  useParams,
+  useNavigate,
+  Link,
+  Navigate,
+  useBeforeUnload,
+} from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   agentsApi,
@@ -12,7 +18,13 @@ import { budgetsApi } from "../api/budgets";
 import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { ApiError } from "../api/client";
-import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
+import {
+  ChartCard,
+  RunActivityChart,
+  PriorityChart,
+  IssueStatusChart,
+  SuccessRateChart,
+} from "../components/ActivityCharts";
 import { activityApi } from "../api/activity";
 import { issuesApi } from "../api/issues";
 import { usePanel } from "../context/PanelContext";
@@ -38,7 +50,13 @@ import { RunButton, PauseResumeButton } from "../components/AgentActionButtons";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
 import { PackageFileTree, buildFileTree } from "../components/PackageFileTree";
 import { ScrollToBottom } from "../components/ScrollToBottom";
-import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
+import {
+  formatCents,
+  formatDate,
+  relativeTime,
+  formatTokens,
+  visibleRunCostUsd,
+} from "../lib/utils";
 import { cn } from "../lib/utils";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -73,8 +91,13 @@ import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/component
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { AgentIcon, AgentIconPicker } from "../components/AgentIconPicker";
-import { RunTranscriptView, type TranscriptMode } from "../components/transcript/RunTranscriptView";
 import {
+  RunTranscriptView,
+  type TranscriptMode,
+} from "../components/transcript/RunTranscriptView";
+import {
+  buildIssueTaskKey,
+  deriveCanonicalTaskKey,
   isUuidLike,
   type Agent,
   type AgentSkillEntry,
@@ -87,7 +110,10 @@ import {
   type LiveEvent,
   type WorkspaceOperation,
 } from "@paperclipai/shared";
-import { redactHomePathUserSegments, redactHomePathUserSegmentsInValue } from "@paperclipai/adapter-utils";
+import {
+  redactHomePathUserSegments,
+  redactHomePathUserSegmentsInValue,
+} from "@paperclipai/adapter-utils";
 import { agentRouteRef } from "../lib/utils";
 import {
   applyAgentSkillSnapshot,
@@ -95,8 +121,14 @@ import {
   isReadOnlyUnmanagedSkillEntry,
 } from "../lib/agent-skills-state";
 
-const runStatusIcons: Record<string, { icon: typeof CheckCircle2; color: string }> = {
-  succeeded: { icon: CheckCircle2, color: "text-green-600 dark:text-green-400" },
+const runStatusIcons: Record<
+  string,
+  { icon: typeof CheckCircle2; color: string }
+> = {
+  succeeded: {
+    icon: CheckCircle2,
+    color: "text-green-600 dark:text-green-400",
+  },
   failed: { icon: XCircle, color: "text-red-600 dark:text-red-400" },
   running: { icon: Loader2, color: "text-cyan-600 dark:text-cyan-400" },
   queued: { icon: Clock, color: "text-yellow-600 dark:text-yellow-400" },
@@ -107,7 +139,8 @@ const runStatusIcons: Record<string, { icon: typeof CheckCircle2; color: string 
 const REDACTED_ENV_VALUE = "***REDACTED***";
 const SECRET_ENV_KEY_RE =
   /(api[-_]?key|access[-_]?token|auth(?:_?token)?|authorization|bearer|secret|passwd|password|credential|jwt|private[-_]?key|cookie|connectionstring)/i;
-const JWT_VALUE_RE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?$/;
+const JWT_VALUE_RE =
+  /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?$/;
 
 function redactPathText(value: string, censorUsernameInLogs: boolean) {
   return redactHomePathUserSegments(value, { enabled: censorUsernameInLogs });
@@ -164,6 +197,7 @@ const sourceLabels: Record<string, string> = {
   assignment: "Assignment",
   on_demand: "On-demand",
   automation: "Automation",
+  conversation_message: "Conversation",
 };
 
 const LIVE_SCROLL_BOTTOM_TOLERANCE_PX = 32;
@@ -175,7 +209,9 @@ function isWindowContainer(container: ScrollContainer): container is Window {
 
 function isElementScrollContainer(element: HTMLElement): boolean {
   const overflowY = window.getComputedStyle(element).overflowY;
-  return overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay";
+  return (
+    overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay"
+  );
 }
 
 function findScrollContainer(anchor: HTMLElement | null): ScrollContainer {
@@ -187,11 +223,14 @@ function findScrollContainer(anchor: HTMLElement | null): ScrollContainer {
   return window;
 }
 
-function readScrollMetrics(container: ScrollContainer): { scrollHeight: number; distanceFromBottom: number } {
+function readScrollMetrics(container: ScrollContainer): {
+  scrollHeight: number;
+  distanceFromBottom: number;
+} {
   if (isWindowContainer(container)) {
     const pageHeight = Math.max(
       document.documentElement.scrollHeight,
-      document.body.scrollHeight,
+      document.body.scrollHeight
     );
     const viewportBottom = window.scrollY + window.innerHeight;
     return {
@@ -207,11 +246,14 @@ function readScrollMetrics(container: ScrollContainer): { scrollHeight: number; 
   };
 }
 
-function scrollToContainerBottom(container: ScrollContainer, behavior: ScrollBehavior = "auto") {
+function scrollToContainerBottom(
+  container: ScrollContainer,
+  behavior: ScrollBehavior = "auto"
+) {
   if (isWindowContainer(container)) {
     const pageHeight = Math.max(
       document.documentElement.scrollHeight,
-      document.body.scrollHeight,
+      document.body.scrollHeight
     );
     window.scrollTo({ top: pageHeight, behavior });
     return;
@@ -257,7 +299,7 @@ function runMetrics(run: HeartbeatRun) {
     usage,
     "cachedInputTokens",
     "cached_input_tokens",
-    "cache_read_input_tokens",
+    "cache_read_input_tokens"
   );
   const cost =
     visibleRunCostUsd(usage, result);
@@ -270,10 +312,15 @@ function runMetrics(run: HeartbeatRun) {
   };
 }
 
-type RunLogChunk = { ts: string; stream: "stdout" | "stderr" | "system"; chunk: string };
+type RunLogChunk = {
+  ts: string;
+  stream: "stdout" | "stderr" | "system";
+  chunk: string;
+};
 
 function asRecord(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return null;
   return value as Record<string, unknown>;
 }
 
@@ -513,8 +560,59 @@ function WorkspaceOperationsSection({
   );
 }
 
+function asPositiveInteger(value: unknown): number | null {
+  const parsed =
+    typeof value === "number"
+      ? Math.floor(value)
+      : typeof value === "string"
+        ? Number.parseInt(value, 10)
+        : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function copyConversationContextPayload(
+  payload: Record<string, unknown>,
+  context: Record<string, unknown>
+) {
+  const conversationId = asNonEmptyString(context.conversationId);
+  const conversationMessageId = asNonEmptyString(context.conversationMessageId);
+  const conversationMessageSequence = asPositiveInteger(
+    context.conversationMessageSequence
+  );
+  const conversationResponseMode = asNonEmptyString(
+    context.conversationResponseMode
+  );
+  const conversationTargetKind = asNonEmptyString(context.conversationTargetKind);
+  const conversationTargetId = asNonEmptyString(context.conversationTargetId);
+
+  if (conversationId) payload.conversationId = conversationId;
+  if (conversationMessageId) payload.conversationMessageId = conversationMessageId;
+  if (conversationMessageSequence) {
+    payload.conversationMessageSequence = conversationMessageSequence;
+  }
+  if (
+    conversationResponseMode === "optional" ||
+    conversationResponseMode === "required"
+  ) {
+    payload.conversationResponseMode = conversationResponseMode;
+  }
+  if (
+    (conversationTargetKind === "issue" ||
+      conversationTargetKind === "goal" ||
+      conversationTargetKind === "project") &&
+    conversationTargetId
+  ) {
+    payload.conversationTargetKind = conversationTargetKind;
+    payload.conversationTargetId = conversationTargetId;
+  }
+}
 export function AgentDetail() {
-  const { companyPrefix, agentId, tab: urlTab, runId: urlRunId } = useParams<{
+  const {
+    companyPrefix,
+    agentId,
+    tab: urlTab,
+    runId: urlRunId,
+  } = useParams<{
     companyPrefix?: string;
     agentId: string;
     tab?: string;
@@ -541,15 +639,28 @@ export function AgentDetail() {
   const routeCompanyId = useMemo(() => {
     if (!companyPrefix) return null;
     const requestedPrefix = companyPrefix.toUpperCase();
-    return companies.find((company) => company.issuePrefix.toUpperCase() === requestedPrefix)?.id ?? null;
+    return (
+      companies.find(
+        (company) => company.issuePrefix.toUpperCase() === requestedPrefix
+      )?.id ?? null
+    );
   }, [companies, companyPrefix]);
   const lookupCompanyId = routeCompanyId ?? selectedCompanyId ?? undefined;
-  const canFetchAgent = routeAgentRef.length > 0 && (isUuidLike(routeAgentRef) || Boolean(lookupCompanyId));
-  const setSaveConfigAction = useCallback((fn: (() => void) | null) => { saveConfigActionRef.current = fn; }, []);
-  const setCancelConfigAction = useCallback((fn: (() => void) | null) => { cancelConfigActionRef.current = fn; }, []);
+  const canFetchAgent =
+    routeAgentRef.length > 0 &&
+    (isUuidLike(routeAgentRef) || Boolean(lookupCompanyId));
+  const setSaveConfigAction = useCallback((fn: (() => void) | null) => {
+    saveConfigActionRef.current = fn;
+  }, []);
+  const setCancelConfigAction = useCallback((fn: (() => void) | null) => {
+    cancelConfigActionRef.current = fn;
+  }, []);
 
   const { data: agent, isLoading, error } = useQuery<AgentDetailRecord>({
-    queryKey: [...queryKeys.agents.detail(routeAgentRef), lookupCompanyId ?? null],
+    queryKey: [
+      ...queryKeys.agents.detail(routeAgentRef),
+      lookupCompanyId ?? null,
+    ],
     queryFn: () => agentsApi.get(routeAgentRef, lookupCompanyId),
     enabled: canFetchAgent,
   });
@@ -592,9 +703,15 @@ export function AgentDetail() {
 
   const assignedIssues = (allIssues ?? [])
     .filter((i) => i.assigneeAgentId === agent?.id)
-    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-  const reportsToAgent = (allAgents ?? []).find((a) => a.id === agent?.reportsTo);
-  const directReports = (allAgents ?? []).filter((a) => a.reportsTo === agent?.id && a.status !== "terminated");
+    .sort(
+      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+    );
+  const reportsToAgent = (allAgents ?? []).find(
+    (a) => a.id === agent?.reportsTo
+  );
+  const directReports = (allAgents ?? []).filter(
+    (a) => a.reportsTo === agent?.id && a.status !== "terminated"
+  );
   const agentBudgetSummary = useMemo(() => {
     const matched = budgetOverview?.policies.find(
       (policy) => policy.scopeType === "agent" && policy.scopeId === (agent?.id ?? routeAgentRef),
@@ -627,15 +744,20 @@ export function AgentDetail() {
     } satisfies BudgetPolicySummary;
   }, [agent, budgetOverview?.policies, resolvedCompanyId, routeAgentRef]);
   const mobileLiveRun = useMemo(
-    () => (heartbeats ?? []).find((r) => r.status === "running" || r.status === "queued") ?? null,
-    [heartbeats],
+    () =>
+      (heartbeats ?? []).find(
+        (r) => r.status === "running" || r.status === "queued"
+      ) ?? null,
+    [heartbeats]
   );
 
   useEffect(() => {
     if (!agent) return;
     if (urlRunId) {
       if (routeAgentRef !== canonicalAgentRef) {
-        navigate(`/agents/${canonicalAgentRef}/runs/${urlRunId}`, { replace: true });
+        navigate(`/agents/${canonicalAgentRef}/runs/${urlRunId}`, {
+          replace: true,
+        });
       }
       return;
     }
@@ -652,10 +774,20 @@ export function AgentDetail() {
                 ? "budget"
               : "dashboard";
     if (routeAgentRef !== canonicalAgentRef || urlTab !== canonicalTab) {
-      navigate(`/agents/${canonicalAgentRef}/${canonicalTab}`, { replace: true });
+      navigate(`/agents/${canonicalAgentRef}/${canonicalTab}`, {
+        replace: true,
+      });
       return;
     }
-  }, [agent, routeAgentRef, canonicalAgentRef, urlRunId, urlTab, activeView, navigate]);
+  }, [
+    agent,
+    routeAgentRef,
+    canonicalAgentRef,
+    urlRunId,
+    urlTab,
+    activeView,
+    navigate,
+  ]);
 
   useEffect(() => {
     if (!agent?.companyId || agent.companyId === selectedCompanyId) return;
@@ -664,28 +796,64 @@ export function AgentDetail() {
 
   const agentAction = useMutation({
     mutationFn: async (action: "invoke" | "pause" | "resume" | "terminate") => {
-      if (!agentLookupRef) return Promise.reject(new Error("No agent reference"));
+      if (!agentLookupRef)
+        return Promise.reject(new Error("No agent reference"));
       switch (action) {
-        case "invoke": return agentsApi.invoke(agentLookupRef, resolvedCompanyId ?? undefined);
-        case "pause": return agentsApi.pause(agentLookupRef, resolvedCompanyId ?? undefined);
-        case "resume": return agentsApi.resume(agentLookupRef, resolvedCompanyId ?? undefined);
-        case "terminate": return agentsApi.terminate(agentLookupRef, resolvedCompanyId ?? undefined);
+        case "invoke":
+          return agentsApi.invoke(
+            agentLookupRef,
+            resolvedCompanyId ?? undefined
+          );
+        case "pause":
+          return agentsApi.pause(
+            agentLookupRef,
+            resolvedCompanyId ?? undefined
+          );
+        case "resume":
+          return agentsApi.resume(
+            agentLookupRef,
+            resolvedCompanyId ?? undefined
+          );
+        case "terminate":
+          return agentsApi.terminate(
+            agentLookupRef,
+            resolvedCompanyId ?? undefined
+          );
       }
     },
     onSuccess: (data, action) => {
       setActionError(null);
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(routeAgentRef) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agentLookupRef) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.runtimeState(agentLookupRef) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.taskSessions(agentLookupRef) });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.detail(routeAgentRef),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.detail(agentLookupRef),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.runtimeState(agentLookupRef),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.taskSessions(agentLookupRef),
+      });
       if (resolvedCompanyId) {
-        queryClient.invalidateQueries({ queryKey: queryKeys.agents.list(resolvedCompanyId) });
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.agents.list(resolvedCompanyId),
+        });
         if (agent?.id) {
-          queryClient.invalidateQueries({ queryKey: queryKeys.heartbeats(resolvedCompanyId, agent.id) });
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.heartbeats(resolvedCompanyId, agent.id),
+          });
         }
       }
-      if (action === "invoke" && data && typeof data === "object" && "id" in data) {
-        navigate(`/agents/${canonicalAgentRef}/runs/${(data as HeartbeatRun).id}`);
+      if (
+        action === "invoke" &&
+        data &&
+        typeof data === "object" &&
+        "id" in data
+      ) {
+        navigate(
+          `/agents/${canonicalAgentRef}/runs/${(data as HeartbeatRun).id}`
+        );
       }
     },
     onError: (err) => {
@@ -712,26 +880,47 @@ export function AgentDetail() {
   });
 
   const updateIcon = useMutation({
-    mutationFn: (icon: string) => agentsApi.update(agentLookupRef, { icon }, resolvedCompanyId ?? undefined),
+    mutationFn: (icon: string) =>
+      agentsApi.update(
+        agentLookupRef,
+        { icon },
+        resolvedCompanyId ?? undefined
+      ),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(routeAgentRef) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agentLookupRef) });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.detail(routeAgentRef),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.detail(agentLookupRef),
+      });
       if (resolvedCompanyId) {
-        queryClient.invalidateQueries({ queryKey: queryKeys.agents.list(resolvedCompanyId) });
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.agents.list(resolvedCompanyId),
+        });
       }
     },
   });
 
   const resetTaskSession = useMutation({
     mutationFn: (taskKey: string | null) =>
-      agentsApi.resetSession(agentLookupRef, taskKey, resolvedCompanyId ?? undefined),
+      agentsApi.resetSession(
+        agentLookupRef,
+        taskKey,
+        resolvedCompanyId ?? undefined
+      ),
     onSuccess: () => {
       setActionError(null);
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.runtimeState(agentLookupRef) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.taskSessions(agentLookupRef) });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.runtimeState(agentLookupRef),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.taskSessions(agentLookupRef),
+      });
     },
     onError: (err) => {
-      setActionError(err instanceof Error ? err.message : "Failed to reset session");
+      setActionError(
+        err instanceof Error ? err.message : "Failed to reset session"
+      );
     },
   });
 
@@ -740,14 +929,22 @@ export function AgentDetail() {
       agentsApi.updatePermissions(agentLookupRef, permissions, resolvedCompanyId ?? undefined),
     onSuccess: () => {
       setActionError(null);
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(routeAgentRef) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agentLookupRef) });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.detail(routeAgentRef),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.detail(agentLookupRef),
+      });
       if (resolvedCompanyId) {
-        queryClient.invalidateQueries({ queryKey: queryKeys.agents.list(resolvedCompanyId) });
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.agents.list(resolvedCompanyId),
+        });
       }
     },
     onError: (err) => {
-      setActionError(err instanceof Error ? err.message : "Failed to update permissions");
+      setActionError(
+        err instanceof Error ? err.message : "Failed to update permissions"
+      );
     },
   });
 
@@ -759,9 +956,15 @@ export function AgentDetail() {
     if (activeView === "dashboard" && !urlRunId) {
       crumbs.push({ label: agentName });
     } else {
-      crumbs.push({ label: agentName, href: `/agents/${canonicalAgentRef}/dashboard` });
+      crumbs.push({
+        label: agentName,
+        href: `/agents/${canonicalAgentRef}/dashboard`,
+      });
       if (urlRunId) {
-        crumbs.push({ label: "Runs", href: `/agents/${canonicalAgentRef}/runs` });
+        crumbs.push({
+          label: "Runs",
+          href: `/agents/${canonicalAgentRef}/runs`,
+        });
         crumbs.push({ label: `Run ${urlRunId.slice(0, 8)}` });
       } else if (activeView === "instructions") {
         crumbs.push({ label: "Instructions" });
@@ -778,7 +981,14 @@ export function AgentDetail() {
       }
     }
     setBreadcrumbs(crumbs);
-  }, [setBreadcrumbs, agent, routeAgentRef, canonicalAgentRef, activeView, urlRunId]);
+  }, [
+    setBreadcrumbs,
+    agent,
+    routeAgentRef,
+    canonicalAgentRef,
+    activeView,
+    urlRunId,
+  ]);
 
   useEffect(() => {
     closePanel();
@@ -786,11 +996,14 @@ export function AgentDetail() {
   }, [closePanel]);
 
   useBeforeUnload(
-    useCallback((event) => {
-      if (!configDirty) return;
-      event.preventDefault();
-      event.returnValue = "";
-    }, [configDirty]),
+    useCallback(
+      (event) => {
+        if (!configDirty) return;
+        event.preventDefault();
+        event.returnValue = "";
+      },
+      [configDirty]
+    )
   );
 
   if (isLoading) return <PageSkeleton variant="detail" />;
@@ -803,7 +1016,9 @@ export function AgentDetail() {
   const showConfigActionBar = (activeView === "configuration" || activeView === "instructions") && (configDirty || configSaving);
 
   return (
-    <div className={cn("space-y-6", isMobile && showConfigActionBar && "pb-24")}>
+    <div
+      className={cn("space-y-6", isMobile && showConfigActionBar && "pb-24")}
+    >
       {/* Header */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-3 min-w-0">
@@ -853,7 +1068,9 @@ export function AgentDetail() {
                 <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
               </span>
-              <span className="text-[11px] font-medium text-blue-600 dark:text-blue-400">Live</span>
+              <span className="text-[11px] font-medium text-blue-600 dark:text-blue-400">
+                Live
+              </span>
             </Link>
           )}
 
@@ -903,7 +1120,9 @@ export function AgentDetail() {
       {!urlRunId && (
         <Tabs
           value={activeView}
-          onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
+          onValueChange={(value) =>
+            navigate(`/agents/${canonicalAgentRef}/${value}`)
+          }
         >
           <PageTabBar
             items={[
@@ -915,7 +1134,9 @@ export function AgentDetail() {
               { value: "budget", label: "Budget" },
             ]}
             value={activeView}
-            onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
+            onValueChange={(value) =>
+              navigate(`/agents/${canonicalAgentRef}/${value}`)
+            }
           />
         </Tabs>
       )}
@@ -962,7 +1183,9 @@ export function AgentDetail() {
         <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 backdrop-blur-sm">
           <div
             className="flex items-center justify-end gap-2 px-3 py-2"
-            style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.5rem)" }}
+            style={{
+              paddingBottom: "max(env(safe-area-inset-bottom), 0.5rem)",
+            }}
           >
             <Button
               variant="ghost"
@@ -1053,7 +1276,13 @@ export function AgentDetail() {
 
 /* ---- Helper components ---- */
 
-function SummaryRow({ label, children }: { label: string; children: React.ReactNode }) {
+function SummaryRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex items-center justify-between">
       <span className="text-muted-foreground text-xs">{label}</span>
@@ -1062,20 +1291,35 @@ function SummaryRow({ label, children }: { label: string; children: React.ReactN
   );
 }
 
-function LatestRunCard({ runs, agentId }: { runs: HeartbeatRun[]; agentId: string }) {
+function LatestRunCard({
+  runs,
+  agentId,
+}: {
+  runs: HeartbeatRun[];
+  agentId: string;
+}) {
   if (runs.length === 0) return null;
 
   const sorted = [...runs].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
 
-  const liveRun = sorted.find((r) => r.status === "running" || r.status === "queued");
+  const liveRun = sorted.find(
+    (r) => r.status === "running" || r.status === "queued"
+  );
   const run = liveRun ?? sorted[0];
   const isLive = run.status === "running" || run.status === "queued";
-  const statusInfo = runStatusIcons[run.status] ?? { icon: Clock, color: "text-neutral-400" };
+  const statusInfo = runStatusIcons[run.status] ?? {
+    icon: Clock,
+    color: "text-neutral-400",
+  };
   const StatusIcon = statusInfo.icon;
   const summary = run.resultJson
-    ? String((run.resultJson as Record<string, unknown>).summary ?? (run.resultJson as Record<string, unknown>).result ?? "")
+    ? String(
+        (run.resultJson as Record<string, unknown>).summary ??
+          (run.resultJson as Record<string, unknown>).result ??
+          ""
+      )
     : run.error ?? "";
 
   return (
@@ -1102,28 +1346,49 @@ function LatestRunCard({ runs, agentId }: { runs: HeartbeatRun[]; agentId: strin
         to={`/agents/${agentId}/runs/${run.id}`}
         className={cn(
           "block border rounded-lg p-4 space-y-2 w-full no-underline transition-colors hover:bg-muted/50 cursor-pointer",
-          isLive ? "border-cyan-500/30 shadow-[0_0_12px_rgba(6,182,212,0.08)]" : "border-border"
+          isLive
+            ? "border-cyan-500/30 shadow-[0_0_12px_rgba(6,182,212,0.08)]"
+            : "border-border"
         )}
       >
         <div className="flex items-center gap-2">
-          <StatusIcon className={cn("h-3.5 w-3.5", statusInfo.color, run.status === "running" && "animate-spin")} />
+          <StatusIcon
+            className={cn(
+              "h-3.5 w-3.5",
+              statusInfo.color,
+              run.status === "running" && "animate-spin"
+            )}
+          />
           <StatusBadge status={run.status} />
-          <span className="font-mono text-xs text-muted-foreground">{run.id.slice(0, 8)}</span>
-          <span className={cn(
-            "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium",
-            run.invocationSource === "timer" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
-              : run.invocationSource === "assignment" ? "bg-violet-100 text-violet-700 dark:bg-violet-900/50 dark:text-violet-300"
-              : run.invocationSource === "on_demand" ? "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300"
-              : "bg-muted text-muted-foreground"
-          )}>
+          <span className="font-mono text-xs text-muted-foreground">
+            {run.id.slice(0, 8)}
+          </span>
+          <span
+            className={cn(
+              "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+              run.invocationSource === "timer"
+                ? "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
+                : run.invocationSource === "assignment"
+                ? "bg-violet-100 text-violet-700 dark:bg-violet-900/50 dark:text-violet-300"
+                : run.invocationSource === "on_demand"
+                ? "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300"
+                : run.invocationSource === "conversation_message"
+                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300"
+                : "bg-muted text-muted-foreground"
+            )}
+          >
             {sourceLabels[run.invocationSource] ?? run.invocationSource}
           </span>
-          <span className="ml-auto text-xs text-muted-foreground">{relativeTime(run.createdAt)}</span>
+          <span className="ml-auto text-xs text-muted-foreground">
+            {relativeTime(run.createdAt)}
+          </span>
         </div>
 
         {summary && (
           <div className="overflow-hidden max-h-16">
-            <MarkdownBody className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0">{summary}</MarkdownBody>
+            <MarkdownBody className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+              {summary}
+            </MarkdownBody>
           </div>
         )}
       </Link>
@@ -1143,7 +1408,14 @@ function AgentOverview({
 }: {
   agent: AgentDetailRecord;
   runs: HeartbeatRun[];
-  assignedIssues: { id: string; title: string; status: string; priority: string; identifier?: string | null; createdAt: Date }[];
+  assignedIssues: {
+    id: string;
+    title: string;
+    status: string;
+    priority: string;
+    identifier?: string | null;
+    createdAt: Date;
+  }[];
   runtimeState?: AgentRuntimeState;
   agentId: string;
   agentRouteId: string;
@@ -1173,7 +1445,10 @@ function AgentOverview({
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-medium">Recent Issues</h3>
-          <Link to={`/issues?assignee=${agentId}`} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+          <Link
+            to={`/issues?assignee=${agentId}`}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
             See All &rarr;
           </Link>
         </div>
@@ -1222,7 +1497,10 @@ function CostsSection({
       const metrics = runMetrics(r);
       return metrics.cost > 0 || metrics.input > 0 || metrics.output > 0 || metrics.cached > 0;
     })
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    .sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
 
   return (
     <div className="space-y-4">
@@ -1230,20 +1508,36 @@ function CostsSection({
         <div className="border border-border rounded-lg p-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 tabular-nums">
             <div>
-              <span className="text-xs text-muted-foreground block">Input tokens</span>
-              <span className="text-lg font-semibold">{formatTokens(runtimeState.totalInputTokens)}</span>
+              <span className="text-xs text-muted-foreground block">
+                Input tokens
+              </span>
+              <span className="text-lg font-semibold">
+                {formatTokens(runtimeState.totalInputTokens)}
+              </span>
             </div>
             <div>
-              <span className="text-xs text-muted-foreground block">Output tokens</span>
-              <span className="text-lg font-semibold">{formatTokens(runtimeState.totalOutputTokens)}</span>
+              <span className="text-xs text-muted-foreground block">
+                Output tokens
+              </span>
+              <span className="text-lg font-semibold">
+                {formatTokens(runtimeState.totalOutputTokens)}
+              </span>
             </div>
             <div>
-              <span className="text-xs text-muted-foreground block">Cached tokens</span>
-              <span className="text-lg font-semibold">{formatTokens(runtimeState.totalCachedInputTokens)}</span>
+              <span className="text-xs text-muted-foreground block">
+                Cached tokens
+              </span>
+              <span className="text-lg font-semibold">
+                {formatTokens(runtimeState.totalCachedInputTokens)}
+              </span>
             </div>
             <div>
-              <span className="text-xs text-muted-foreground block">Total cost</span>
-              <span className="text-lg font-semibold">{formatCents(runtimeState.totalCostCents)}</span>
+              <span className="text-xs text-muted-foreground block">
+                Total cost
+              </span>
+              <span className="text-lg font-semibold">
+                {formatCents(runtimeState.totalCostCents)}
+              </span>
             </div>
           </div>
         </div>
@@ -1253,22 +1547,41 @@ function CostsSection({
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-border bg-accent/20">
-                <th className="text-left px-3 py-2 font-medium text-muted-foreground">Date</th>
-                <th className="text-left px-3 py-2 font-medium text-muted-foreground">Run</th>
-                <th className="text-right px-3 py-2 font-medium text-muted-foreground">Input</th>
-                <th className="text-right px-3 py-2 font-medium text-muted-foreground">Output</th>
-                <th className="text-right px-3 py-2 font-medium text-muted-foreground">Cost</th>
+                <th className="text-left px-3 py-2 font-medium text-muted-foreground">
+                  Date
+                </th>
+                <th className="text-left px-3 py-2 font-medium text-muted-foreground">
+                  Run
+                </th>
+                <th className="text-right px-3 py-2 font-medium text-muted-foreground">
+                  Input
+                </th>
+                <th className="text-right px-3 py-2 font-medium text-muted-foreground">
+                  Output
+                </th>
+                <th className="text-right px-3 py-2 font-medium text-muted-foreground">
+                  Cost
+                </th>
               </tr>
             </thead>
             <tbody>
               {runsWithCost.slice(0, 10).map((run) => {
                 const metrics = runMetrics(run);
                 return (
-                  <tr key={run.id} className="border-b border-border last:border-b-0">
+                  <tr
+                    key={run.id}
+                    className="border-b border-border last:border-b-0"
+                  >
                     <td className="px-3 py-2">{formatDate(run.createdAt)}</td>
-                    <td className="px-3 py-2 font-mono">{run.id.slice(0, 8)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{formatTokens(metrics.input)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{formatTokens(metrics.output)}</td>
+                    <td className="px-3 py-2 font-mono">
+                      {run.id.slice(0, 8)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {formatTokens(metrics.input)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {formatTokens(metrics.output)}
+                    </td>
                     <td className="px-3 py-2 text-right tabular-nums">
                       {metrics.cost > 0
                         ? `$${metrics.cost.toFixed(4)}`
@@ -1316,11 +1629,18 @@ function AgentConfigurePage({
   });
 
   const rollbackConfig = useMutation({
-    mutationFn: (revisionId: string) => agentsApi.rollbackConfigRevision(agent.id, revisionId, companyId),
+    mutationFn: (revisionId: string) =>
+      agentsApi.rollbackConfigRevision(agent.id, revisionId, companyId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.id) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.urlKey) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.configRevisions(agent.id) });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.detail(agent.id),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.detail(agent.urlKey),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.configRevisions(agent.id),
+      });
     },
   });
 
@@ -1348,24 +1668,34 @@ function AgentConfigurePage({
           className="flex items-center gap-2 text-sm font-medium hover:text-foreground transition-colors"
           onClick={() => setRevisionsOpen((v) => !v)}
         >
-          {revisionsOpen
-            ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-            : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-          }
+          {revisionsOpen ? (
+            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+          )}
           Configuration Revisions
-          <span className="text-xs font-normal text-muted-foreground">{configRevisions?.length ?? 0}</span>
+          <span className="text-xs font-normal text-muted-foreground">
+            {configRevisions?.length ?? 0}
+          </span>
         </button>
         {revisionsOpen && (
           <div className="mt-3">
             {(configRevisions ?? []).length === 0 ? (
-              <p className="text-sm text-muted-foreground">No configuration revisions yet.</p>
+              <p className="text-sm text-muted-foreground">
+                No configuration revisions yet.
+              </p>
             ) : (
               <div className="space-y-2">
                 {(configRevisions ?? []).slice(0, 10).map((revision) => (
-                  <div key={revision.id} className="border border-border/70 rounded-md p-3 space-y-2">
+                  <div
+                    key={revision.id}
+                    className="border border-border/70 rounded-md p-3 space-y-2"
+                  >
                     <div className="flex items-center justify-between gap-3">
                       <div className="text-xs text-muted-foreground">
-                        <span className="font-mono">{revision.id.slice(0, 8)}</span>
+                        <span className="font-mono">
+                          {revision.id.slice(0, 8)}
+                        </span>
                         <span className="mx-1">·</span>
                         <span>{formatDate(revision.createdAt)}</span>
                         <span className="mx-1">·</span>
@@ -1383,7 +1713,9 @@ function AgentConfigurePage({
                     </div>
                     <p className="text-xs text-muted-foreground">
                       Changed:{" "}
-                      {revision.changedKeys.length > 0 ? revision.changedKeys.join(", ") : "no tracked changes"}
+                      {revision.changedKeys.length > 0
+                        ? revision.changedKeys.join(", ")
+                        : "no tracked changes"}
                     </p>
                   </div>
                 ))}
@@ -1420,27 +1752,34 @@ function ConfigurationTab({
   hideInstructionsFile?: boolean;
 }) {
   const queryClient = useQueryClient();
-  const [awaitingRefreshAfterSave, setAwaitingRefreshAfterSave] = useState(false);
+  const [awaitingRefreshAfterSave, setAwaitingRefreshAfterSave] =
+    useState(false);
   const lastAgentRef = useRef(agent);
 
   const { data: adapterModels } = useQuery({
-    queryKey:
-      companyId
-        ? queryKeys.agents.adapterModels(companyId, agent.adapterType)
-        : ["agents", "none", "adapter-models", agent.adapterType],
+    queryKey: companyId
+      ? queryKeys.agents.adapterModels(companyId, agent.adapterType)
+      : ["agents", "none", "adapter-models", agent.adapterType],
     queryFn: () => agentsApi.adapterModels(companyId!, agent.adapterType),
     enabled: Boolean(companyId),
   });
 
   const updateAgent = useMutation({
-    mutationFn: (data: Record<string, unknown>) => agentsApi.update(agent.id, data, companyId),
+    mutationFn: (data: Record<string, unknown>) =>
+      agentsApi.update(agent.id, data, companyId),
     onMutate: () => {
       setAwaitingRefreshAfterSave(true);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.id) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.urlKey) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.configRevisions(agent.id) });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.detail(agent.id),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.detail(agent.urlKey),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.configRevisions(agent.id),
+      });
     },
     onError: () => {
       setAwaitingRefreshAfterSave(false);
@@ -2667,34 +3006,66 @@ function AgentSkillsTab({
 
 /* ---- Runs Tab ---- */
 
-function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelected: boolean; agentId: string }) {
-  const statusInfo = runStatusIcons[run.status] ?? { icon: Clock, color: "text-neutral-400" };
+function RunListItem({
+  run,
+  isSelected,
+  agentId,
+}: {
+  run: HeartbeatRun;
+  isSelected: boolean;
+  agentId: string;
+}) {
+  const statusInfo = runStatusIcons[run.status] ?? {
+    icon: Clock,
+    color: "text-neutral-400",
+  };
   const StatusIcon = statusInfo.icon;
   const metrics = runMetrics(run);
   const summary = run.resultJson
-    ? String((run.resultJson as Record<string, unknown>).summary ?? (run.resultJson as Record<string, unknown>).result ?? "")
+    ? String(
+        (run.resultJson as Record<string, unknown>).summary ??
+          (run.resultJson as Record<string, unknown>).result ??
+          ""
+      )
     : run.error ?? "";
 
   return (
     <Link
-      to={isSelected ? `/agents/${agentId}/runs` : `/agents/${agentId}/runs/${run.id}`}
+      to={
+        isSelected
+          ? `/agents/${agentId}/runs`
+          : `/agents/${agentId}/runs/${run.id}`
+      }
       className={cn(
         "flex flex-col gap-1 w-full px-3 py-2.5 text-left border-b border-border last:border-b-0 transition-colors no-underline text-inherit",
-        isSelected ? "bg-accent/40" : "hover:bg-accent/20",
+        isSelected ? "bg-accent/40" : "hover:bg-accent/20"
       )}
     >
       <div className="flex items-center gap-2">
-        <StatusIcon className={cn("h-3.5 w-3.5 shrink-0", statusInfo.color, run.status === "running" && "animate-spin")} />
+        <StatusIcon
+          className={cn(
+            "h-3.5 w-3.5 shrink-0",
+            statusInfo.color,
+            run.status === "running" && "animate-spin"
+          )}
+        />
         <span className="font-mono text-xs text-muted-foreground">
           {run.id.slice(0, 8)}
         </span>
-        <span className={cn(
-          "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium shrink-0",
-          run.invocationSource === "timer" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
-            : run.invocationSource === "assignment" ? "bg-violet-100 text-violet-700 dark:bg-violet-900/50 dark:text-violet-300"
-            : run.invocationSource === "on_demand" ? "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300"
-            : "bg-muted text-muted-foreground"
-        )}>
+        <span
+          className={cn(
+            "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium shrink-0",
+            run.invocationSource === "timer"
+              ? "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
+              : run.invocationSource === "assignment"
+              ? "bg-violet-100 text-violet-700 dark:bg-violet-900/50 dark:text-violet-300"
+              : run.invocationSource === "on_demand"
+              ? "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300"
+              : run.invocationSource === "conversation_message"
+              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300"
+              : "bg-muted text-muted-foreground"
+          )}
+        >
           {sourceLabels[run.invocationSource] ?? run.invocationSource}
         </span>
         <span className="ml-auto text-[11px] text-muted-foreground shrink-0">
@@ -2708,7 +3079,9 @@ function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelect
       )}
       {(metrics.totalTokens > 0 || metrics.cost > 0) && (
         <div className="flex items-center gap-2 pl-5.5 text-[11px] text-muted-foreground tabular-nums">
-          {metrics.totalTokens > 0 && <span>{formatTokens(metrics.totalTokens)} tok</span>}
+          {metrics.totalTokens > 0 && (
+            <span>{formatTokens(metrics.totalTokens)} tok</span>
+          )}
           {metrics.cost > 0 && <span>${metrics.cost.toFixed(3)}</span>}
         </div>
       )}
@@ -2743,7 +3116,9 @@ function RunsTab({
   );
 
   // On mobile, don't auto-select so the list shows first; on desktop, auto-select latest
-  const effectiveRunId = isMobile ? selectedRunId : (selectedRunId ?? sorted[0]?.id ?? null);
+  const effectiveRunId = isMobile
+    ? selectedRunId
+    : selectedRunId ?? sorted[0]?.id ?? null;
   const selectedRun = sorted.find((r) => r.id === effectiveRunId) ?? null;
 
   // Mobile: show either run list OR run detail with back button
@@ -2758,14 +3133,24 @@ function RunsTab({
             <ArrowLeft className="h-3.5 w-3.5" />
             Back to runs
           </Link>
-          <RunDetail key={selectedRun.id} run={selectedRun} agentRouteId={agentRouteId} adapterType={adapterType} />
+          <RunDetail
+            key={selectedRun.id}
+            run={selectedRun}
+            agentRouteId={agentRouteId}
+            adapterType={adapterType}
+          />
         </div>
       );
     }
     return (
       <div className="border border-border rounded-lg overflow-x-hidden">
         {sorted.map((run) => (
-          <RunListItem key={run.id} run={run} isSelected={false} agentId={agentRouteId} />
+          <RunListItem
+            key={run.id}
+            run={run}
+            isSelected={false}
+            agentId={agentRouteId}
+          />
         ))}
       </div>
     );
@@ -2775,21 +3160,36 @@ function RunsTab({
   return (
     <div className="flex gap-0">
       {/* Left: run list — border stretches full height, content sticks */}
-      <div className={cn(
-        "shrink-0 border border-border rounded-lg",
-        selectedRun ? "w-72" : "w-full",
-      )}>
-        <div className="sticky top-4 overflow-y-auto" style={{ maxHeight: "calc(100vh - 2rem)" }}>
-        {sorted.map((run) => (
-          <RunListItem key={run.id} run={run} isSelected={run.id === effectiveRunId} agentId={agentRouteId} />
-        ))}
+      <div
+        className={cn(
+          "shrink-0 border border-border rounded-lg",
+          selectedRun ? "w-72" : "w-full"
+        )}
+      >
+        <div
+          className="sticky top-4 overflow-y-auto"
+          style={{ maxHeight: "calc(100vh - 2rem)" }}
+        >
+          {sorted.map((run) => (
+            <RunListItem
+              key={run.id}
+              run={run}
+              isSelected={run.id === effectiveRunId}
+              agentId={agentRouteId}
+            />
+          ))}
         </div>
       </div>
 
       {/* Right: run detail — natural height, page scrolls */}
       {selectedRun && (
         <div className="flex-1 min-w-0 pl-4">
-          <RunDetail key={selectedRun.id} run={selectedRun} agentRouteId={agentRouteId} adapterType={adapterType} />
+          <RunDetail
+            key={selectedRun.id}
+            run={selectedRun}
+            agentRouteId={agentRouteId}
+            adapterType={adapterType}
+          />
         </div>
       )}
     </div>
@@ -2798,7 +3198,15 @@ function RunsTab({
 
 /* ---- Run Detail (expanded) ---- */
 
-function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: HeartbeatRun; agentRouteId: string; adapterType: string }) {
+function RunDetail({
+  run: initialRun,
+  agentRouteId,
+  adapterType,
+}: {
+  run: HeartbeatRun;
+  agentRouteId: string;
+  adapterType: string;
+}) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { data: hydratedRun } = useQuery({
@@ -2809,7 +3217,8 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
   const run = hydratedRun ?? initialRun;
   const metrics = runMetrics(run);
   const [sessionOpen, setSessionOpen] = useState(false);
-  const [claudeLoginResult, setClaudeLoginResult] = useState<ClaudeLoginResult | null>(null);
+  const [claudeLoginResult, setClaudeLoginResult] =
+    useState<ClaudeLoginResult | null>(null);
 
   useEffect(() => {
     setClaudeLoginResult(null);
@@ -2818,41 +3227,51 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
   const cancelRun = useMutation({
     mutationFn: () => heartbeatsApi.cancel(run.id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.heartbeats(run.companyId, run.agentId) });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.heartbeats(run.companyId, run.agentId),
+      });
     },
   });
-  const canResumeLostRun = run.errorCode === "process_lost" && run.status === "failed";
+  const canResumeLostRun =
+    run.errorCode === "process_lost" && run.status === "failed";
   const resumePayload = useMemo(() => {
     const payload: Record<string, unknown> = {
       resumeFromRunId: run.id,
     };
     const context = asRecord(run.contextSnapshot);
     if (!context) return payload;
-    const issueId = asNonEmptyString(context.issueId);
-    const taskId = asNonEmptyString(context.taskId);
-    const taskKey = asNonEmptyString(context.taskKey);
-    const commentId = asNonEmptyString(context.wakeCommentId) ?? asNonEmptyString(context.commentId);
-    if (issueId) payload.issueId = issueId;
-    if (taskId) payload.taskId = taskId;
+    const taskKey = deriveCanonicalTaskKey(context);
+    const commentId =
+      asNonEmptyString(context.wakeCommentId) ??
+      asNonEmptyString(context.commentId);
     if (taskKey) payload.taskKey = taskKey;
     if (commentId) payload.commentId = commentId;
+    copyConversationContextPayload(payload, context);
     return payload;
   }, [run.contextSnapshot, run.id]);
   const resumeRun = useMutation({
     mutationFn: async () => {
-      const result = await agentsApi.wakeup(run.agentId, {
-        source: "on_demand",
-        triggerDetail: "manual",
-        reason: "resume_process_lost_run",
-        payload: resumePayload,
-      }, run.companyId);
+      const result = await agentsApi.wakeup(
+        run.agentId,
+        {
+          source: "on_demand",
+          triggerDetail: "manual",
+          reason: "resume_process_lost_run",
+          payload: resumePayload,
+        },
+        run.companyId
+      );
       if (!("id" in result)) {
-        throw new Error("Resume request was skipped because the agent is not currently invokable.");
+        throw new Error(
+          "Resume request was skipped because the agent is not currently invokable."
+        );
       }
       return result;
     },
     onSuccess: (resumedRun) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.heartbeats(run.companyId, run.agentId) });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.heartbeats(run.companyId, run.agentId),
+      });
       navigate(`/agents/${agentRouteId}/runs/${resumedRun.id}`);
     },
   });
@@ -2862,29 +3281,34 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
     const payload: Record<string, unknown> = {};
     const context = asRecord(run.contextSnapshot);
     if (!context) return payload;
-    const issueId = asNonEmptyString(context.issueId);
-    const taskId = asNonEmptyString(context.taskId);
-    const taskKey = asNonEmptyString(context.taskKey);
-    if (issueId) payload.issueId = issueId;
-    if (taskId) payload.taskId = taskId;
+    const taskKey = deriveCanonicalTaskKey(context);
     if (taskKey) payload.taskKey = taskKey;
+    copyConversationContextPayload(payload, context);
     return payload;
   }, [run.contextSnapshot]);
   const retryRun = useMutation({
     mutationFn: async () => {
-      const result = await agentsApi.wakeup(run.agentId, {
-        source: "on_demand",
-        triggerDetail: "manual",
-        reason: "retry_failed_run",
-        payload: retryPayload,
-      }, run.companyId);
+      const result = await agentsApi.wakeup(
+        run.agentId,
+        {
+          source: "on_demand",
+          triggerDetail: "manual",
+          reason: "retry_failed_run",
+          payload: retryPayload,
+        },
+        run.companyId
+      );
       if (!("id" in result)) {
-        throw new Error("Retry was skipped because the agent is not currently invokable.");
+        throw new Error(
+          "Retry was skipped because the agent is not currently invokable."
+        );
       }
       return result;
     },
     onSuccess: (newRun) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.heartbeats(run.companyId, run.agentId) });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.heartbeats(run.companyId, run.agentId),
+      });
       navigate(`/agents/${agentRouteId}/runs/${newRun.id}`);
     },
   });
@@ -2894,19 +3318,32 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
     queryFn: () => activityApi.issuesForRun(run.id),
   });
   const touchedIssueIds = useMemo(
-    () => Array.from(new Set((touchedIssues ?? []).map((issue) => issue.issueId))),
-    [touchedIssues],
+    () =>
+      Array.from(new Set((touchedIssues ?? []).map((issue) => issue.issueId))),
+    [touchedIssues]
   );
 
   const clearSessionsForTouchedIssues = useMutation({
     mutationFn: async () => {
       if (touchedIssueIds.length === 0) return 0;
-      await Promise.all(touchedIssueIds.map((issueId) => agentsApi.resetSession(run.agentId, issueId, run.companyId)));
+      await Promise.all(
+        touchedIssueIds.map((issueId) =>
+          agentsApi.resetSession(
+            run.agentId,
+            buildIssueTaskKey(issueId),
+            run.companyId
+          )
+        )
+      );
       return touchedIssueIds.length;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.runtimeState(run.agentId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.taskSessions(run.agentId) });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.runtimeState(run.agentId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.taskSessions(run.agentId),
+      });
       queryClient.invalidateQueries({ queryKey: queryKeys.runIssues(run.id) });
     },
   });
@@ -2918,10 +3355,14 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
     },
   });
 
-  const isRunning = run.status === "running" && !!run.startedAt && !run.finishedAt;
+  const isRunning =
+    run.status === "running" && !!run.startedAt && !run.finishedAt;
   const [elapsedSec, setElapsedSec] = useState<number>(() => {
     if (!run.startedAt) return 0;
-    return Math.max(0, Math.round((Date.now() - new Date(run.startedAt).getTime()) / 1000));
+    return Math.max(
+      0,
+      Math.round((Date.now() - new Date(run.startedAt).getTime()) / 1000)
+    );
   });
 
   useEffect(() => {
@@ -2934,16 +3375,37 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
     return () => clearInterval(id);
   }, [isRunning, run.startedAt]);
 
-  const timeFormat: Intl.DateTimeFormatOptions = { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false };
-  const startTime = run.startedAt ? new Date(run.startedAt).toLocaleTimeString("en-US", timeFormat) : null;
-  const endTime = run.finishedAt ? new Date(run.finishedAt).toLocaleTimeString("en-US", timeFormat) : null;
-  const durationSec = run.startedAt && run.finishedAt
-    ? Math.round((new Date(run.finishedAt).getTime() - new Date(run.startedAt).getTime()) / 1000)
+  const timeFormat: Intl.DateTimeFormatOptions = {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  };
+  const startTime = run.startedAt
+    ? new Date(run.startedAt).toLocaleTimeString("en-US", timeFormat)
     : null;
+  const endTime = run.finishedAt
+    ? new Date(run.finishedAt).toLocaleTimeString("en-US", timeFormat)
+    : null;
+  const durationSec =
+    run.startedAt && run.finishedAt
+      ? Math.round(
+          (new Date(run.finishedAt).getTime() -
+            new Date(run.startedAt).getTime()) /
+            1000
+        )
+      : null;
   const displayDurationSec = durationSec ?? (isRunning ? elapsedSec : null);
-  const hasMetrics = metrics.input > 0 || metrics.output > 0 || metrics.cached > 0 || metrics.cost > 0;
+  const hasMetrics =
+    metrics.input > 0 ||
+    metrics.output > 0 ||
+    metrics.cached > 0 ||
+    metrics.cost > 0;
   const hasSession = !!(run.sessionIdBefore || run.sessionIdAfter);
-  const sessionChanged = run.sessionIdBefore && run.sessionIdAfter && run.sessionIdBefore !== run.sessionIdAfter;
+  const sessionChanged =
+    run.sessionIdBefore &&
+    run.sessionIdAfter &&
+    run.sessionIdBefore !== run.sessionIdAfter;
   const sessionId = run.sessionIdAfter || run.sessionIdBefore;
   const hasNonZeroExit = run.exitCode !== null && run.exitCode !== 0;
 
@@ -2994,89 +3456,115 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
             </div>
             {resumeRun.isError && (
               <div className="text-xs text-destructive">
-                {resumeRun.error instanceof Error ? resumeRun.error.message : "Failed to resume run"}
+                {resumeRun.error instanceof Error
+                  ? resumeRun.error.message
+                  : "Failed to resume run"}
               </div>
             )}
             {retryRun.isError && (
               <div className="text-xs text-destructive">
-                {retryRun.error instanceof Error ? retryRun.error.message : "Failed to retry run"}
+                {retryRun.error instanceof Error
+                  ? retryRun.error.message
+                  : "Failed to retry run"}
               </div>
             )}
             {startTime && (
               <div className="space-y-0.5">
                 <div className="text-sm font-mono">
                   {startTime}
-                  {endTime && <span className="text-muted-foreground"> &rarr; </span>}
+                  {endTime && (
+                    <span className="text-muted-foreground"> &rarr; </span>
+                  )}
                   {endTime}
                 </div>
                 <div className="text-[11px] text-muted-foreground">
                   {relativeTime(run.startedAt!)}
-                  {run.finishedAt && <> &rarr; {relativeTime(run.finishedAt)}</>}
+                  {run.finishedAt && (
+                    <> &rarr; {relativeTime(run.finishedAt)}</>
+                  )}
                 </div>
                 {displayDurationSec !== null && (
                   <div className="text-xs text-muted-foreground">
-                    Duration: {displayDurationSec >= 60 ? `${Math.floor(displayDurationSec / 60)}m ${displayDurationSec % 60}s` : `${displayDurationSec}s`}
+                    Duration:{" "}
+                    {displayDurationSec >= 60
+                      ? `${Math.floor(displayDurationSec / 60)}m ${
+                          displayDurationSec % 60
+                        }s`
+                      : `${displayDurationSec}s`}
                   </div>
                 )}
               </div>
             )}
             {run.error && (
               <div className="text-xs">
-                <span className="text-red-600 dark:text-red-400">{run.error}</span>
-                {run.errorCode && <span className="text-muted-foreground ml-1">({run.errorCode})</span>}
-              </div>
-            )}
-            {run.errorCode === "claude_auth_required" && adapterType === "claude_local" && (
-              <div className="space-y-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 px-2 text-xs"
-                  onClick={() => runClaudeLogin.mutate()}
-                  disabled={runClaudeLogin.isPending}
-                >
-                  {runClaudeLogin.isPending ? "Running claude login..." : "Login to Claude Code"}
-                </Button>
-                {runClaudeLogin.isError && (
-                  <p className="text-xs text-destructive">
-                    {runClaudeLogin.error instanceof Error
-                      ? runClaudeLogin.error.message
-                      : "Failed to run Claude login"}
-                  </p>
-                )}
-                {claudeLoginResult?.loginUrl && (
-                  <p className="text-xs">
-                    Login URL:
-                    <a
-                      href={claudeLoginResult.loginUrl}
-                      className="text-blue-600 underline underline-offset-2 ml-1 break-all dark:text-blue-400"
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {claudeLoginResult.loginUrl}
-                    </a>
-                  </p>
-                )}
-                {claudeLoginResult && (
-                  <>
-                    {!!claudeLoginResult.stdout && (
-                      <pre className="bg-neutral-100 dark:bg-neutral-950 rounded-md p-3 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">
-                        {claudeLoginResult.stdout}
-                      </pre>
-                    )}
-                    {!!claudeLoginResult.stderr && (
-                      <pre className="bg-neutral-100 dark:bg-neutral-950 rounded-md p-3 text-xs font-mono text-red-700 dark:text-red-300 overflow-x-auto whitespace-pre-wrap">
-                        {claudeLoginResult.stderr}
-                      </pre>
-                    )}
-                  </>
+                <span className="text-red-600 dark:text-red-400">
+                  {run.error}
+                </span>
+                {run.errorCode && (
+                  <span className="text-muted-foreground ml-1">
+                    ({run.errorCode})
+                  </span>
                 )}
               </div>
             )}
+            {run.errorCode === "claude_auth_required" &&
+              adapterType === "claude_local" && (
+                <div className="space-y-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => runClaudeLogin.mutate()}
+                    disabled={runClaudeLogin.isPending}
+                  >
+                    {runClaudeLogin.isPending
+                      ? "Running claude login..."
+                      : "Login to Claude Code"}
+                  </Button>
+                  {runClaudeLogin.isError && (
+                    <p className="text-xs text-destructive">
+                      {runClaudeLogin.error instanceof Error
+                        ? runClaudeLogin.error.message
+                        : "Failed to run Claude login"}
+                    </p>
+                  )}
+                  {claudeLoginResult?.loginUrl && (
+                    <p className="text-xs">
+                      Login URL:
+                      <a
+                        href={claudeLoginResult.loginUrl}
+                        className="text-blue-600 underline underline-offset-2 ml-1 break-all dark:text-blue-400"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {claudeLoginResult.loginUrl}
+                      </a>
+                    </p>
+                  )}
+                  {claudeLoginResult && (
+                    <>
+                      {!!claudeLoginResult.stdout && (
+                        <pre className="bg-neutral-100 dark:bg-neutral-950 rounded-md p-3 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">
+                          {claudeLoginResult.stdout}
+                        </pre>
+                      )}
+                      {!!claudeLoginResult.stderr && (
+                        <pre className="bg-neutral-100 dark:bg-neutral-950 rounded-md p-3 text-xs font-mono text-red-700 dark:text-red-300 overflow-x-auto whitespace-pre-wrap">
+                          {claudeLoginResult.stderr}
+                        </pre>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             {hasNonZeroExit && (
               <div className="text-xs text-red-600 dark:text-red-400">
                 Exit code {run.exitCode}
-                {run.signal && <span className="text-muted-foreground ml-1">(signal: {run.signal})</span>}
+                {run.signal && (
+                  <span className="text-muted-foreground ml-1">
+                    (signal: {run.signal})
+                  </span>
+                )}
               </div>
             )}
           </div>
@@ -3086,19 +3574,27 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
             <div className="border-t sm:border-t-0 sm:border-l border-border p-4 grid grid-cols-2 gap-x-4 sm:gap-x-8 gap-y-3 content-center tabular-nums">
               <div>
                 <div className="text-xs text-muted-foreground">Input</div>
-                <div className="text-sm font-medium font-mono">{formatTokens(metrics.input)}</div>
+                <div className="text-sm font-medium font-mono">
+                  {formatTokens(metrics.input)}
+                </div>
               </div>
               <div>
                 <div className="text-xs text-muted-foreground">Output</div>
-                <div className="text-sm font-medium font-mono">{formatTokens(metrics.output)}</div>
+                <div className="text-sm font-medium font-mono">
+                  {formatTokens(metrics.output)}
+                </div>
               </div>
               <div>
                 <div className="text-xs text-muted-foreground">Cached</div>
-                <div className="text-sm font-medium font-mono">{formatTokens(metrics.cached)}</div>
+                <div className="text-sm font-medium font-mono">
+                  {formatTokens(metrics.cached)}
+                </div>
               </div>
               <div>
                 <div className="text-xs text-muted-foreground">Cost</div>
-                <div className="text-sm font-medium font-mono">{metrics.cost > 0 ? `$${metrics.cost.toFixed(4)}` : "-"}</div>
+                <div className="text-sm font-medium font-mono">
+                  {metrics.cost > 0 ? `$${metrics.cost.toFixed(4)}` : "-"}
+                </div>
               </div>
             </div>
           )}
@@ -3111,16 +3607,28 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
               className="flex items-center gap-1.5 w-full px-4 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
               onClick={() => setSessionOpen((v) => !v)}
             >
-              <ChevronRight className={cn("h-3 w-3 transition-transform", sessionOpen && "rotate-90")} />
+              <ChevronRight
+                className={cn(
+                  "h-3 w-3 transition-transform",
+                  sessionOpen && "rotate-90"
+                )}
+              />
               Session
-              {sessionChanged && <span className="text-yellow-400 ml-1">(changed)</span>}
+              {sessionChanged && (
+                <span className="text-yellow-400 ml-1">(changed)</span>
+              )}
             </button>
             {sessionOpen && (
               <div className="px-4 pb-3 space-y-1 text-xs">
                 {run.sessionIdBefore && (
                   <div className="flex items-center gap-2">
-                    <span className="text-muted-foreground w-12">{sessionChanged ? "Before" : "ID"}</span>
-                    <CopyText text={run.sessionIdBefore} className="font-mono" />
+                    <span className="text-muted-foreground w-12">
+                      {sessionChanged ? "Before" : "ID"}
+                    </span>
+                    <CopyText
+                      text={run.sessionIdBefore}
+                      className="font-mono"
+                    />
                   </div>
                 )}
                 {sessionChanged && run.sessionIdAfter && (
@@ -3138,7 +3646,9 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
                       onClick={() => {
                         const issueCount = touchedIssueIds.length;
                         const confirmed = window.confirm(
-                          `Clear session for ${issueCount} issue${issueCount === 1 ? "" : "s"} touched by this run?`,
+                          `Clear session for ${issueCount} issue${
+                            issueCount === 1 ? "" : "s"
+                          } touched by this run?`
                         );
                         if (!confirmed) return;
                         clearSessionsForTouchedIssues.mutate();
@@ -3166,7 +3676,9 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
       {/* Issues touched by this run */}
       {touchedIssues && touchedIssues.length > 0 && (
         <div className="space-y-2">
-          <span className="text-xs font-medium text-muted-foreground">Issues Touched ({touchedIssues.length})</span>
+          <span className="text-xs font-medium text-muted-foreground">
+            Issues Touched ({touchedIssues.length})
+          </span>
           <div className="border border-border rounded-lg divide-y divide-border">
             {touchedIssues.map((issue) => (
               <Link
@@ -3178,7 +3690,9 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
                   <StatusBadge status={issue.status} />
                   <span className="truncate">{issue.title}</span>
                 </div>
-                <span className="font-mono text-muted-foreground shrink-0 ml-2">{issue.identifier ?? issue.issueId.slice(0, 8)}</span>
+                <span className="font-mono text-muted-foreground shrink-0 ml-2">
+                  {issue.identifier ?? issue.issueId.slice(0, 8)}
+                </span>
               </Link>
             ))}
           </div>
@@ -3188,16 +3702,24 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
       {/* stderr excerpt for failed runs */}
       {run.stderrExcerpt && (
         <div className="space-y-1">
-          <span className="text-xs font-medium text-red-600 dark:text-red-400">stderr</span>
-          <pre className="bg-neutral-100 dark:bg-neutral-950 rounded-md p-3 text-xs font-mono text-red-700 dark:text-red-300 overflow-x-auto whitespace-pre-wrap">{run.stderrExcerpt}</pre>
+          <span className="text-xs font-medium text-red-600 dark:text-red-400">
+            stderr
+          </span>
+          <pre className="bg-neutral-100 dark:bg-neutral-950 rounded-md p-3 text-xs font-mono text-red-700 dark:text-red-300 overflow-x-auto whitespace-pre-wrap">
+            {run.stderrExcerpt}
+          </pre>
         </div>
       )}
 
       {/* stdout excerpt when no log is available */}
       {run.stdoutExcerpt && !run.logRef && (
         <div className="space-y-1">
-          <span className="text-xs font-medium text-muted-foreground">stdout</span>
-          <pre className="bg-neutral-100 dark:bg-neutral-950 rounded-md p-3 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">{run.stdoutExcerpt}</pre>
+          <span className="text-xs font-medium text-muted-foreground">
+            stdout
+          </span>
+          <pre className="bg-neutral-100 dark:bg-neutral-950 rounded-md p-3 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">
+            {run.stdoutExcerpt}
+          </pre>
         </div>
       )}
 
@@ -3210,9 +3732,17 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType }: { run: Heartb
 
 /* ---- Log Viewer ---- */
 
-function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: string }) {
+function LogViewer({
+  run,
+  adapterType,
+}: {
+  run: HeartbeatRun;
+  adapterType: string;
+}) {
   const [events, setEvents] = useState<HeartbeatRunEvent[]>([]);
-  const [logLines, setLogLines] = useState<Array<{ ts: string; stream: "stdout" | "stderr" | "system"; chunk: string }>>([]);
+  const [logLines, setLogLines] = useState<
+    Array<{ ts: string; stream: "stdout" | "stderr" | "system"; chunk: string }>
+  >([]);
   const [loading, setLoading] = useState(true);
   const [logLoading, setLogLoading] = useState(!!run.logRef);
   const [logError, setLogError] = useState<string | null>(null);
@@ -3224,7 +3754,10 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
   const pendingLogLineRef = useRef("");
   const scrollContainerRef = useRef<ScrollContainer | null>(null);
   const isFollowingRef = useRef(false);
-  const lastMetricsRef = useRef<{ scrollHeight: number; distanceFromBottom: number }>({
+  const lastMetricsRef = useRef<{
+    scrollHeight: number;
+    distanceFromBottom: number;
+  }>({
     scrollHeight: 0,
     distanceFromBottom: Number.POSITIVE_INFINITY,
   });
@@ -3249,16 +3782,27 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
       pendingLogLineRef.current = "";
     }
 
-    const parsed: Array<{ ts: string; stream: "stdout" | "stderr" | "system"; chunk: string }> = [];
+    const parsed: Array<{
+      ts: string;
+      stream: "stdout" | "stderr" | "system";
+      chunk: string;
+    }> = [];
     for (const line of split) {
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {
-        const raw = JSON.parse(trimmed) as { ts?: unknown; stream?: unknown; chunk?: unknown };
+        const raw = JSON.parse(trimmed) as {
+          ts?: unknown;
+          stream?: unknown;
+          chunk?: unknown;
+        };
         const stream =
-          raw.stream === "stderr" || raw.stream === "system" ? raw.stream : "stdout";
+          raw.stream === "stderr" || raw.stream === "system"
+            ? raw.stream
+            : "stdout";
         const chunk = typeof raw.chunk === "string" ? raw.chunk : "";
-        const ts = typeof raw.ts === "string" ? raw.ts : new Date().toISOString();
+        const ts =
+          typeof raw.ts === "string" ? raw.ts : new Date().toISOString();
         if (!chunk) continue;
         parsed.push({ ts, stream, chunk });
       } catch {
@@ -3295,7 +3839,8 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
     const container = getScrollContainer();
     const metrics = readScrollMetrics(container);
     lastMetricsRef.current = metrics;
-    const nearBottom = metrics.distanceFromBottom <= LIVE_SCROLL_BOTTOM_TOLERANCE_PX;
+    const nearBottom =
+      metrics.distanceFromBottom <= LIVE_SCROLL_BOTTOM_TOLERANCE_PX;
     isFollowingRef.current = nearBottom;
     setIsFollowing((prev) => (prev === nearBottom ? prev : nearBottom));
   }, [getScrollContainer]);
@@ -3322,9 +3867,13 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
     updateFollowingState();
 
     if (container === window) {
-      window.addEventListener("scroll", updateFollowingState, { passive: true });
+      window.addEventListener("scroll", updateFollowingState, {
+        passive: true,
+      });
     } else {
-      container.addEventListener("scroll", updateFollowingState, { passive: true });
+      container.addEventListener("scroll", updateFollowingState, {
+        passive: true,
+      });
     }
     window.addEventListener("resize", updateFollowingState);
     return () => {
@@ -3391,7 +3940,11 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
         let offset = 0;
         let first = true;
         while (!cancelled) {
-          const result = await heartbeatsApi.log(run.id, offset, first ? firstLimit : 256_000);
+          const result = await heartbeatsApi.log(
+            run.id,
+            offset,
+            first ? firstLimit : 256_000
+          );
           if (cancelled) break;
           appendLogContent(result.content, result.nextOffset === undefined);
           const next = result.nextOffset ?? offset + result.content.length;
@@ -3406,7 +3959,9 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
             setLogLoading(false);
             return;
           }
-          setLogError(err instanceof Error ? err.message : "Failed to load run log");
+          setLogError(
+            err instanceof Error ? err.message : "Failed to load run log"
+          );
         }
       } finally {
         if (!cancelled) setLogLoading(false);
@@ -3423,7 +3978,8 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
   useEffect(() => {
     if (!isLive || isStreamingConnected) return;
     const interval = setInterval(async () => {
-      const maxSeq = events.length > 0 ? Math.max(...events.map((e) => e.seq)) : 0;
+      const maxSeq =
+        events.length > 0 ? Math.max(...events.map((e) => e.seq)) : 0;
       try {
         const newEvents = await heartbeatsApi.events(run.id, maxSeq, 100);
         if (newEvents.length > 0) {
@@ -3474,7 +4030,9 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
     const connect = () => {
       if (closed) return;
       const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-      const url = `${protocol}://${window.location.host}/api/companies/${encodeURIComponent(run.companyId)}/events/ws`;
+      const url = `${protocol}://${
+        window.location.host
+      }/api/companies/${encodeURIComponent(run.companyId)}/events/ws`;
       socket = new WebSocket(url);
 
       socket.onopen = () => {
@@ -3501,8 +4059,13 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
           const chunk = typeof payload.chunk === "string" ? payload.chunk : "";
           if (!chunk) return;
           const streamRaw = asNonEmptyString(payload.stream);
-          const stream = streamRaw === "stderr" || streamRaw === "system" ? streamRaw : "stdout";
-          const ts = asNonEmptyString((payload as Record<string, unknown>).ts) ?? event.createdAt;
+          const stream =
+            streamRaw === "stderr" || streamRaw === "system"
+              ? streamRaw
+              : "stdout";
+          const ts =
+            asNonEmptyString((payload as Record<string, unknown>).ts) ??
+            event.createdAt;
           setLogLines((prev) => [...prev, { ts, stream, chunk }]);
           return;
         }
@@ -3514,7 +4077,9 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
 
         const streamRaw = asNonEmptyString(payload.stream);
         const stream =
-          streamRaw === "stdout" || streamRaw === "stderr" || streamRaw === "system"
+          streamRaw === "stdout" ||
+          streamRaw === "stderr" ||
+          streamRaw === "system"
             ? streamRaw
             : null;
         const levelRaw = asNonEmptyString(payload.level);
@@ -3618,12 +4183,20 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
       />
       {adapterInvokePayload && (
         <div className="rounded-lg border border-border bg-background/60 p-3 space-y-2">
-          <div className="text-xs font-medium text-muted-foreground">Invocation</div>
+          <div className="text-xs font-medium text-muted-foreground">
+            Invocation
+          </div>
           {typeof adapterInvokePayload.adapterType === "string" && (
-            <div className="text-xs"><span className="text-muted-foreground">Adapter: </span>{adapterInvokePayload.adapterType}</div>
+            <div className="text-xs">
+              <span className="text-muted-foreground">Adapter: </span>
+              {adapterInvokePayload.adapterType}
+            </div>
           )}
           {typeof adapterInvokePayload.cwd === "string" && (
-            <div className="text-xs break-all"><span className="text-muted-foreground">Working dir: </span><span className="font-mono">{adapterInvokePayload.cwd}</span></div>
+            <div className="text-xs break-all">
+              <span className="text-muted-foreground">Working dir: </span>
+              <span className="font-mono">{adapterInvokePayload.cwd}</span>
+            </div>
           )}
           {typeof adapterInvokePayload.command === "string" && (
             <div className="text-xs break-all">
@@ -3632,26 +4205,37 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
                 {[
                   adapterInvokePayload.command,
                   ...(Array.isArray(adapterInvokePayload.commandArgs)
-                    ? adapterInvokePayload.commandArgs.filter((v): v is string => typeof v === "string")
+                    ? adapterInvokePayload.commandArgs.filter(
+                        (v): v is string => typeof v === "string"
+                      )
                     : []),
                 ].join(" ")}
               </span>
             </div>
           )}
-          {Array.isArray(adapterInvokePayload.commandNotes) && adapterInvokePayload.commandNotes.length > 0 && (
-            <div>
-              <div className="text-xs text-muted-foreground mb-1">Command notes</div>
-              <ul className="list-disc pl-5 space-y-1">
-                {adapterInvokePayload.commandNotes
-                  .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-                  .map((note, idx) => (
-                    <li key={`${idx}-${note}`} className="text-xs break-all font-mono">
-                      {note}
-                    </li>
-                  ))}
-              </ul>
-            </div>
-          )}
+          {Array.isArray(adapterInvokePayload.commandNotes) &&
+            adapterInvokePayload.commandNotes.length > 0 && (
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">
+                  Command notes
+                </div>
+                <ul className="list-disc pl-5 space-y-1">
+                  {adapterInvokePayload.commandNotes
+                    .filter(
+                      (value): value is string =>
+                        typeof value === "string" && value.trim().length > 0
+                    )
+                    .map((note, idx) => (
+                      <li
+                        key={`${idx}-${note}`}
+                        className="text-xs break-all font-mono"
+                      >
+                        {note}
+                      </li>
+                    ))}
+                </ul>
+              </div>
+            )}
           {adapterInvokePayload.prompt !== undefined && (
             <div>
               <div className="text-xs text-muted-foreground mb-1">Prompt</div>
@@ -3672,7 +4256,9 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
           )}
           {adapterInvokePayload.env !== undefined && (
             <div>
-              <div className="text-xs text-muted-foreground mb-1">Environment</div>
+              <div className="text-xs text-muted-foreground mb-1">
+                Environment
+              </div>
               <pre className="bg-neutral-100 dark:bg-neutral-950 rounded-md p-2 text-xs overflow-x-auto whitespace-pre-wrap font-mono">
                 {formatEnvForDisplay(adapterInvokePayload.env, censorUsernameInLogs)}
               </pre>
@@ -3695,7 +4281,7 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
                   "rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition-colors",
                   transcriptMode === mode
                     ? "bg-accent text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground",
+                    : "text-muted-foreground hover:text-foreground"
                 )}
                 onClick={() => setTranscriptMode(mode)}
               >
@@ -3734,7 +4320,11 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
           entries={transcript}
           mode={transcriptMode}
           streaming={isLive}
-          emptyMessage={run.logRef ? "Waiting for transcript..." : "No persisted transcript for this run."}
+          emptyMessage={
+            run.logRef
+              ? "Waiting for transcript..."
+              : "No persisted transcript for this run."
+          }
         />
         {logError && (
           <div className="mt-3 rounded-xl border border-red-500/20 bg-red-500/[0.06] px-3 py-2 text-xs text-red-700 dark:text-red-300">
@@ -3746,7 +4336,9 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
 
       {(run.status === "failed" || run.status === "timed_out") && (
         <div className="rounded-lg border border-red-300 dark:border-red-500/30 bg-red-50 dark:bg-red-950/20 p-3 space-y-2">
-          <div className="text-xs font-medium text-red-700 dark:text-red-300">Failure details</div>
+          <div className="text-xs font-medium text-red-700 dark:text-red-300">
+            Failure details
+          </div>
           {run.error && (
             <div className="text-xs text-red-600 dark:text-red-200">
               <span className="text-red-700 dark:text-red-300">Error: </span>
@@ -3755,7 +4347,9 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
           )}
           {run.stderrExcerpt && run.stderrExcerpt.trim() && (
             <div>
-              <div className="text-xs text-red-700 dark:text-red-300 mb-1">stderr excerpt</div>
+              <div className="text-xs text-red-700 dark:text-red-300 mb-1">
+                stderr excerpt
+              </div>
               <pre className="bg-red-50 dark:bg-neutral-950 rounded-md p-2 text-xs overflow-x-auto whitespace-pre-wrap text-red-800 dark:text-red-100">
                 {redactPathText(run.stderrExcerpt, censorUsernameInLogs)}
               </pre>
@@ -3763,7 +4357,9 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
           )}
           {run.resultJson && (
             <div>
-              <div className="text-xs text-red-700 dark:text-red-300 mb-1">adapter result JSON</div>
+              <div className="text-xs text-red-700 dark:text-red-300 mb-1">
+                adapter result JSON
+              </div>
               <pre className="bg-red-50 dark:bg-neutral-950 rounded-md p-2 text-xs overflow-x-auto whitespace-pre-wrap text-red-800 dark:text-red-100">
                 {JSON.stringify(redactPathValue(run.resultJson, censorUsernameInLogs), null, 2)}
               </pre>
@@ -3771,7 +4367,9 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
           )}
           {run.stdoutExcerpt && run.stdoutExcerpt.trim() && !run.resultJson && (
             <div>
-              <div className="text-xs text-red-700 dark:text-red-300 mb-1">stdout excerpt</div>
+              <div className="text-xs text-red-700 dark:text-red-300 mb-1">
+                stdout excerpt
+              </div>
               <pre className="bg-red-50 dark:bg-neutral-950 rounded-md p-2 text-xs overflow-x-auto whitespace-pre-wrap text-red-800 dark:text-red-100">
                 {redactPathText(run.stdoutExcerpt, censorUsernameInLogs)}
               </pre>
@@ -3782,20 +4380,32 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
 
       {events.length > 0 && (
         <div>
-          <div className="mb-2 text-xs font-medium text-muted-foreground">Events ({events.length})</div>
+          <div className="mb-2 text-xs font-medium text-muted-foreground">
+            Events ({events.length})
+          </div>
           <div className="bg-neutral-100 dark:bg-neutral-950 rounded-lg p-3 font-mono text-xs space-y-0.5">
             {events.map((evt) => {
-              const color = evt.color
-                ?? (evt.level ? levelColors[evt.level] : null)
-                ?? (evt.stream ? streamColors[evt.stream] : null)
-                ?? "text-foreground";
+              const color =
+                evt.color ??
+                (evt.level ? levelColors[evt.level] : null) ??
+                (evt.stream ? streamColors[evt.stream] : null) ??
+                "text-foreground";
 
               return (
                 <div key={evt.id} className="flex gap-2">
                   <span className="text-neutral-400 dark:text-neutral-600 shrink-0 select-none w-16">
-                    {new Date(evt.createdAt).toLocaleTimeString("en-US", { hour12: false })}
+                    {new Date(evt.createdAt).toLocaleTimeString("en-US", {
+                      hour12: false,
+                    })}
                   </span>
-                  <span className={cn("shrink-0 w-14", evt.stream ? (streamColors[evt.stream] ?? "text-neutral-500") : "text-neutral-500")}>
+                  <span
+                    className={cn(
+                      "shrink-0 w-14",
+                      evt.stream
+                        ? streamColors[evt.stream] ?? "text-neutral-500"
+                        : "text-neutral-500"
+                    )}
+                  >
                     {evt.stream ? `[${evt.stream}]` : ""}
                   </span>
                   <span className={cn("break-all", color)}>
@@ -3817,7 +4427,13 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
 
 /* ---- Keys Tab ---- */
 
-function KeysTab({ agentId, companyId }: { agentId: string; companyId?: string }) {
+function KeysTab({
+  agentId,
+  companyId,
+}: {
+  agentId: string;
+  companyId?: string;
+}) {
   const queryClient = useQueryClient();
   const [newKeyName, setNewKeyName] = useState("");
   const [newToken, setNewToken] = useState<string | null>(null);
@@ -3830,19 +4446,25 @@ function KeysTab({ agentId, companyId }: { agentId: string; companyId?: string }
   });
 
   const createKey = useMutation({
-    mutationFn: () => agentsApi.createKey(agentId, newKeyName.trim() || "Default", companyId),
+    mutationFn: () =>
+      agentsApi.createKey(agentId, newKeyName.trim() || "Default", companyId),
     onSuccess: (data) => {
       setNewToken(data.token);
       setTokenVisible(true);
       setNewKeyName("");
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.keys(agentId) });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.keys(agentId),
+      });
     },
   });
 
   const revokeKey = useMutation({
-    mutationFn: (keyId: string) => agentsApi.revokeKey(agentId, keyId, companyId),
+    mutationFn: (keyId: string) =>
+      agentsApi.revokeKey(agentId, keyId, companyId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents.keys(agentId) });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.agents.keys(agentId),
+      });
     },
   });
 
@@ -3874,7 +4496,11 @@ function KeysTab({ agentId, companyId }: { agentId: string; companyId?: string }
               onClick={() => setTokenVisible((v) => !v)}
               title={tokenVisible ? "Hide" : "Show"}
             >
-              {tokenVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              {tokenVisible ? (
+                <EyeOff className="h-3.5 w-3.5" />
+              ) : (
+                <Eye className="h-3.5 w-3.5" />
+              )}
             </Button>
             <Button
               variant="ghost"
@@ -3904,7 +4530,8 @@ function KeysTab({ agentId, companyId }: { agentId: string; companyId?: string }
           Create API Key
         </h3>
         <p className="text-xs text-muted-foreground">
-          API keys allow this agent to authenticate calls to the Paperclip server.
+          API keys allow this agent to authenticate calls to the Paperclip
+          server.
         </p>
         <div className="flex items-center gap-2">
           <Input
@@ -3928,7 +4555,9 @@ function KeysTab({ agentId, companyId }: { agentId: string; companyId?: string }
       </div>
 
       {/* Active keys */}
-      {isLoading && <p className="text-sm text-muted-foreground">Loading keys...</p>}
+      {isLoading && (
+        <p className="text-sm text-muted-foreground">Loading keys...</p>
+      )}
 
       {!isLoading && activeKeys.length === 0 && !newToken && (
         <p className="text-sm text-muted-foreground">No active API keys.</p>
@@ -3941,7 +4570,10 @@ function KeysTab({ agentId, companyId }: { agentId: string; companyId?: string }
           </h3>
           <div className="border border-border rounded-lg divide-y divide-border">
             {activeKeys.map((key: AgentKey) => (
-              <div key={key.id} className="flex items-center justify-between px-4 py-2.5">
+              <div
+                key={key.id}
+                className="flex items-center justify-between px-4 py-2.5"
+              >
                 <div>
                   <span className="text-sm font-medium">{key.name}</span>
                   <span className="text-xs text-muted-foreground ml-3">
@@ -3971,7 +4603,10 @@ function KeysTab({ agentId, companyId }: { agentId: string; companyId?: string }
           </h3>
           <div className="border border-border rounded-lg divide-y divide-border opacity-50">
             {revokedKeys.map((key: AgentKey) => (
-              <div key={key.id} className="flex items-center justify-between px-4 py-2.5">
+              <div
+                key={key.id}
+                className="flex items-center justify-between px-4 py-2.5"
+              >
                 <div>
                   <span className="text-sm line-through">{key.name}</span>
                   <span className="text-xs text-muted-foreground ml-3">

@@ -1,6 +1,15 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import type { Agent, Issue, LiveEvent } from "@paperclipai/shared";
+import type {
+  Agent,
+  ConversationDetail,
+  ConversationLiveEvent,
+  ConversationMessage,
+  ConversationMessagePage,
+  ConversationMessageRef,
+  Issue,
+  LiveEvent,
+} from "@paperclipai/shared";
 import { authApi } from "../api/auth";
 import { useCompany } from "./CompanyContext";
 import type { ToastInput } from "./ToastContext";
@@ -353,11 +362,17 @@ function invalidateActivityQueries(
   payload: Record<string, unknown>,
 ) {
   queryClient.invalidateQueries({ queryKey: queryKeys.activity(companyId) });
-  queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(companyId) });
-  queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(companyId) });
-
   const entityType = readString(payload.entityType);
   const entityId = readString(payload.entityId);
+
+  if (entityType === "conversation") {
+    return;
+  }
+
+  if (entityType !== "conversation") {
+    queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(companyId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(companyId) });
+  }
 
   if (entityType === "issue") {
     queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(companyId) });
@@ -432,6 +447,242 @@ function invalidateActivityQueries(
   }
 }
 
+function invalidateConversationQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+  companyId: string,
+  payload: Record<string, unknown>,
+) {
+  queryClient.invalidateQueries({ queryKey: ["conversations", companyId] });
+
+  const conversationId = readString(payload.conversationId);
+  if (!conversationId) return;
+
+  queryClient.invalidateQueries({
+    queryKey: queryKeys.conversations.detail(conversationId),
+  });
+  queryClient.invalidateQueries({
+    queryKey: ["conversations", "messages", conversationId],
+  });
+}
+
+function readPositiveInteger(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return null;
+}
+
+function isBaseConversationMessagesQueryParams(value: unknown) {
+  const params = readRecord(value);
+  if (!params) return true;
+  return (
+    params.beforeSequence == null &&
+    params.q == null &&
+    params.targetKind == null &&
+    params.targetId == null &&
+    params.aroundMessageId == null &&
+    params.before == null &&
+    params.after == null
+  );
+}
+
+function normalizeConversationMessageRef(
+  companyId: string,
+  messageId: string,
+  value: unknown,
+): ConversationMessageRef | null {
+  const ref = readRecord(value);
+  if (!ref) return null;
+  const id = readString(ref.id);
+  const refKind = readString(ref.refKind);
+  const targetId = readString(ref.targetId);
+  const displayText = readString(ref.displayText);
+  const refOrigin = readString(ref.refOrigin);
+  if (!id || !refKind || !targetId || !displayText || !refOrigin) return null;
+  return {
+    id,
+    companyId: readString(ref.companyId) ?? companyId,
+    messageId: readString(ref.messageId) ?? messageId,
+    refKind: refKind as ConversationMessageRef["refKind"],
+    targetId,
+    displayText,
+    refOrigin: refOrigin as ConversationMessageRef["refOrigin"],
+    createdAt: new Date(readString(ref.createdAt) ?? new Date().toISOString()),
+  };
+}
+
+function normalizeConversationMessage(
+  companyId: string,
+  conversationId: string,
+  payload: Record<string, unknown>,
+): ConversationMessage | null {
+  const id = readString(payload.id);
+  const createdAt = readString(payload.createdAt);
+  const bodyMarkdown = readString(payload.bodyMarkdown);
+  const authorType = readString(payload.authorType);
+  const sequence = readPositiveInteger(payload.sequence);
+  if (!id || !createdAt || !bodyMarkdown || !authorType || sequence === null) {
+    return null;
+  }
+
+  const refs = Array.isArray(payload.refs)
+    ? payload.refs
+        .map((ref) => normalizeConversationMessageRef(companyId, id, ref))
+        .filter((ref): ref is ConversationMessageRef => ref !== null)
+    : [];
+
+  return {
+    id,
+    companyId,
+    conversationId,
+    sequence,
+    authorType: authorType as ConversationMessage["authorType"],
+    authorUserId: readString(payload.authorUserId),
+    authorAgentId: readString(payload.authorAgentId),
+    runId: readString(payload.runId),
+    bodyMarkdown,
+    refs,
+    createdAt: new Date(createdAt),
+    updatedAt: new Date(createdAt),
+  };
+}
+
+function upsertConversationMessage(
+  current: ConversationMessagePage,
+  message: ConversationMessage,
+  limit: number | null,
+): ConversationMessagePage {
+  const existingIndex = current.messages.findIndex((entry) => entry.id === message.id);
+  const nextMessages = existingIndex >= 0
+    ? current.messages.map((entry, index) => (index === existingIndex ? message : entry))
+    : [...current.messages, message];
+  nextMessages.sort((left, right) => left.sequence - right.sequence);
+
+  if (limit !== null && nextMessages.length > limit) {
+    return {
+      ...current,
+      messages: nextMessages.slice(-limit),
+      hasMoreBefore: true,
+    };
+  }
+
+  return {
+    ...current,
+    messages: nextMessages,
+  };
+}
+
+function invalidateLinkedConversationTargetQueries(
+  queryClient: QueryClient,
+  targetKind: string | null,
+  targetId: string | null,
+) {
+  if (!targetKind || !targetId) return;
+  if (targetKind === "issue") {
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.issues.linkedConversations(targetId),
+    });
+    return;
+  }
+  if (targetKind === "goal") {
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.goals.linkedConversations(targetId),
+    });
+    return;
+  }
+  if (targetKind === "project") {
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.projects.linkedConversations(targetId),
+    });
+  }
+}
+
+function handleConversationMessagePosted(
+  queryClient: QueryClient,
+  companyId: string,
+  payload: Record<string, unknown>,
+) {
+  const conversationId = readString(payload.conversationId);
+  const messagePayload = readRecord(payload.message);
+  if (!conversationId || !messagePayload) return;
+
+  const message = normalizeConversationMessage(companyId, conversationId, messagePayload);
+  if (!message) return;
+
+  for (const [queryKey, current] of queryClient.getQueriesData<ConversationMessagePage>({
+    queryKey: ["conversations", "messages", conversationId],
+  })) {
+    if (!current || !Array.isArray(queryKey)) continue;
+    const params = queryKey[3];
+    if (!isBaseConversationMessagesQueryParams(params)) {
+      queryClient.invalidateQueries({ queryKey });
+      continue;
+    }
+    const limit = readPositiveInteger(readRecord(params)?.limit);
+    queryClient.setQueryData<ConversationMessagePage>(
+      queryKey,
+      upsertConversationMessage(current, message, limit),
+    );
+  }
+
+  queryClient.setQueryData<ConversationDetail>(
+    queryKeys.conversations.detail(conversationId),
+    (current) =>
+      current
+        ? {
+            ...current,
+            latestMessageSequence: readPositiveInteger(payload.latestMessageSequence) ?? current.latestMessageSequence,
+            latestMessageAt: message.createdAt,
+            updatedAt: new Date(readString(payload.latestActivityAt) ?? message.createdAt.toISOString()),
+          }
+        : current,
+  );
+
+  invalidateConversationQueries(queryClient, companyId, payload);
+  for (const ref of message.refs) {
+    invalidateLinkedConversationTargetQueries(queryClient, ref.refKind, ref.targetId);
+  }
+}
+
+function handleConversationContextChange(
+  queryClient: QueryClient,
+  companyId: string,
+  payload: Record<string, unknown>,
+) {
+  invalidateConversationQueries(queryClient, companyId, payload);
+  invalidateLinkedConversationTargetQueries(
+    queryClient,
+    readString(payload.targetKind),
+    readString(payload.targetId),
+  );
+}
+
+function handleConversationRealtimeEvent(
+  queryClient: QueryClient,
+  companyId: string,
+  event: ConversationLiveEvent,
+) {
+  switch (event.type) {
+    case "conversation.message_posted":
+      handleConversationMessagePosted(queryClient, companyId, event.payload ?? {});
+      return;
+    case "conversation.context_linked":
+    case "conversation.context_unlinked":
+      handleConversationContextChange(queryClient, companyId, event.payload ?? {});
+      return;
+    case "conversation.created":
+    case "conversation.updated":
+    case "conversation.participant_added":
+    case "conversation.participant_removed":
+      invalidateConversationQueries(queryClient, companyId, event.payload ?? {});
+      return;
+  }
+}
+
 interface ToastGate {
   cooldownHits: Map<string, number[]>;
   suppressUntil: number;
@@ -467,7 +718,7 @@ function gatedPushToast(
   if (id !== null) recordToastHit(gate, category);
 }
 
-function handleLiveEvent(
+export function handleLiveEvent(
   queryClient: QueryClient,
   expectedCompanyId: string,
   event: LiveEvent,
@@ -514,6 +765,15 @@ function handleLiveEvent(
       buildActivityToast(queryClient, expectedCompanyId, payload, currentActor) ??
       buildJoinRequestToast(payload);
     if (toast) gatedPushToast(gate, pushToast, `activity:${action ?? "unknown"}`, toast);
+    return;
+  }
+
+  if (event.type.startsWith("conversation.")) {
+    handleConversationRealtimeEvent(
+      queryClient,
+      expectedCompanyId,
+      event as ConversationLiveEvent,
+    );
   }
 }
 

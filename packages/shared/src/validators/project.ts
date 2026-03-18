@@ -1,6 +1,14 @@
 import { z } from "zod";
 import { PROJECT_STATUSES } from "../constants.js";
 
+const listSearchLimitSchema = z.coerce
+  .number()
+  .int()
+  .positive()
+  .optional()
+  .default(20)
+  .transform((value) => Math.min(value, 20));
+
 const executionWorkspaceStrategySchema = z
   .object({
     type: z.enum(["project_primary", "git_worktree", "adapter_managed", "cloud_sandbox"]).optional(),
@@ -106,6 +114,15 @@ export const createProjectSchema = z.object({
 });
 
 export type CreateProject = z.infer<typeof createProjectSchema>;
+
+export const listProjectsQuerySchema = z
+  .object({
+    q: z.string().trim().optional(),
+    limit: listSearchLimitSchema,
+  })
+  .strict();
+
+export type ListProjectsQuery = z.infer<typeof listProjectsQuerySchema>;
 
 export const updateProjectSchema = z.object(projectFields).partial();
 

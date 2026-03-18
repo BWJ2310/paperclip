@@ -104,11 +104,13 @@ export {
 
 export {
   createProjectSchema,
+  listProjectsQuerySchema,
   updateProjectSchema,
   createProjectWorkspaceSchema,
   updateProjectWorkspaceSchema,
   projectExecutionWorkspacePolicySchema,
   type CreateProject,
+  type ListProjectsQuery,
   type UpdateProject,
   type CreateProjectWorkspace,
   type UpdateProjectWorkspace,
@@ -157,10 +159,33 @@ export {
 
 export {
   createGoalSchema,
+  listGoalsQuerySchema,
   updateGoalSchema,
   type CreateGoal,
+  type ListGoalsQuery,
   type UpdateGoal,
 } from "./goal.js";
+
+export {
+  createConversationSchema,
+  updateConversationSchema,
+  listConversationsQuerySchema,
+  addConversationParticipantSchema,
+  removeConversationParticipantParamsSchema,
+  conversationActiveContextTargetSchema,
+  createConversationMessageSchema,
+  listConversationMessagesQuerySchema,
+  markConversationReadSchema,
+  createConversationTargetLinkSchema,
+  deleteConversationTargetLinkQuerySchema,
+  conversationMessageRefKindSchema,
+  conversationMessageRefOriginSchema,
+  conversationAuthorTypeSchema,
+  conversationLinkOriginSchema,
+  conversationActorTypeSchema,
+  conversationMemoryBuildStatusSchema,
+  conversationResponseModeSchema,
+} from "./conversation.js";
 
 export {
   createApprovalSchema,

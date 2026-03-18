@@ -4,17 +4,19 @@ import {
   createProjectSchema,
   createProjectWorkspaceSchema,
   isUuidLike,
+  listProjectsQuerySchema,
   updateProjectSchema,
   updateProjectWorkspaceSchema,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
-import { projectService, logActivity } from "../services/index.js";
+import { conversationService, projectService, logActivity } from "../services/index.js";
 import { conflict } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 
 export function projectRoutes(db: Db) {
   const router = Router();
   const svc = projectService(db);
+  const conversationsSvc = conversationService(db);
 
   async function resolveCompanyIdForProjectReference(req: Request) {
     const companyIdQuery = req.query.companyId;
@@ -55,7 +57,8 @@ export function projectRoutes(db: Db) {
   router.get("/companies/:companyId/projects", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const result = await svc.list(companyId);
+    const query = listProjectsQuerySchema.parse(req.query);
+    const result = await svc.list(companyId, query);
     res.json(result);
   });
 
@@ -68,6 +71,27 @@ export function projectRoutes(db: Db) {
     }
     assertCompanyAccess(req, project.companyId);
     res.json(project);
+  });
+
+  router.get("/projects/:id/linked-conversations", async (req, res) => {
+    const id = req.params.id as string;
+    const project = await svc.getById(id);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    assertCompanyAccess(req, project.companyId);
+    const actor = getActorInfo(req);
+    const rows = await conversationsSvc.listLinkedConversations({
+      companyId: project.companyId,
+      targetKind: "project",
+      targetId: project.id,
+      viewer:
+        req.actor.type === "agent" && req.actor.agentId
+          ? { type: "agent", agentId: req.actor.agentId }
+          : { type: "board", userId: actor.actorId },
+    });
+    res.json(rows);
   });
 
   router.post("/companies/:companyId/projects", validate(createProjectSchema), async (req, res) => {

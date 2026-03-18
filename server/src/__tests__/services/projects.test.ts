@@ -46,6 +46,31 @@ describe("projectService", () => {
       const all = await svc().list(companyId);
       expect(all.length).toBe(2);
     });
+
+    it("matches name and urlKey with prefix-first ordering and applies limit after sorting", async () => {
+      await svc().create(companyId, { name: "Platform Auth" });
+      await svc().create(companyId, { name: "Auth Console" });
+      await svc().create(companyId, { name: "Auth Agent" });
+
+      const rows = await svc().list(companyId, { q: " auth ", limit: 2 });
+
+      expect(rows.map((project) => project.name)).toEqual([
+        "Auth Agent",
+        "Auth Console",
+      ]);
+    });
+
+    it("matches derived urlKey lookups even when the raw name does not contain the hyphenated query", async () => {
+      await svc().create(companyId, { name: "Billing Platform" });
+      await svc().create(companyId, { name: "Support Queue" });
+
+      const rows = await svc().list(companyId, {
+        q: "billing-platform",
+        limit: 20,
+      });
+
+      expect(rows.map((project) => project.name)).toEqual(["Billing Platform"]);
+    });
   });
 
   // ── getById ───────────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
-import { type AnyPgColumn, pgTable, uuid, text, timestamp, jsonb, index, integer, bigint, boolean } from "drizzle-orm/pg-core";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, jsonb, index, integer, bigint, boolean } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
 import { agentWakeupRequests } from "./agent_wakeup_requests.js";
@@ -15,7 +16,7 @@ export const heartbeatRuns = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     error: text("error"),
-    wakeupRequestId: uuid("wakeup_request_id").references(() => agentWakeupRequests.id),
+    wakeupRequestId: uuid("wakeup_request_id").references((): AnyPgColumn => agentWakeupRequests.id),
     exitCode: integer("exit_code"),
     signal: text("signal"),
     usageJson: jsonb("usage_json").$type<Record<string, unknown>>(),

@@ -7,6 +7,7 @@ export const API = {
   projects: `${API_PREFIX}/projects`,
   issues: `${API_PREFIX}/issues`,
   goals: `${API_PREFIX}/goals`,
+  conversations: `${API_PREFIX}/conversations`,
   approvals: `${API_PREFIX}/approvals`,
   secrets: `${API_PREFIX}/secrets`,
   costs: `${API_PREFIX}/costs`,
@@ -18,3 +19,11 @@ export const API = {
   members: `${API_PREFIX}/members`,
   admin: `${API_PREFIX}/admin`,
 } as const;
+
+export function companyGoalsPath(companyId: string) {
+  return `${API.companies}/${encodeURIComponent(companyId)}/goals`;
+}
+
+export function companyProjectsPath(companyId: string) {
+  return `${API.companies}/${encodeURIComponent(companyId)}/projects`;
+}
