@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import { bigint, check, index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { agents } from "./agents.js";
 import { companies } from "./companies.js";
 
 export const conversations = pgTable(
@@ -10,7 +11,8 @@ export const conversations = pgTable(
     title: text("title").notNull(),
     status: text("status").notNull().default("active"),
     lastMessageSequence: bigint("last_message_sequence", { mode: "number" }).notNull().default(0),
-    createdByUserId: text("created_by_user_id").notNull(),
+    createdByUserId: text("created_by_user_id"),
+    createdByAgentId: uuid("created_by_agent_id").references(() => agents.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

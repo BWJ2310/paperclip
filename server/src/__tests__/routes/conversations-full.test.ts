@@ -305,6 +305,196 @@ describe("conversationRoutes", () => {
     };
   }
 
+  async function seedManagerFixture() {
+    const now = new Date("2026-03-18T15:00:00.000Z");
+    const [company] = await testDb.db
+      .insert(companies)
+      .values({
+        name: "Manager Conversation Co",
+        issuePrefix: `M${randomUUID().slice(0, 4).toUpperCase()}`,
+      })
+      .returning();
+
+    const [manager, reportA, reportB, peerAgent] = await testDb.db
+      .insert(agents)
+      .values([
+        {
+          companyId: company.id,
+          name: "Manager Agent",
+          role: "manager",
+          adapterType: "process",
+          status: "idle",
+        },
+        {
+          companyId: company.id,
+          name: "Report Agent A",
+          role: "general",
+          adapterType: "process",
+          status: "idle",
+        },
+        {
+          companyId: company.id,
+          name: "Report Agent B",
+          role: "general",
+          adapterType: "process",
+          status: "idle",
+        },
+        {
+          companyId: company.id,
+          name: "Peer Agent",
+          role: "general",
+          adapterType: "process",
+          status: "idle",
+        },
+      ])
+      .returning();
+
+    await testDb.db
+      .update(agents)
+      .set({ reportsTo: manager.id })
+      .where(eq(agents.id, reportA.id));
+    await testDb.db
+      .update(agents)
+      .set({ reportsTo: manager.id })
+      .where(eq(agents.id, reportB.id));
+
+    const [conversation] = await testDb.db
+      .insert(conversations)
+      .values({
+        companyId: company.id,
+        title: "Manager 1:1",
+        createdByUserId: "board-user",
+        updatedAt: now,
+      })
+      .returning();
+
+    await testDb.db.insert(conversationParticipants).values([
+      {
+        companyId: company.id,
+        conversationId: conversation.id,
+        agentId: manager.id,
+        joinedAt: now,
+        updatedAt: now,
+      },
+      {
+        companyId: company.id,
+        conversationId: conversation.id,
+        agentId: reportA.id,
+        joinedAt: now,
+        updatedAt: now,
+      },
+    ]);
+
+    setMockActor({
+      type: "board",
+      userId: "board-user",
+      companyIds: [company.id],
+      source: "session",
+      isInstanceAdmin: false,
+    });
+
+    return {
+      app: createTestApp(testDb.db),
+      company,
+      manager,
+      reportA,
+      reportB,
+      peerAgent,
+      conversation,
+    };
+  }
+
+  it("allows a manager agent to create a conversation with direct reports", async () => {
+    const fixture = await seedManagerFixture();
+    setMockActor({
+      type: "agent",
+      agentId: fixture.manager.id,
+      companyId: fixture.company.id,
+    });
+
+    const res = await request(fixture.app)
+      .post(`/api/companies/${fixture.company.id}/conversations`)
+      .send({
+        title: "Weekly report sync",
+        participantAgentIds: [fixture.reportA.id],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.title).toBe("Weekly report sync");
+    expect(
+      res.body.participants.map((participant: { agentId: string }) => participant.agentId).sort(),
+    ).toEqual([fixture.manager.id, fixture.reportA.id].sort());
+
+    const createdConversation = await testDb.db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, res.body.id))
+      .then((rows) => rows[0] ?? null);
+
+    expect(createdConversation?.createdByAgentId).toBe(fixture.manager.id);
+    expect(createdConversation?.createdByUserId).toBeNull();
+  });
+
+  it("prevents a manager agent from creating a conversation with non-direct reports", async () => {
+    const fixture = await seedManagerFixture();
+    setMockActor({
+      type: "agent",
+      agentId: fixture.manager.id,
+      companyId: fixture.company.id,
+    });
+
+    const res = await request(fixture.app)
+      .post(`/api/companies/${fixture.company.id}/conversations`)
+      .send({
+        title: "Improper participant test",
+        participantAgentIds: [fixture.peerAgent.id],
+      });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("Agents can only include direct reports in conversations");
+  });
+
+  it("allows a manager agent to add a direct report participant to their conversation", async () => {
+    const fixture = await seedManagerFixture();
+    setMockActor({
+      type: "agent",
+      agentId: fixture.manager.id,
+      companyId: fixture.company.id,
+    });
+
+    const res = await request(fixture.app)
+      .post(`/api/conversations/${fixture.conversation.id}/participants`)
+      .send({ agentId: fixture.reportB.id });
+
+    expect(res.status).toBe(201);
+    expect(res.body.agentId).toBe(fixture.reportB.id);
+
+    const participantRows = await testDb.db
+      .select()
+      .from(conversationParticipants)
+      .where(eq(conversationParticipants.conversationId, fixture.conversation.id));
+
+    expect(participantRows.map((row) => row.agentId).sort()).toEqual(
+      [fixture.manager.id, fixture.reportA.id, fixture.reportB.id].sort(),
+    );
+  });
+
+  it("prevents a manager agent from adding a non-direct-report participant", async () => {
+    const fixture = await seedManagerFixture();
+    setMockActor({
+      type: "agent",
+      agentId: fixture.manager.id,
+      companyId: fixture.company.id,
+    });
+
+    const res = await request(fixture.app)
+      .post(`/api/conversations/${fixture.conversation.id}/participants`)
+      .send({ agentId: fixture.peerAgent.id });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("Agents can only include direct reports in conversations");
+  });
+
   it("filters messages by text query with latest-window pagination", async () => {
     const fixture = await seedFixture();
 

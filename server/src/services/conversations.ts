@@ -369,6 +369,33 @@ export function conversationService(db: Db) {
     return rows;
   }
 
+  async function ensureDirectReportAgents(
+    companyId: string,
+    managerAgentId: string,
+    agentIds: string[],
+  ) {
+    if (agentIds.length === 0) return [];
+    const rows = await db
+      .select({
+        id: agents.id,
+      })
+      .from(agents)
+      .where(
+        and(
+          eq(agents.companyId, companyId),
+          eq(agents.reportsTo, managerAgentId),
+          inArray(agents.id, agentIds),
+        ),
+      );
+    const allowedAgentIds = new Set(rows.map((row) => row.id));
+    for (const agentId of agentIds) {
+      if (!allowedAgentIds.has(agentId)) {
+        throw forbidden("Agents can only include direct reports in conversations");
+      }
+    }
+    return rows;
+  }
+
   async function ensureMessageTargetsExist(
     companyId: string,
     participantAgentIds: string[],
@@ -960,10 +987,24 @@ export function conversationService(db: Db) {
       actor: ConversationActorContext,
       input: { title: string; participantAgentIds: string[] },
     ) => {
-      if (actor.viewerType !== "board") {
-        throw forbidden("Agents cannot create conversations directly");
+      const requestedParticipantAgentIds =
+        actor.viewerType === "agent"
+          ? input.participantAgentIds.filter((agentId) => agentId !== actor.agentId)
+          : input.participantAgentIds;
+
+      if (actor.viewerType === "board") {
+        await ensureParticipantAgents(companyId, requestedParticipantAgentIds);
+      } else {
+        if (requestedParticipantAgentIds.length === 0) {
+          throw unprocessable("Agent-created conversations require at least one direct report");
+        }
+        await ensureDirectReportAgents(companyId, actor.agentId, requestedParticipantAgentIds);
       }
-      await ensureParticipantAgents(companyId, input.participantAgentIds);
+
+      const participantAgentIds =
+        actor.viewerType === "agent"
+          ? [...new Set([actor.agentId, ...requestedParticipantAgentIds])]
+          : requestedParticipantAgentIds;
 
       const now = new Date();
       const conversation = await db.transaction(async (tx) => {
@@ -972,14 +1013,15 @@ export function conversationService(db: Db) {
           .values({
             companyId,
             title: input.title,
-            createdByUserId: actor.actorId,
+            createdByUserId: actor.viewerType === "board" ? actor.actorId : null,
+            createdByAgentId: actor.viewerType === "agent" ? actor.agentId : null,
             updatedAt: now,
           })
           .returning();
 
-        if (input.participantAgentIds.length > 0) {
+        if (participantAgentIds.length > 0) {
           await tx.insert(conversationParticipants).values(
-            input.participantAgentIds.map((agentId) => ({
+            participantAgentIds.map((agentId) => ({
               companyId,
               conversationId: created!.id,
               agentId,
@@ -1060,10 +1102,17 @@ export function conversationService(db: Db) {
       actor: ConversationActorContext,
       agentId: string,
     ) => {
-      if (actor.viewerType !== "board") throw forbidden("Board access required");
       const conversation = await getConversationRow(conversationId);
       if (!conversation) throw notFound("Conversation not found");
-      await ensureParticipantAgents(conversation.companyId, [agentId]);
+      if (actor.viewerType === "board") {
+        await ensureParticipantAgents(conversation.companyId, [agentId]);
+      } else {
+        await ensureConversationVisible(conversationId, actor);
+        if (agentId === actor.agentId) {
+          throw unprocessable("Agent is already a conversation participant");
+        }
+        await ensureDirectReportAgents(conversation.companyId, actor.agentId, [agentId]);
+      }
 
       const existing = await db
         .select()

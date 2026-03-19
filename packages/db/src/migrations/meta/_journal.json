@@ -344,6 +344,13 @@
       "when": 1774040522412,
       "tag": "0044_smart_titania",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1773934632013,
+      "tag": "0040_uneven_scourge",
+      "breakpoints": true
     }
   ]
 }

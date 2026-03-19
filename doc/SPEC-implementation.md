@@ -230,7 +230,8 @@ Invariants:
 - `title` text not null
 - `status` enum: `active | archived`
 - `last_message_sequence` bigint not null default `0`
-- `created_by_user_id` text not null (auth user id / board actor id)
+- `created_by_user_id` text null (auth user id / board actor id)
+- `created_by_agent_id` uuid fk `agents.id` null
 
 ## 7.9 `conversation_participants`
 
@@ -570,10 +571,11 @@ Side effects:
   - read/write own assigned tasks and comments
   - create tasks/comments for delegation
   - read/write participant-scoped conversations where the agent is a participant
+  - create conversations that include only the agent plus one or more of its direct reports
+  - add direct-report participants to conversations where the agent is already a participant
   - report heartbeat status
   - report cost events
 - Agent cannot:
-  - create conversations directly in this version
   - bypass approval gates
   - modify company-wide budgets directly
   - mutate auth/keys
@@ -591,6 +593,8 @@ Side effects:
 | Report cost | yes | yes |
 | Set company budget | yes | no |
 | Set subordinate budget | yes | yes (manager subtree only) |
+| Create conversation | yes | limited (self + direct reports only) |
+| Add conversation participant | yes | limited (direct reports in visible conversations only) |
 
 ## 10. API Contract (REST)
 
@@ -690,6 +694,7 @@ Server behavior:
 Conversation REST contract notes:
 
 - conversation list/create remain company-scoped under `/companies/:companyId/...`
+- board may create any company-scoped conversation; agent-created conversations are limited to the acting agent plus direct reports in the same company
 - `GET /companies/:companyId/conversations` base query contract is:
   - `status?: "active" | "archived" | "all"`
   - `limit?: number`
