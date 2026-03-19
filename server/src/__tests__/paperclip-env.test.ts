@@ -3,6 +3,7 @@ import {
   buildPaperclipEnv,
   readPaperclipInvokeContext,
 } from "../adapters/utils.js";
+import { renderPaperclipConversationReplyNote } from "@paperclipai/adapter-utils/server-utils";
 
 const ORIGINAL_PAPERCLIP_API_URL = process.env.PAPERCLIP_API_URL;
 const ORIGINAL_PAPERCLIP_LISTEN_HOST = process.env.PAPERCLIP_LISTEN_HOST;
@@ -109,5 +110,25 @@ describe("readPaperclipInvokeContext", () => {
     });
 
     expect(result.taskKey).toBe("issue:11111111-1111-4111-8111-111111111111");
+  });
+});
+
+describe("renderPaperclipConversationReplyNote", () => {
+  it("keeps conversation guidance concise and non-task-oriented", () => {
+    const note = renderPaperclipConversationReplyNote({
+      conversationId: "conversation-1",
+      conversationMessageId: "message-1",
+      conversationResponseMode: "optional",
+    });
+
+    expect(note).toContain(
+      "This wake is optional: reply only if you have something distinct and useful to add."
+    );
+    expect(note).toContain(
+      "Treat conversation messages as conversation, not task assignments, unless the human explicitly asks for concrete work."
+    );
+    expect(note).toContain(
+      "Reply directly and briefly; avoid mentioning or questioning multiple other agents unless a real handoff or blocker requires it."
+    );
   });
 });

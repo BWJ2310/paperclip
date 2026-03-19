@@ -34,6 +34,7 @@ import {
   type ListConversationMessagesQuery,
 } from "@paperclipai/shared";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
+import { logger } from "../middleware/logger.js";
 import { logActivity } from "./activity-log.js";
 import { publishLiveEvent } from "./live-events.js";
 import {
@@ -233,6 +234,16 @@ function conversationTargetLinkActorFromMessage(input: {
   };
 }
 
+function responseModeForConversationWakePriority(
+  priority: "xlow" | "low" | "normal" | "high" | null,
+): "optional" | "required" | null {
+  if (priority === "high") return "required";
+  if (priority === "normal" || priority === "low" || priority === "xlow") {
+    return "optional";
+  }
+  return null;
+}
+
 function resolveConversationWakeRouting(
   actor: ConversationActorContext,
   participantAgentIds: string[],
@@ -240,12 +251,15 @@ function resolveConversationWakeRouting(
   replyTargetAgentIds: string[],
 ): {
   wakeupAgentIds: string[];
-  responseMode: "optional" | "required" | null;
-  priority: "normal" | "high" | null;
+  priority: "xlow" | "low" | "normal" | "high" | null;
 } {
   const dedupedParticipantAgentIds = [...new Set(participantAgentIds)];
   const dedupedMentionedAgentIds = [...new Set(mentionedAgentIds)];
   const dedupedReplyTargetAgentIds = [...new Set(replyTargetAgentIds)];
+  const routedParticipantAgentIds =
+    actor.viewerType === "agent"
+      ? dedupedParticipantAgentIds.filter((agentId) => agentId !== actor.agentId)
+      : dedupedParticipantAgentIds;
   const routedMentionedAgentIds =
     actor.viewerType === "agent"
       ? dedupedMentionedAgentIds.filter((agentId) => agentId !== actor.agentId)
@@ -258,25 +272,32 @@ function resolveConversationWakeRouting(
     ...new Set([...routedMentionedAgentIds, ...routedReplyTargetAgentIds]),
   ];
 
-  if (routedAgentIds.length > 0) {
+  if (routedMentionedAgentIds.length > 0) {
+    const priority = actor.viewerType === "board" ? "high" : "normal";
     return {
       wakeupAgentIds: routedAgentIds,
-      responseMode: "required",
-      priority: actor.viewerType === "board" ? "high" : "normal",
+      priority,
     };
   }
 
-  if (actor.viewerType === "board" && dedupedParticipantAgentIds.length > 0) {
+  if (routedReplyTargetAgentIds.length > 0) {
+    const priority = actor.viewerType === "board" ? "normal" : "low";
     return {
-      wakeupAgentIds: dedupedParticipantAgentIds,
-      responseMode: "optional",
-      priority: "high",
+      wakeupAgentIds: routedReplyTargetAgentIds,
+      priority,
+    };
+  }
+
+  if (routedParticipantAgentIds.length > 0) {
+    const priority = actor.viewerType === "board" ? "low" : "xlow";
+    return {
+      wakeupAgentIds: routedParticipantAgentIds,
+      priority,
     };
   }
 
   return {
     wakeupAgentIds: [],
-    responseMode: null,
     priority: null,
   };
 }
@@ -308,6 +329,84 @@ function hydrateMessages(
 export function conversationService(db: Db) {
   const memory = conversationMemoryService(db);
   const costs = costService(db);
+
+  async function shouldContinueMessagePostSideEffects(
+    companyId: string,
+    conversationId: string,
+    messageId: string,
+  ) {
+    const message = await db
+      .select({ deletedAt: conversationMessages.deletedAt })
+      .from(conversationMessages)
+      .where(
+        and(
+          eq(conversationMessages.companyId, companyId),
+          eq(conversationMessages.conversationId, conversationId),
+          eq(conversationMessages.id, messageId),
+        ),
+      )
+      .then((rows) => rows[0] ?? null);
+
+    return Boolean(message) && message?.deletedAt === null;
+  }
+
+  async function runMessagePostSideEffects(input: {
+    conversation: ConversationRow;
+    actor: ConversationActorContext;
+    created: {
+      message: ConversationMessage;
+      wakeupAgentIds: string[];
+      wakeupPriority: "xlow" | "low" | "normal" | "high" | null;
+    };
+  }) {
+    const { conversation, actor, created } = input;
+
+    if (!(await shouldContinueMessagePostSideEffects(conversation.companyId, conversation.id, created.message.id))) {
+      return;
+    }
+
+    try {
+      const singleTarget = singleTargetFromRefs(created.message.refs);
+      const replyContextMarkdown = created.message.parentMessage
+        ? buildConversationReplyContextMarkdown({
+            parentMessage: created.message.parentMessage,
+            message: created.message,
+          })
+        : null;
+      const wakeupResponseMode = responseModeForConversationWakePriority(
+        created.wakeupPriority,
+      );
+      const heartbeat = heartbeatService(db);
+      for (const agentId of created.wakeupAgentIds) {
+        if (!wakeupResponseMode) continue;
+        await heartbeat.wakeup(agentId, {
+          source: "conversation_message",
+          triggerDetail: "manual",
+          reason: "conversation_message",
+          priority: created.wakeupPriority ?? undefined,
+          requestedByActorType: actor.actorType,
+          requestedByActorId: actor.actorId,
+          contextSnapshot: {
+            taskKey: buildConversationTaskKey(conversation.id),
+            wakeReason: "conversation_message",
+            conversationId: conversation.id,
+            conversationMessageId: created.message.id,
+            conversationMessageSequence: created.message.sequence,
+            conversationResponseMode: wakeupResponseMode,
+            conversationTargetKind: singleTarget?.targetKind ?? null,
+            conversationTargetId: singleTarget?.targetId ?? null,
+            conversationReplyToMessageId: created.message.parentMessage?.id ?? null,
+            conversationReplyContextMarkdown: replyContextMarkdown,
+          },
+        });
+      }
+    } catch (err) {
+      logger.error(
+        { err, conversationId: conversation.id, messageId: created.message.id },
+        "conversation message post wakeup scheduling failed",
+      );
+    }
+  }
 
   async function getConversationRow(conversationId: string) {
     return db
@@ -1512,35 +1611,7 @@ export function conversationService(db: Db) {
       const explicitParentId = hasExplicitParentId
         ? readNonEmptyString(input.parentId)
         : null;
-      const inferredParentId =
-        !hasExplicitParentId && actor.viewerType === "agent" && actor.runId
-          ? await db
-              .select({ contextSnapshot: heartbeatRuns.contextSnapshot })
-              .from(heartbeatRuns)
-              .where(
-                and(
-                  eq(heartbeatRuns.id, actor.runId),
-                  eq(heartbeatRuns.companyId, conversation.companyId),
-                  eq(heartbeatRuns.agentId, actor.agentId),
-                ),
-              )
-              .then((rows) => {
-                const context = asRecord(rows[0]?.contextSnapshot);
-                if (!context) return null;
-                const runConversationId = readNonEmptyString(context.conversationId);
-                const runConversationMessageId = readNonEmptyString(
-                  context.conversationMessageId,
-                );
-                const runConversationReplyToMessageId = readNonEmptyString(
-                  context.conversationReplyToMessageId,
-                );
-                return runConversationId === conversationId
-                  && !runConversationReplyToMessageId
-                  ? runConversationMessageId
-                  : null;
-              })
-          : null;
-      const effectiveParentId = explicitParentId ?? inferredParentId;
+      const effectiveParentId = explicitParentId;
       let parentMessageRow = effectiveParentId
         ? await db
             .select({
@@ -1764,44 +1835,11 @@ export function conversationService(db: Db) {
           participantAgentIds,
           readState,
           wakeupAgentIds: wakeRouting.wakeupAgentIds,
-          wakeupResponseMode: wakeRouting.responseMode,
           wakeupPriority: wakeRouting.priority,
         };
       });
 
       await memory.rebuildForPairs(conversation.companyId, created.affectedPairs);
-
-      const singleTarget = singleTargetFromRefs(created.message.refs);
-      const replyContextMarkdown = created.message.parentMessage
-        ? buildConversationReplyContextMarkdown({
-            parentMessage: created.message.parentMessage,
-            message: created.message,
-          })
-        : null;
-      const heartbeat = heartbeatService(db);
-      for (const agentId of created.wakeupAgentIds) {
-        if (!created.wakeupResponseMode) continue;
-        await heartbeat.wakeup(agentId, {
-          source: "conversation_message",
-          triggerDetail: "manual",
-          reason: "conversation_message",
-          priority: created.wakeupPriority ?? undefined,
-          requestedByActorType: actor.actorType,
-          requestedByActorId: actor.actorId,
-          contextSnapshot: {
-            taskKey: buildConversationTaskKey(conversationId),
-            wakeReason: "conversation_message",
-            conversationId,
-            conversationMessageId: created.message.id,
-            conversationMessageSequence: created.message.sequence,
-            conversationResponseMode: created.wakeupResponseMode,
-            conversationTargetKind: singleTarget?.targetKind ?? null,
-            conversationTargetId: singleTarget?.targetId ?? null,
-            conversationReplyToMessageId: created.message.parentMessage?.id ?? null,
-            conversationReplyContextMarkdown: replyContextMarkdown,
-          },
-        });
-      }
 
       await logActivity(db, {
         companyId: conversation.companyId,
@@ -1822,6 +1860,7 @@ export function conversationService(db: Db) {
           sequence: created.message.sequence,
         },
       });
+
       publishLiveEvent({
         companyId: conversation.companyId,
         type: "conversation.message_posted",
@@ -1856,6 +1895,23 @@ export function conversationService(db: Db) {
           latestMessageSequence: created.conversation.lastMessageSequence,
           latestActivityAt: created.conversation.updatedAt.toISOString(),
         },
+      });
+
+      setImmediate(() => {
+        void runMessagePostSideEffects({
+          conversation,
+          actor,
+          created: {
+            message: created.message,
+            wakeupAgentIds: created.wakeupAgentIds,
+            wakeupPriority: created.wakeupPriority,
+          },
+        }).catch((err) => {
+          logger.error(
+            { err, conversationId: conversation.id, messageId: created.message.id },
+            "conversation message post background task failed",
+          );
+        });
       });
 
       return created.message;

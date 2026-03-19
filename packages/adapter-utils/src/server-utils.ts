@@ -275,20 +275,33 @@ export function joinPromptSections(
 }
 
 export function renderPaperclipConversationReplyNote(
-  context: Pick<PaperclipInvokeContext, "conversationId" | "conversationMessageId">
+  context: Pick<
+    PaperclipInvokeContext,
+    "conversationId" | "conversationMessageId" | "conversationResponseMode"
+  >
 ): string {
   const conversationId = readNonEmptyString(context.conversationId);
   const conversationMessageId = readNonEmptyString(
     context.conversationMessageId
   );
   if (!conversationId || !conversationMessageId) return "";
+  const conversationResponseMode = readNonEmptyString(
+    context.conversationResponseMode
+  );
 
   return [
     "Paperclip conversation reply note:",
     `This run was triggered by conversation ${conversationId}, message ${conversationMessageId}.`,
     `Post conversation responses to /api/conversations/${conversationId}/messages.`,
-    "Only set parentId when you intentionally want to continue a specific thread.",
-    "If the triggering message is already a reply, prefer a normal top-level response so you do not reopen a high-priority reply chain.",
+    ...(conversationResponseMode === "optional"
+      ? [
+          "This wake is optional: reply only if you have something distinct and useful to add.",
+        ]
+      : []),
+    "Treat conversation messages as conversation, not task assignments, unless the human explicitly asks for concrete work.",
+    "Reply directly and briefly; avoid mentioning or questioning multiple other agents unless a real handoff or blocker requires it.",
+    "Default to a normal top-level response unless you intentionally want to continue a specific thread.",
+    "Only set parentId when you want a threaded reply with extra context.",
     "If you need to hand off to another agent, use a structured mention like [@Agent Name](agent://AGENT_ID); plain @name text does not route wakeups.",
     `You can inspect valid participants and ids with GET /api/conversations/${conversationId}.`,
     "",

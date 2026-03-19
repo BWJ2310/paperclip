@@ -2,6 +2,7 @@ import request from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import {
+  activityLog,
   agentWakeupRequests,
   agentTargetConversationMemory,
   agents,
@@ -38,6 +39,34 @@ describe("conversationRoutes", () => {
   afterEach(() => {
     resetMockActor();
   });
+
+  async function waitForAssertion(
+    assertion: () => Promise<void> | void,
+    timeoutMs = 2500,
+    intervalMs = 25,
+  ) {
+    const deadline = Date.now() + timeoutMs;
+    let lastError: unknown = null;
+    while (Date.now() < deadline) {
+      try {
+        await assertion();
+        return;
+      } catch (error) {
+        lastError = error;
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      }
+    }
+    throw lastError ?? new Error("Timed out waiting for assertion");
+  }
+
+  async function waitForConversationMessagePostedActivity(conversationId: string) {
+    await waitForAssertion(async () => {
+      const rows = (await testDb.db.select().from(activityLog)).filter(
+        (row) => row.action === "conversation.message_posted" && row.entityId === conversationId,
+      );
+      expect(rows.length).toBeGreaterThan(0);
+    });
+  }
 
   async function seedFixture() {
     const now = new Date("2026-03-18T12:00:00.000Z");
@@ -630,37 +659,39 @@ describe("conversationRoutes", () => {
     expect(res.status).toBe(201);
     expect(res.body.sequence).toBe(6);
 
-    const issueLinks = (await testDb.db.select().from(conversationTargetLinks)).filter(
-      (row) =>
-        row.conversationId === fixture.conversation.id &&
-        row.targetKind === "issue" &&
-        row.targetId === fixture.issue.id,
-    );
-    expect(
-      issueLinks.map((row) => ({
-        agentId: row.agentId,
-        latestLinkedMessageSequence: row.latestLinkedMessageSequence,
-      })),
-    ).toEqual(
-      expect.arrayContaining([
-        {
-          agentId: fixture.agentA.id,
-          latestLinkedMessageSequence: 6,
-        },
-        {
-          agentId: fixture.agentB.id,
-          latestLinkedMessageSequence: 6,
-        },
-      ]),
-    );
+    await waitForAssertion(async () => {
+      const issueLinks = (await testDb.db.select().from(conversationTargetLinks)).filter(
+        (row) =>
+          row.conversationId === fixture.conversation.id &&
+          row.targetKind === "issue" &&
+          row.targetId === fixture.issue.id,
+      );
+      expect(
+        issueLinks.map((row) => ({
+          agentId: row.agentId,
+          latestLinkedMessageSequence: row.latestLinkedMessageSequence,
+        })),
+      ).toEqual(
+        expect.arrayContaining([
+          {
+            agentId: fixture.agentA.id,
+            latestLinkedMessageSequence: 6,
+          },
+          {
+            agentId: fixture.agentB.id,
+            latestLinkedMessageSequence: 6,
+          },
+        ]),
+      );
 
-    const issueMemoryRows = (await testDb.db.select().from(agentTargetConversationMemory)).filter(
-      (row) => row.targetKind === "issue" && row.targetId === fixture.issue.id,
-    );
-    expect(issueMemoryRows.map((row) => row.agentId).sort()).toEqual(
-      [fixture.agentA.id, fixture.agentB.id].sort(),
-    );
-    expect(issueMemoryRows.every((row) => row.lastSourceMessageSequence === 6)).toBe(true);
+      const issueMemoryRows = (await testDb.db.select().from(agentTargetConversationMemory)).filter(
+        (row) => row.targetKind === "issue" && row.targetId === fixture.issue.id,
+      );
+      expect(issueMemoryRows.map((row) => row.agentId).sort()).toEqual(
+        [fixture.agentA.id, fixture.agentB.id].sort(),
+      );
+      expect(issueMemoryRows.every((row) => row.lastSourceMessageSequence === 6)).toBe(true);
+    });
   });
 
   it("updates target links and memory for all routed agents including the author when agent refs are present", async () => {
@@ -687,23 +718,25 @@ describe("conversationRoutes", () => {
     expect(res.status).toBe(201);
     expect(res.body.sequence).toBe(6);
 
-    const issueLinks = (await testDb.db.select().from(conversationTargetLinks)).filter(
-      (row) =>
-        row.conversationId === fixture.conversation.id &&
-        row.targetKind === "issue" &&
-        row.targetId === fixture.issue.id,
-    );
-    const authorLink = issueLinks.find((row) => row.agentId === fixture.agentA.id);
-    const otherLink = issueLinks.find((row) => row.agentId === fixture.agentB.id);
-    expect(authorLink?.latestLinkedMessageSequence).toBe(6);
-    expect(otherLink?.latestLinkedMessageSequence).toBe(4);
+    await waitForAssertion(async () => {
+      const issueLinks = (await testDb.db.select().from(conversationTargetLinks)).filter(
+        (row) =>
+          row.conversationId === fixture.conversation.id &&
+          row.targetKind === "issue" &&
+          row.targetId === fixture.issue.id,
+      );
+      const authorLink = issueLinks.find((row) => row.agentId === fixture.agentA.id);
+      const otherLink = issueLinks.find((row) => row.agentId === fixture.agentB.id);
+      expect(authorLink?.latestLinkedMessageSequence).toBe(6);
+      expect(otherLink?.latestLinkedMessageSequence).toBe(4);
 
-    const issueMemoryRows = (await testDb.db.select().from(agentTargetConversationMemory)).filter(
-      (row) => row.targetKind === "issue" && row.targetId === fixture.issue.id,
-    );
-    expect(issueMemoryRows).toHaveLength(1);
-    expect(issueMemoryRows[0]?.agentId).toBe(fixture.agentA.id);
-    expect(issueMemoryRows[0]?.lastSourceMessageSequence).toBe(6);
+      const issueMemoryRows = (await testDb.db.select().from(agentTargetConversationMemory)).filter(
+        (row) => row.targetKind === "issue" && row.targetId === fixture.issue.id,
+      );
+      expect(issueMemoryRows).toHaveLength(1);
+      expect(issueMemoryRows[0]?.agentId).toBe(fixture.agentA.id);
+      expect(issueMemoryRows[0]?.lastSourceMessageSequence).toBe(6);
+    });
   });
 
   it("wakes all participants for board-authored messages without agent mentions", async () => {
@@ -718,35 +751,37 @@ describe("conversationRoutes", () => {
 
     expect(res.status).toBe(201);
 
-    const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
-      (row) =>
-        row.conversationId === fixture.conversation.id &&
-        row.conversationMessageSequence === 6,
-    );
-
-    expect(wakeups.map((row) => row.agentId).sort()).toEqual(
-      [fixture.agentA.id, fixture.agentB.id].sort(),
-    );
-    expect(wakeups.every((row) => row.responseMode === "optional")).toBe(true);
-
-    const runs = (await testDb.db.select().from(heartbeatRuns)).filter((row) => {
-      const context = (row.contextSnapshot ?? {}) as Record<string, unknown>;
-      return (
-        context.conversationId === fixture.conversation.id &&
-        context.conversationMessageSequence === 6
+    await waitForAssertion(async () => {
+      const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
+        (row) =>
+          row.conversationId === fixture.conversation.id &&
+          row.conversationMessageSequence === 6,
       );
-    });
 
-    expect(runs).toHaveLength(2);
-    expect(
-      runs.every((row) => {
+      expect(wakeups.map((row) => row.agentId).sort()).toEqual(
+        [fixture.agentA.id, fixture.agentB.id].sort(),
+      );
+      expect(wakeups.every((row) => row.responseMode === "optional")).toBe(true);
+
+      const runs = (await testDb.db.select().from(heartbeatRuns)).filter((row) => {
         const context = (row.contextSnapshot ?? {}) as Record<string, unknown>;
-        return context.wakePriority === "high";
-      }),
-    ).toBe(true);
+        return (
+          context.conversationId === fixture.conversation.id &&
+          context.conversationMessageSequence === 6
+        );
+      });
+
+      expect(runs).toHaveLength(2);
+      expect(
+        runs.every((row) => {
+          const context = (row.contextSnapshot ?? {}) as Record<string, unknown>;
+          return context.wakePriority === "low";
+        }),
+      ).toBe(true);
+    });
   });
 
-  it("does not wake other agents for agent-authored messages without agent mentions", async () => {
+  it("wakes other participants at xlow priority for agent-authored messages without mentions", async () => {
     const fixture = await seedFixture();
     setMockActor({
       type: "agent",
@@ -763,13 +798,68 @@ describe("conversationRoutes", () => {
 
     expect(res.status).toBe(201);
 
-    const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
-      (row) =>
-        row.conversationId === fixture.conversation.id &&
-        row.conversationMessageSequence === 6,
-    );
+    await waitForAssertion(async () => {
+      const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
+        (row) =>
+          row.conversationId === fixture.conversation.id &&
+          row.conversationMessageSequence === 6,
+      );
 
-    expect(wakeups).toHaveLength(0);
+      expect(wakeups).toHaveLength(1);
+      expect(wakeups[0]?.agentId).toBe(fixture.agentB.id);
+      expect(wakeups[0]?.responseMode).toBe("optional");
+
+      const runs = (await testDb.db.select().from(heartbeatRuns)).filter((row) => {
+        const context = (row.contextSnapshot ?? {}) as Record<string, unknown>;
+        return (
+          context.conversationId === fixture.conversation.id &&
+          context.conversationMessageSequence === 6
+        );
+      });
+
+      expect(runs).toHaveLength(1);
+      expect(((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).wakePriority).toBe(
+        "xlow",
+      );
+    });
+  });
+
+  it("wakes only the explicitly mentioned agent at high priority for board-authored handoffs", async () => {
+    const fixture = await seedFixture();
+
+    const res = await request(fixture.app)
+      .post(`/api/conversations/${fixture.conversation.id}/messages`)
+      .send({
+        bodyMarkdown: `Please take point here [@${fixture.agentB.name}](${buildStructuredMentionHref("agent", fixture.agentB.id)}).`,
+        activeContextTargets: [],
+      });
+
+    expect(res.status).toBe(201);
+
+    await waitForAssertion(async () => {
+      const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
+        (row) =>
+          row.conversationId === fixture.conversation.id &&
+          row.conversationMessageSequence === 6,
+      );
+
+      expect(wakeups).toHaveLength(1);
+      expect(wakeups[0]?.agentId).toBe(fixture.agentB.id);
+      expect(wakeups[0]?.responseMode).toBe("required");
+
+      const runs = (await testDb.db.select().from(heartbeatRuns)).filter((row) => {
+        const context = (row.contextSnapshot ?? {}) as Record<string, unknown>;
+        return (
+          context.conversationId === fixture.conversation.id &&
+          context.conversationMessageSequence === 6
+        );
+      });
+
+      expect(runs).toHaveLength(1);
+      expect(((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).wakePriority).toBe(
+        "high",
+      );
+    });
   });
 
   it("wakes only the explicitly mentioned agent for agent-authored handoffs", async () => {
@@ -789,15 +879,30 @@ describe("conversationRoutes", () => {
 
     expect(res.status).toBe(201);
 
-    const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
-      (row) =>
-        row.conversationId === fixture.conversation.id &&
-        row.conversationMessageSequence === 6,
-    );
+    await waitForAssertion(async () => {
+      const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
+        (row) =>
+          row.conversationId === fixture.conversation.id &&
+          row.conversationMessageSequence === 6,
+      );
 
-    expect(wakeups).toHaveLength(1);
-    expect(wakeups[0]?.agentId).toBe(fixture.agentB.id);
-    expect(wakeups[0]?.responseMode).toBe("required");
+      expect(wakeups).toHaveLength(1);
+      expect(wakeups[0]?.agentId).toBe(fixture.agentB.id);
+      expect(wakeups[0]?.responseMode).toBe("optional");
+
+      const runs = (await testDb.db.select().from(heartbeatRuns)).filter((row) => {
+        const context = (row.contextSnapshot ?? {}) as Record<string, unknown>;
+        return (
+          context.conversationId === fixture.conversation.id &&
+          context.conversationMessageSequence === 6
+        );
+      });
+
+      expect(runs).toHaveLength(1);
+      expect(((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).wakePriority).toBe(
+        "normal",
+      );
+    });
   });
 
   it("wakes only the replied-to agent when a board reply targets an agent-authored message", async () => {
@@ -843,18 +948,99 @@ describe("conversationRoutes", () => {
       bodyMarkdown: "Please reply with any follow-up questions here.",
     });
 
-    const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
-      (row) =>
-        row.conversationId === fixture.conversation.id &&
-        row.conversationMessageSequence === 7,
-    );
+    await waitForAssertion(async () => {
+      const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
+        (row) =>
+          row.conversationId === fixture.conversation.id &&
+          row.conversationMessageSequence === 7,
+      );
 
-    expect(wakeups).toHaveLength(1);
-    expect(wakeups[0]?.agentId).toBe(fixture.agentA.id);
-    expect(wakeups[0]?.responseMode).toBe("required");
+      expect(wakeups).toHaveLength(1);
+      expect(wakeups[0]?.agentId).toBe(fixture.agentA.id);
+      expect(wakeups[0]?.responseMode).toBe("optional");
+
+      const runs = (await testDb.db.select().from(heartbeatRuns)).filter((row) => {
+        const context = (row.contextSnapshot ?? {}) as Record<string, unknown>;
+        return (
+          context.conversationId === fixture.conversation.id &&
+          context.conversationMessageSequence === 7
+        );
+      });
+
+      expect(runs).toHaveLength(1);
+      expect(((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).wakePriority).toBe(
+        "normal",
+      );
+    });
   });
 
-  it("threads an agent reply under the triggering mentioned message when parentId is omitted", async () => {
+  it("wakes only the replied-to agent at low priority for agent-authored replies", async () => {
+    const fixture = await seedFixture();
+    const [agentMessage] = await testDb.db
+      .insert(conversationMessages)
+      .values({
+        companyId: fixture.company.id,
+        conversationId: fixture.conversation.id,
+        sequence: 6,
+        authorType: "agent",
+        authorAgentId: fixture.agentB.id,
+        bodyMarkdown: "Can you respond directly in this thread?",
+        createdAt: new Date("2026-03-18T12:06:00.000Z"),
+        updatedAt: new Date("2026-03-18T12:06:00.000Z"),
+      })
+      .returning();
+
+    await testDb.db
+      .update(conversations)
+      .set({
+        lastMessageSequence: 6,
+        updatedAt: new Date("2026-03-18T12:06:00.000Z"),
+      })
+      .where(eq(conversations.id, fixture.conversation.id));
+
+    setMockActor({
+      type: "agent",
+      agentId: fixture.agentA.id,
+      companyId: fixture.company.id,
+    });
+
+    const res = await request(fixture.app)
+      .post(`/api/conversations/${fixture.conversation.id}/messages`)
+      .send({
+        bodyMarkdown: "Replying here with my follow-up.",
+        parentId: agentMessage.id,
+        activeContextTargets: [],
+      });
+
+    expect(res.status).toBe(201);
+
+    await waitForAssertion(async () => {
+      const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
+        (row) =>
+          row.conversationId === fixture.conversation.id &&
+          row.conversationMessageSequence === 7,
+      );
+
+      expect(wakeups).toHaveLength(1);
+      expect(wakeups[0]?.agentId).toBe(fixture.agentB.id);
+      expect(wakeups[0]?.responseMode).toBe("optional");
+
+      const runs = (await testDb.db.select().from(heartbeatRuns)).filter((row) => {
+        const context = (row.contextSnapshot ?? {}) as Record<string, unknown>;
+        return (
+          context.conversationId === fixture.conversation.id &&
+          context.conversationMessageSequence === 7
+        );
+      });
+
+      expect(runs).toHaveLength(1);
+      expect(((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).wakePriority).toBe(
+        "low",
+      );
+    });
+  });
+
+  it("posts an agent reply as top-level when parentId is omitted for a human handoff", async () => {
     const fixture = await seedFixture();
     const [mentionMessage] = await testDb.db
       .insert(conversationMessages)
@@ -912,14 +1098,8 @@ describe("conversationRoutes", () => {
     expect(res.status).toBe(201);
     expect(res.body.sequence).toBe(7);
     expect(res.body.runId).toBe(run.id);
-    expect(res.body.parentId).toBe(mentionMessage.id);
-    expect(res.body.parentMessage).toMatchObject({
-      id: mentionMessage.id,
-      sequence: 6,
-      authorType: "user",
-      authorUserId: "board-user",
-      bodyMarkdown: mentionMessage.bodyMarkdown,
-    });
+    expect(res.body.parentId).toBeNull();
+    expect(res.body.parentMessage).toBeNull();
   });
 
   it("does not infer reply threading when the triggering handoff message was already a reply", async () => {
@@ -1008,7 +1188,7 @@ describe("conversationRoutes", () => {
     expect(wakeups).toHaveLength(0);
   });
 
-  it("allows an agent to opt out of inferred threading by sending parentId null", async () => {
+  it("allows an agent to explicitly reply in-thread by sending parentId", async () => {
     const fixture = await seedFixture();
     const [mentionMessage] = await testDb.db
       .insert(conversationMessages)
@@ -1059,15 +1239,21 @@ describe("conversationRoutes", () => {
     const res = await request(fixture.app)
       .post(`/api/conversations/${fixture.conversation.id}/messages`)
       .send({
-        bodyMarkdown: "I'm intentionally sending this as a top-level update.",
-        parentId: null,
+        bodyMarkdown: "I'm intentionally replying in-thread for extra detail.",
+        parentId: mentionMessage.id,
         activeContextTargets: [],
       });
 
     expect(res.status).toBe(201);
     expect(res.body.sequence).toBe(7);
-    expect(res.body.parentId).toBeNull();
-    expect(res.body.parentMessage).toBeNull();
+    expect(res.body.parentId).toBe(mentionMessage.id);
+    expect(res.body.parentMessage).toMatchObject({
+      id: mentionMessage.id,
+      sequence: 6,
+      authorType: "user",
+      authorUserId: "board-user",
+      bodyMarkdown: mentionMessage.bodyMarkdown,
+    });
   });
 
   it("tombstones deleted messages and recomputes linked target state from remaining messages", async () => {

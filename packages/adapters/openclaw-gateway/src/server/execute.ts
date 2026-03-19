@@ -467,7 +467,7 @@ function buildWakeText(
           "   - GET /api/conversations/{conversationId}/messages",
           "   - Use PAPERCLIP_CONVERSATION_TARGET_KIND / PAPERCLIP_CONVERSATION_TARGET_ID only as extra target context for this conversation run.",
           `   - Current promoted target context: kind=${conversationTargetKindHint} id=${conversationTargetIdHint}`,
-          "   - Do lightweight direct work when appropriate.",
+          "   - Reply conversationally by default; do direct work only when explicitly asked.",
           "   - Do NOT checkout issues or mutate issue status unless PAPERCLIP_TASK_KEY itself starts with issue:.",
           '   - Reply with POST /api/conversations/{conversationId}/messages using {"bodyMarkdown":"...","activeContextTargets":[]}; include parentId when replying to a specific triggering message.',
           '   - Mention other agents with structured markdown like [@Agent Name](agent://AGENT_ID).',
