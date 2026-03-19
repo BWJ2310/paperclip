@@ -8,10 +8,14 @@ const mockCostService = vi.hoisted(() => ({
   createEvent: vi.fn(),
   summary: vi.fn(),
   byAgent: vi.fn(),
+  byAgentModel: vi.fn(),
+  byProvider: vi.fn(),
+  byBiller: vi.fn(),
   byProject: vi.fn(),
 }));
 
 const mockCompanyService = vi.hoisted(() => ({
+  getById: vi.fn(),
   update: vi.fn(),
 }));
 
@@ -20,14 +24,39 @@ const mockAgentService = vi.hoisted(() => ({
   update: vi.fn(),
 }));
 
+const mockBudgetService = vi.hoisted(() => ({
+  overview: vi.fn(),
+  upsertPolicy: vi.fn(),
+  resolveIncident: vi.fn(),
+}));
+
+const mockFinanceService = vi.hoisted(() => ({
+  createEvent: vi.fn(),
+  summary: vi.fn(),
+  byBiller: vi.fn(),
+  byKind: vi.fn(),
+  list: vi.fn(),
+}));
+
+const mockHeartbeatService = vi.hoisted(() => ({
+  cancelBudgetScopeWork: vi.fn(),
+}));
+
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
-vi.mock("../../services/index.js", () => ({
-  costService: () => mockCostService,
-  companyService: () => mockCompanyService,
-  agentService: () => mockAgentService,
-  logActivity: mockLogActivity,
-}));
+vi.mock("../../services/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/index.js")>();
+  return {
+    ...actual,
+    costService: () => mockCostService,
+    companyService: () => mockCompanyService,
+    agentService: () => mockAgentService,
+    budgetService: () => mockBudgetService,
+    financeService: () => mockFinanceService,
+    heartbeatService: () => mockHeartbeatService,
+    logActivity: mockLogActivity,
+  };
+});
 
 function createApp(actorOverrides: Record<string, unknown> = {}) {
   const app = express();
@@ -51,6 +80,15 @@ function createApp(actorOverrides: Record<string, unknown> = {}) {
 describe("costRoutes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockBudgetService.overview.mockResolvedValue({});
+    mockBudgetService.upsertPolicy.mockResolvedValue({});
+    mockBudgetService.resolveIncident.mockResolvedValue({});
+    mockCompanyService.getById.mockResolvedValue({ id: "company-1", name: "Acme" });
+    mockHeartbeatService.cancelBudgetScopeWork.mockResolvedValue({
+      checked: 0,
+      enqueued: 0,
+      skipped: 0,
+    });
     mockLogActivity.mockResolvedValue(undefined);
   });
 

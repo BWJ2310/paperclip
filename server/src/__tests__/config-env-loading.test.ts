@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const ORIGINAL_CWD = process.cwd();
 const ORIGINAL_ENV = { ...process.env };
 
 function writeText(filePath: string, value: string) {
@@ -33,8 +32,8 @@ async function importConfigModule() {
 }
 
 afterEach(() => {
-  process.chdir(ORIGINAL_CWD);
   restoreProcessEnv();
+  vi.restoreAllMocks();
   vi.resetModules();
 });
 
@@ -65,7 +64,7 @@ describe("loadConfig env loading", () => {
       "PAPERCLIP_INSTANCE_ID",
     ]);
     process.env.PAPERCLIP_CONFIG = path.join(instanceDir, "config.json");
-    process.chdir(serverDir);
+    vi.spyOn(process, "cwd").mockReturnValue(serverDir);
 
     const { loadConfig } = await importConfigModule();
     const config = loadConfig();
@@ -98,7 +97,7 @@ describe("loadConfig env loading", () => {
       "PAPERCLIP_INSTANCE_ID",
     ]);
     process.env.PAPERCLIP_CONFIG = path.join(instanceDir, "config.json");
-    process.chdir(serverDir);
+    vi.spyOn(process, "cwd").mockReturnValue(serverDir);
 
     const { loadConfig } = await importConfigModule();
     const config = loadConfig();

@@ -351,6 +351,27 @@
       "when": 1773934632013,
       "tag": "0040_uneven_scourge",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1774042247000,
+      "tag": "0041_owner_permission_backfill",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1774042248000,
+      "tag": "0042_company_image",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1774042249000,
+      "tag": "0043_task_key_canonicalization",
+      "breakpoints": true
     }
   ]
 }

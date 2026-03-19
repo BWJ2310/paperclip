@@ -44,6 +44,10 @@ const mockApprovalService = vi.hoisted(() => ({
   create: vi.fn(),
 }));
 
+const mockBudgetService = vi.hoisted(() => ({
+  upsertPolicy: vi.fn(),
+}));
+
 const mockHeartbeatService = vi.hoisted(() => ({
   wakeup: vi.fn(),
   invoke: vi.fn(),
@@ -74,18 +78,30 @@ const mockSecretService = vi.hoisted(() => ({
   resolveAdapterConfigForRuntime: vi.fn(),
 }));
 
+const mockWorkspaceOperationService = vi.hoisted(() => ({
+  listForRun: vi.fn(),
+  getById: vi.fn(),
+  readLog: vi.fn(),
+}));
+
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
-vi.mock("../../services/index.js", () => ({
-  agentService: () => mockAgentService,
-  accessService: () => mockAccessService,
-  approvalService: () => mockApprovalService,
-  heartbeatService: () => mockHeartbeatService,
-  issueApprovalService: () => mockIssueApprovalService,
-  issueService: () => mockIssueService,
-  logActivity: mockLogActivity,
-  secretService: () => mockSecretService,
-}));
+vi.mock("../../services/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/index.js")>();
+  return {
+    ...actual,
+    agentService: () => mockAgentService,
+    accessService: () => mockAccessService,
+    approvalService: () => mockApprovalService,
+    budgetService: () => mockBudgetService,
+    heartbeatService: () => mockHeartbeatService,
+    issueApprovalService: () => mockIssueApprovalService,
+    issueService: () => mockIssueService,
+    logActivity: mockLogActivity,
+    secretService: () => mockSecretService,
+    workspaceOperationService: () => mockWorkspaceOperationService,
+  };
+});
 
 vi.mock("../../adapters/index.js", () => ({
   findServerAdapter: vi.fn().mockReturnValue(null),
@@ -96,24 +112,40 @@ vi.mock("../../redaction.js", () => ({
   redactEventPayload: (p: unknown) => p,
 }));
 
-vi.mock("@paperclipai/adapter-claude-local/server", () => ({
-  runClaudeLogin: vi.fn().mockResolvedValue({ ok: true }),
-}));
+vi.mock("@paperclipai/adapter-claude-local/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@paperclipai/adapter-claude-local/server")>();
+  return {
+    ...actual,
+    runClaudeLogin: vi.fn().mockResolvedValue({ ok: true }),
+  };
+});
 
-vi.mock("@paperclipai/adapter-codex-local", () => ({
-  DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX: false,
-  DEFAULT_CODEX_LOCAL_MODEL: "codex-mini-latest",
-}));
+vi.mock("@paperclipai/adapter-codex-local", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@paperclipai/adapter-codex-local")>();
+  return {
+    ...actual,
+    DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX: false,
+    DEFAULT_CODEX_LOCAL_MODEL: "codex-mini-latest",
+  };
+});
 
-vi.mock("@paperclipai/adapter-cursor-local", () => ({
-  DEFAULT_CURSOR_LOCAL_MODEL: "claude-3.5-sonnet",
-}));
+vi.mock("@paperclipai/adapter-cursor-local", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@paperclipai/adapter-cursor-local")>();
+  return {
+    ...actual,
+    DEFAULT_CURSOR_LOCAL_MODEL: "claude-3.5-sonnet",
+  };
+});
 
-vi.mock("@paperclipai/adapter-opencode-local/server", () => ({
-  ensureOpenCodeModelConfiguredAndAvailable: vi
-    .fn()
-    .mockResolvedValue(undefined),
-}));
+vi.mock("@paperclipai/adapter-opencode-local/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@paperclipai/adapter-opencode-local/server")>();
+  return {
+    ...actual,
+    ensureOpenCodeModelConfiguredAndAvailable: vi
+      .fn()
+      .mockResolvedValue(undefined),
+  };
+});
 
 function createDbStub(companyOverrides: Record<string, unknown> = {}) {
   return {
@@ -158,6 +190,7 @@ function createApp(
 describe("agentRoutes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockBudgetService.upsertPolicy.mockResolvedValue(undefined);
     mockLogActivity.mockResolvedValue(undefined);
     mockHeartbeatService.wakeup.mockResolvedValue({ id: "wake-1" });
     mockHeartbeatService.cancelActiveForAgent.mockResolvedValue(undefined);
@@ -359,6 +392,7 @@ describe("agentRoutes", () => {
         id: "approval-1",
         type: "hire_agent",
       });
+      mockAccessService.canUser.mockResolvedValue(true);
 
       const res = await request(createApp())
         .post(`/api/companies/${COMPANY_ID}/agent-hires`)
@@ -381,7 +415,7 @@ describe("agentRoutes", () => {
         expect.objectContaining({
           runtimeConfig: {
             heartbeat: {
-              wakeOnSignal: false,
+              wakeOnAutomation: false,
               intervalSec: 300,
             },
           },
@@ -393,14 +427,14 @@ describe("agentRoutes", () => {
           payload: expect.objectContaining({
             runtimeConfig: {
               heartbeat: {
-                wakeOnSignal: false,
+                wakeOnAutomation: false,
                 intervalSec: 300,
               },
             },
             requestedConfigurationSnapshot: expect.objectContaining({
               runtimeConfig: {
                 heartbeat: {
-                  wakeOnSignal: false,
+                  wakeOnAutomation: false,
                   intervalSec: 300,
                 },
               },
@@ -458,12 +492,18 @@ describe("agentRoutes", () => {
         expect.objectContaining({
           runtimeConfig: {
             heartbeat: {
-              wakeOnSignal: false,
+              wakeOnAssignment: false,
               intervalSec: 300,
             },
           },
         }),
-        expect.any(Object)
+        expect.objectContaining({
+          recordRevision: expect.objectContaining({
+            createdByUserId: "user-1",
+            createdByAgentId: null,
+            source: "patch",
+          }),
+        })
       );
     });
 

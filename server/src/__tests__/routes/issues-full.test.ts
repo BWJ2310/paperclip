@@ -68,24 +68,42 @@ const mockDocumentService = vi.hoisted(() => ({
   deleteIssueDocument: vi.fn(),
 }));
 
+const mockExecutionWorkspaceService = vi.hoisted(() => ({
+  getById: vi.fn(),
+}));
+
+const mockWorkProductService = vi.hoisted(() => ({
+  listForIssue: vi.fn(),
+  createForIssue: vi.fn(),
+  getById: vi.fn(),
+  update: vi.fn(),
+  remove: vi.fn(),
+}));
+
 const mockConversationService = vi.hoisted(() => ({
   listLinkedConversations: vi.fn(),
 }));
 
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
-vi.mock("../../services/index.js", () => ({
-  issueService: () => mockIssueService,
-  accessService: () => mockAccessService,
-  agentService: () => mockAgentService,
-  heartbeatService: () => mockHeartbeatService,
-  projectService: () => mockProjectService,
-  goalService: () => mockGoalService,
-  issueApprovalService: () => mockIssueApprovalService,
-  documentService: () => mockDocumentService,
-  conversationService: () => mockConversationService,
-  logActivity: mockLogActivity,
-}));
+vi.mock("../../services/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/index.js")>();
+  return {
+    ...actual,
+    issueService: () => mockIssueService,
+    accessService: () => mockAccessService,
+    agentService: () => mockAgentService,
+    executionWorkspaceService: () => mockExecutionWorkspaceService,
+    heartbeatService: () => mockHeartbeatService,
+    projectService: () => mockProjectService,
+    goalService: () => mockGoalService,
+    issueApprovalService: () => mockIssueApprovalService,
+    documentService: () => mockDocumentService,
+    conversationService: () => mockConversationService,
+    workProductService: () => mockWorkProductService,
+    logActivity: mockLogActivity,
+  };
+});
 
 vi.mock("../../middleware/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -128,11 +146,13 @@ function createApp(actorOverrides: Record<string, unknown> = {}) {
 describe("issueRoutes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockExecutionWorkspaceService.getById.mockResolvedValue(null);
     mockLogActivity.mockResolvedValue(undefined);
     mockIssueService.getAncestors.mockResolvedValue([]);
     mockIssueService.findMentionedProjectIds.mockResolvedValue([]);
     mockIssueService.processMentionNotifications.mockResolvedValue(undefined);
     mockHeartbeatService.wakeup.mockResolvedValue({ id: "wake-1" });
+    mockWorkProductService.listForIssue.mockResolvedValue([]);
   });
 
   describe("GET /companies/:companyId/issues", () => {

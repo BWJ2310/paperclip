@@ -27,14 +27,23 @@ const mockCompanyPortabilityService = vi.hoisted(() => ({
   importBundle: vi.fn(),
 }));
 
+const mockBudgetService = vi.hoisted(() => ({
+  upsertPolicy: vi.fn(),
+}));
+
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
-vi.mock("../../services/index.js", () => ({
-  companyService: () => mockCompanyService,
-  accessService: () => mockAccessService,
-  companyPortabilityService: () => mockCompanyPortabilityService,
-  logActivity: mockLogActivity,
-}));
+vi.mock("../../services/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/index.js")>();
+  return {
+    ...actual,
+    companyService: () => mockCompanyService,
+    accessService: () => mockAccessService,
+    budgetService: () => mockBudgetService,
+    companyPortabilityService: () => mockCompanyPortabilityService,
+    logActivity: mockLogActivity,
+  };
+});
 
 function createApp(actorOverrides: Record<string, unknown> = {}) {
   const app = express();
@@ -59,6 +68,7 @@ function createApp(actorOverrides: Record<string, unknown> = {}) {
 describe("companyRoutes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockBudgetService.upsertPolicy.mockResolvedValue({});
     mockLogActivity.mockResolvedValue(undefined);
   });
 

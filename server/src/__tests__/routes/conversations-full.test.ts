@@ -21,6 +21,7 @@ import { buildStructuredMentionHref } from "@paperclipai/shared";
 import { randomUUID } from "node:crypto";
 import { cleanDb, getTestDb, type TestDb } from "../helpers/test-db.js";
 import { createTestApp, resetMockActor, setMockActor } from "../helpers/test-app.js";
+import { heartbeatService } from "../../services/heartbeat.ts";
 
 describe("conversationRoutes", () => {
   let testDb: TestDb;
@@ -36,7 +37,18 @@ describe("conversationRoutes", () => {
     resetMockActor();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const runningOrQueuedAgentIds = Array.from(
+      new Set(
+        (await testDb.db.select().from(heartbeatRuns))
+          .filter((row) => row.status === "queued" || row.status === "running")
+          .map((row) => row.agentId),
+      ),
+    );
+    const heartbeat = heartbeatService(testDb.db);
+    for (const agentId of runningOrQueuedAgentIds) {
+      await heartbeat.cancelActiveForAgent(agentId);
+    }
     resetMockActor();
   });
 

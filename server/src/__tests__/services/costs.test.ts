@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import { getTestDb, cleanDb, type TestDb } from "../helpers/test-db.js";
 import { costService } from "../../services/costs.js";
+import { budgetService } from "../../services/budgets.js";
 import { companies, agents } from "@paperclipai/db";
 import { eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
@@ -42,6 +43,19 @@ describe("costService", () => {
 
   function svc() {
     return costService(testDb.db);
+  }
+
+  async function upsertAgentBudgetPolicy(targetAgentId: string, amount: number) {
+    await budgetService(testDb.db).upsertPolicy(
+      companyId,
+      {
+        scopeType: "agent",
+        scopeId: targetAgentId,
+        amount,
+        windowKind: "calendar_month_utc",
+      },
+      "test-user",
+    );
   }
 
   // ── createEvent ───────────────────────────────────────────────────────
@@ -116,7 +130,7 @@ describe("costService", () => {
 
   describe("createEvent: budget auto-pause", () => {
     it("pauses agent when budget exceeded", async () => {
-      // Agent has budgetMonthlyCents=50000, so spending 50000 should trigger pause
+      await upsertAgentBudgetPolicy(agentId, 50000);
       await svc().createEvent(companyId, {
         agentId,
         costCents: 50000,
@@ -165,6 +179,7 @@ describe("costService", () => {
     });
 
     it("does not pause already-paused agent", async () => {
+      await upsertAgentBudgetPolicy(agentId, 50000);
       await testDb.db
         .update(agents)
         .set({ status: "paused" })
@@ -187,6 +202,7 @@ describe("costService", () => {
     });
 
     it("does not pause terminated agent", async () => {
+      await upsertAgentBudgetPolicy(agentId, 50000);
       await testDb.db
         .update(agents)
         .set({ status: "terminated" })

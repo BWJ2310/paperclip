@@ -216,6 +216,7 @@ interface WakeupOptions {
   requestedByActorType?: "user" | "agent" | "system";
   requestedByActorId?: string | null;
   contextSnapshot?: Record<string, unknown>;
+  priority?: "xlow" | "low" | "normal" | "high";
 }
 
 type UsageTotals = {
@@ -229,6 +230,19 @@ type SessionCompactionDecision = {
   reason: string | null;
   handoffMarkdown: string | null;
   previousRunId: string | null;
+};
+
+type WakePriority = "xlow" | "low" | "normal" | "high";
+
+type ConversationWakeState = {
+  conversationId: string;
+  conversationMessageId: string;
+  conversationMessageSequence: number;
+  responseMode: "optional" | "required";
+  targetKind: "issue" | "goal" | "project" | null;
+  targetId: string | null;
+  replyToMessageId: string | null;
+  replyContextMarkdown: string | null;
 };
 
 interface ParsedIssueAssigneeAdapterOverrides {
@@ -331,7 +345,208 @@ async function resolveLedgerScopeForRun(
   };
 }
 
-function normalizeUsageTotals(usage: UsageSummary | null | undefined): UsageTotals | null {
+function readPositiveInteger(value: unknown): number | null {
+  const parsed = Math.floor(asNumber(value, Number.NaN));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function readConversationResponseMode(
+  value: unknown
+): "optional" | "required" | null {
+  return value === "optional" || value === "required" ? value : null;
+}
+
+function readConversationTargetKind(
+  value: unknown
+): "issue" | "goal" | "project" | null {
+  return value === "issue" || value === "goal" || value === "project"
+    ? value
+    : null;
+}
+
+function readWakePriority(value: unknown): WakePriority | null {
+  return value === "xlow" ||
+    value === "low" ||
+    value === "normal" ||
+    value === "high"
+    ? value
+    : null;
+}
+
+function compareWakePriority(
+  left: WakePriority | null | undefined,
+  right: WakePriority | null | undefined,
+): -1 | 0 | 1 {
+  const normalizedLeft = readWakePriority(left) ?? "normal";
+  const normalizedRight = readWakePriority(right) ?? "normal";
+  if (normalizedLeft === normalizedRight) return 0;
+  if (normalizedLeft === "high" || normalizedRight === "xlow") return 1;
+  if (normalizedRight === "high" || normalizedLeft === "xlow") return -1;
+  if (normalizedLeft === "normal" || normalizedRight === "low") return 1;
+  if (normalizedRight === "normal" || normalizedLeft === "low") return -1;
+  return 0;
+}
+
+function mergeWakePriorities(
+  existing: WakePriority | null | undefined,
+  incoming: WakePriority | null | undefined
+): WakePriority | null {
+  const left = readWakePriority(existing);
+  const right = readWakePriority(incoming);
+  if (!left) return right ?? null;
+  if (!right) return left;
+  return compareWakePriority(left, right) < 0 ? right : left;
+}
+
+function readWakePriorityFromSnapshot(
+  contextSnapshot: Record<string, unknown> | null | undefined
+): WakePriority | null {
+  return readWakePriority(contextSnapshot?.wakePriority);
+}
+
+function compareQueuedRunsForStart(
+  left: typeof heartbeatRuns.$inferSelect,
+  right: typeof heartbeatRuns.$inferSelect
+) {
+  const priorityDelta = compareWakePriority(
+    readWakePriorityFromSnapshot(left.contextSnapshot),
+    readWakePriorityFromSnapshot(right.contextSnapshot),
+  );
+  // `compareWakePriority` returns positive when the left side is higher-priority,
+  // but Array#sort expects negative for "left comes first".
+  if (priorityDelta !== 0) return -priorityDelta;
+
+  const createdDelta = left.createdAt.getTime() - right.createdAt.getTime();
+  if (createdDelta !== 0) return createdDelta;
+  return left.id.localeCompare(right.id);
+}
+
+function readConversationWakeState(
+  contextSnapshot: Record<string, unknown> | null | undefined,
+  payload: Record<string, unknown> | null | undefined
+): ConversationWakeState | null {
+  const conversationId =
+    readNonEmptyString(contextSnapshot?.conversationId) ??
+    readNonEmptyString(payload?.conversationId);
+  const conversationMessageId =
+    readNonEmptyString(contextSnapshot?.conversationMessageId) ??
+    readNonEmptyString(payload?.conversationMessageId);
+  const conversationMessageSequence =
+    readPositiveInteger(contextSnapshot?.conversationMessageSequence) ??
+    readPositiveInteger(payload?.conversationMessageSequence);
+  const responseMode =
+    readConversationResponseMode(contextSnapshot?.conversationResponseMode) ??
+    readConversationResponseMode(contextSnapshot?.responseMode) ??
+    readConversationResponseMode(payload?.conversationResponseMode) ??
+    readConversationResponseMode(payload?.responseMode);
+
+  if (
+    !conversationId ||
+    !conversationMessageId ||
+    !conversationMessageSequence ||
+    !responseMode
+  ) {
+    return null;
+  }
+
+  const targetKind =
+    readConversationTargetKind(contextSnapshot?.conversationTargetKind) ??
+    readConversationTargetKind(payload?.conversationTargetKind);
+  const targetId =
+    readNonEmptyString(contextSnapshot?.conversationTargetId) ??
+    readNonEmptyString(payload?.conversationTargetId);
+  const replyToMessageId =
+    readNonEmptyString(contextSnapshot?.conversationReplyToMessageId) ??
+    readNonEmptyString(payload?.conversationReplyToMessageId);
+  const replyContextMarkdown =
+    readNonEmptyString(contextSnapshot?.conversationReplyContextMarkdown) ??
+    readNonEmptyString(payload?.conversationReplyContextMarkdown);
+
+  return {
+    conversationId,
+    conversationMessageId,
+    conversationMessageSequence,
+    responseMode,
+    targetKind: targetKind && targetId ? targetKind : null,
+    targetId: targetKind && targetId ? targetId : null,
+    replyToMessageId,
+    replyContextMarkdown,
+  };
+}
+
+function applyConversationWakeState(
+  snapshot: Record<string, unknown>,
+  state: ConversationWakeState | null
+) {
+  delete snapshot.conversationId;
+  delete snapshot.conversationMessageId;
+  delete snapshot.conversationMessageSequence;
+  delete snapshot.conversationResponseMode;
+  delete snapshot.conversationTargetKind;
+  delete snapshot.conversationTargetId;
+  delete snapshot.conversationReplyToMessageId;
+  delete snapshot.conversationReplyContextMarkdown;
+
+  if (!state) return snapshot;
+
+  snapshot.conversationId = state.conversationId;
+  snapshot.conversationMessageId = state.conversationMessageId;
+  snapshot.conversationMessageSequence = state.conversationMessageSequence;
+  snapshot.conversationResponseMode = state.responseMode;
+  if (state.targetKind && state.targetId) {
+    snapshot.conversationTargetKind = state.targetKind;
+    snapshot.conversationTargetId = state.targetId;
+  }
+  if (state.replyToMessageId) {
+    snapshot.conversationReplyToMessageId = state.replyToMessageId;
+  }
+  if (state.replyContextMarkdown) {
+    snapshot.conversationReplyContextMarkdown = state.replyContextMarkdown;
+  }
+  return snapshot;
+}
+
+function mergeConversationWakeStates(
+  existing: ConversationWakeState | null,
+  incoming: ConversationWakeState | null
+): ConversationWakeState | null {
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+  if (existing.conversationId !== incoming.conversationId) {
+    return incoming;
+  }
+
+  const latest =
+    incoming.conversationMessageSequence >= existing.conversationMessageSequence
+      ? incoming
+      : existing;
+
+  return {
+    ...latest,
+    responseMode:
+      existing.responseMode === "required" ||
+      incoming.responseMode === "required"
+        ? "required"
+        : "optional",
+  };
+}
+
+function buildConversationWakeupFields(
+  contextSnapshot: Record<string, unknown> | null | undefined,
+  payload: Record<string, unknown> | null | undefined
+) {
+  const state = readConversationWakeState(contextSnapshot, payload);
+  return {
+    conversationId: state?.conversationId ?? null,
+    conversationMessageId: state?.conversationMessageId ?? null,
+    conversationMessageSequence: state?.conversationMessageSequence ?? null,
+    responseMode: state?.responseMode ?? null,
+  };
+}
+
+function normalizeUsageTotals(
+  usage: UsageSummary | null | undefined
+): UsageTotals | null {
   if (!usage) return null;
   return {
     inputTokens: Math.max(0, Math.floor(asNumber(usage.inputTokens, 0))),

@@ -407,11 +407,10 @@ describe("issueService", () => {
         source: "automation",
         triggerDetail: "system",
         reason: "issue_comment_mentioned",
-        payload: { issueId: issue.id },
+        payload: { taskKey: `issue:${issue.id}` },
         requestedByActorType: "user",
         contextSnapshot: {
-          issueId: issue.id,
-          taskId: issue.id,
+          taskKey: `issue:${issue.id}`,
           wakeReason: "issue_comment_mentioned",
           source: "issue.create.mention",
         },
@@ -466,12 +465,11 @@ describe("issueService", () => {
       expect(wakeups.get(fullNameAgent.id)).toMatchObject({
         reason: "issue_comment_mentioned",
         payload: {
-          issueId: issue.id,
+          taskKey: `issue:${issue.id}`,
           commentId: "comment-1",
         },
         contextSnapshot: {
-          issueId: issue.id,
-          taskId: issue.id,
+          taskKey: `issue:${issue.id}`,
           commentId: "comment-1",
           wakeCommentId: "comment-1",
           wakeReason: "issue_comment_mentioned",
