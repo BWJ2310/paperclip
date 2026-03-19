@@ -391,9 +391,6 @@ export function CompanyRail() {
         </DndContext>
       </div>
 
-      {/* Separator before add button */}
-      <div className="w-8 h-px bg-border mx-auto shrink-0" />
-
       {/* Add company button */}
       <div className="flex items-center justify-center py-2 shrink-0">
         <Tooltip delayDuration={300}>
@@ -411,6 +408,10 @@ export function CompanyRail() {
           </TooltipContent>
         </Tooltip>
       </div>
+
+
+      {/* Separator before add button */}
+      <div className="w-8 h-px bg-border mx-auto shrink-0" />
 
       {/* User avatar */}
       <div className="flex items-center justify-center pb-3 shrink-0">

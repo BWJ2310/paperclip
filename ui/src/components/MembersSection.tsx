@@ -1,19 +1,44 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { accessApi } from "../api/access";
-import { ROLE_PRESETS, MEMBERSHIP_ROLES, type MembershipRole } from "@paperclipai/shared";
+import {
+  ROLE_PRESETS,
+  MEMBERSHIP_ROLES,
+  type MembershipRole,
+} from "@paperclipai/shared";
+import { queryKeys } from "../lib/queryKeys";
 import { Button } from "./ui/button";
+import { Identity } from "./Identity";
 
 type Member = Awaited<ReturnType<typeof accessApi.listMembers>>[number];
+type Person = Awaited<ReturnType<typeof accessApi.listPeople>>[number];
 
 function roleBadgeColor(role: string | null) {
   switch (role) {
-    case "owner": return "bg-amber-500/10 text-amber-500 border-amber-500/20";
-    case "admin": return "bg-blue-500/10 text-blue-500 border-blue-500/20";
-    case "contributor": return "bg-green-500/10 text-green-500 border-green-500/20";
-    case "viewer": return "bg-gray-500/10 text-gray-400 border-gray-500/20";
-    default: return "bg-gray-500/10 text-gray-400 border-gray-500/20";
+    case "owner":
+      return "bg-amber-500/10 text-amber-500 border-amber-500/20";
+    case "admin":
+      return "bg-blue-500/10 text-blue-500 border-blue-500/20";
+    case "contributor":
+      return "bg-green-500/10 text-green-500 border-green-500/20";
+    case "viewer":
+      return "bg-gray-500/10 text-gray-400 border-gray-500/20";
+    default:
+      return "bg-gray-500/10 text-gray-400 border-gray-500/20";
   }
+}
+
+function formatJoinedDate(createdAt: string) {
+  return `Joined ${new Date(createdAt).toLocaleDateString()}`;
+}
+
+function resolveMemberLabel(member: Member, person?: Person) {
+  const name = person?.name?.trim();
+  if (name) return name;
+  const email = person?.email?.trim();
+  if (email) return email;
+  if (member.principalId === "local-board") return "Board";
+  return member.principalId;
 }
 
 export function MembersSection({ companyId }: { companyId: string }) {
@@ -27,8 +52,14 @@ export function MembersSection({ companyId }: { companyId: string }) {
     queryFn: () => accessApi.listMembers(companyId),
   });
 
+  const peopleQuery = useQuery({
+    queryKey: queryKeys.access.people(companyId),
+    queryFn: () => accessApi.listPeople(companyId),
+  });
+
   const removeMutation = useMutation({
-    mutationFn: (memberId: string) => accessApi.removeMember(companyId, memberId),
+    mutationFn: (memberId: string) =>
+      accessApi.removeMember(companyId, memberId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["members", companyId] });
       setRemovingMember(null);
@@ -36,16 +67,32 @@ export function MembersSection({ companyId }: { companyId: string }) {
   });
 
   const suspendMutation = useMutation({
-    mutationFn: async ({ memberId, suspend }: { memberId: string; suspend: boolean }) =>
+    mutationFn: async ({
+      memberId,
+      suspend,
+    }: {
+      memberId: string;
+      suspend: boolean;
+    }) =>
       suspend
         ? accessApi.suspendMember(companyId, memberId)
-        : accessApi.unsuspendMember(companyId, memberId) as Promise<{ id: string; status: string; membershipRole: string | null }>,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["members", companyId] }),
+        : (accessApi.unsuspendMember(companyId, memberId) as Promise<{
+            id: string;
+            status: string;
+            membershipRole: string | null;
+          }>),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["members", companyId] }),
   });
 
   const permissionsMutation = useMutation({
-    mutationFn: ({ memberId, grants }: { memberId: string; grants: Array<{ permissionKey: string }> }) =>
-      accessApi.updateMemberPermissions(companyId, memberId, grants),
+    mutationFn: ({
+      memberId,
+      grants,
+    }: {
+      memberId: string;
+      grants: Array<{ permissionKey: string }>;
+    }) => accessApi.updateMemberPermissions(companyId, memberId, grants),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["members", companyId] });
       setEditingMember(null);
@@ -53,6 +100,17 @@ export function MembersSection({ companyId }: { companyId: string }) {
   });
 
   const members = membersQuery.data ?? [];
+  const peopleById = useMemo(
+    () =>
+      new Map((peopleQuery.data ?? []).map((person) => [person.id, person])),
+    [peopleQuery.data]
+  );
+  const editingMemberPerson = editingMember
+    ? peopleById.get(editingMember.principalId)
+    : undefined;
+  const removingMemberPerson = removingMember
+    ? peopleById.get(removingMember.principalId)
+    : undefined;
 
   return (
     <div className="space-y-4">
@@ -60,76 +118,102 @@ export function MembersSection({ companyId }: { companyId: string }) {
         Members
       </div>
       <div className="space-y-3 rounded-md border border-border px-4 py-4">
-        {membersQuery.isLoading && <p className="text-sm text-muted-foreground">Loading...</p>}
+        {membersQuery.isLoading && (
+          <p className="text-sm text-muted-foreground">Loading...</p>
+        )}
 
         {members.length === 0 && !membersQuery.isLoading && (
           <p className="text-sm text-muted-foreground">No members found.</p>
         )}
 
         <div className="space-y-2">
-          {members.map((member) => (
-            <div
-              key={member.id}
-              className={`flex items-center justify-between rounded-md border border-border p-3 ${
-                member.status === "suspended" ? "opacity-50" : ""
-              }`}
-            >
-              <div className="flex items-center gap-3">
-                <div>
-                  <div className="text-sm font-medium">{member.principalId}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {member.principalType} &middot; Joined{" "}
-                    {new Date(member.createdAt).toLocaleDateString()}
-                  </div>
-                </div>
-                <span
-                  className={`rounded-full border px-2 py-0.5 text-xs font-medium ${roleBadgeColor(member.membershipRole)}`}
-                >
-                  {member.membershipRole ?? "unknown"}
-                </span>
-                {member.status === "suspended" && (
-                  <span className="rounded-full border border-destructive/20 bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">
-                    Suspended
-                  </span>
-                )}
-              </div>
+          {members.map((member) => {
+            const person =
+              member.principalType === "user"
+                ? peopleById.get(member.principalId)
+                : undefined;
+            const label = resolveMemberLabel(member, person);
 
-              <div className="flex items-center gap-1">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setEditingMember(member);
-                    const matchedRole =
-                      MEMBERSHIP_ROLES.find((r) => r === member.membershipRole) ?? "contributor";
-                    setEditRole(matchedRole);
-                  }}
-                >
-                  Edit
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    suspendMutation.mutate({
-                      memberId: member.id,
-                      suspend: member.status !== "suspended",
-                    })
-                  }
-                >
-                  {member.status === "suspended" ? "Unsuspend" : "Suspend"}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="text-destructive hover:text-destructive"
-                  onClick={() => setRemovingMember(member)}
-                >
-                  Remove
-                </Button>
+            return (
+              <div
+                key={member.id}
+                className={`flex items-center justify-between gap-4 rounded-md border border-border p-3 ${
+                  member.status === "suspended" ? "opacity-50" : ""
+                }`}
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  {member.principalType === "user" && (
+                    <Identity
+                      name={label}
+                      avatarUrl={person?.avatar}
+                      size="sm"
+                      className="shrink-0 [&>span:last-child]:hidden"
+                    />
+                  )}
+
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium">{label}</div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {member.principalType === "user" && person?.email
+                        ? `${person.email} · `
+                        : `${member.principalType} · `}
+                      {formatJoinedDate(member.createdAt)}
+                    </div>
+                  </div>
+
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-xs font-medium ${roleBadgeColor(
+                      member.membershipRole
+                    )}`}
+                  >
+                    {member.membershipRole ?? "unknown"}
+                  </span>
+                  {member.status === "suspended" && (
+                    <span className="rounded-full border border-destructive/20 bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">
+                      Suspended
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setEditingMember(member);
+                      const matchedRole =
+                        MEMBERSHIP_ROLES.find(
+                          (r) => r === member.membershipRole
+                        ) ?? "contributor";
+                      setEditRole(matchedRole);
+                    }}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      suspendMutation.mutate({
+                        memberId: member.id,
+                        suspend: member.status !== "suspended",
+                      })
+                    }
+                  >
+                    {member.status === "suspended" ? "Unsuspend" : "Suspend"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-destructive hover:text-destructive"
+                    onClick={() => setRemovingMember(member)}
+                  >
+                    Remove
+                  </Button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
@@ -139,7 +223,7 @@ export function MembersSection({ companyId }: { companyId: string }) {
           <div className="w-96 rounded-lg border border-border bg-card p-6 shadow-lg">
             <h4 className="mb-4 text-lg font-semibold">Edit Permissions</h4>
             <p className="mb-4 text-sm text-muted-foreground">
-              Editing {editingMember.principalId}
+              Editing {resolveMemberLabel(editingMember, editingMemberPerson)}
             </p>
             <div className="mb-4">
               <label className="text-sm font-medium">Role Preset:</label>
@@ -161,8 +245,13 @@ export function MembersSection({ companyId }: { companyId: string }) {
               </Button>
               <Button
                 onClick={() => {
-                  const grants = ROLE_PRESETS[editRole].map((k) => ({ permissionKey: k }));
-                  permissionsMutation.mutate({ memberId: editingMember.id, grants });
+                  const grants = ROLE_PRESETS[editRole].map((k) => ({
+                    permissionKey: k,
+                  }));
+                  permissionsMutation.mutate({
+                    memberId: editingMember.id,
+                    grants,
+                  });
                 }}
                 disabled={permissionsMutation.isPending}
               >
@@ -179,8 +268,9 @@ export function MembersSection({ companyId }: { companyId: string }) {
           <div className="w-96 rounded-lg border border-border bg-card p-6 shadow-lg">
             <h4 className="mb-2 text-lg font-semibold">Remove Member</h4>
             <p className="mb-4 text-sm text-muted-foreground">
-              Remove {removingMember.principalId} from this company? This will delete their
-              membership and all permission grants.
+              Remove {resolveMemberLabel(removingMember, removingMemberPerson)}{" "}
+              from this company? This will delete their membership and all
+              permission grants.
             </p>
             <div className="flex justify-end gap-2">
               <Button variant="ghost" onClick={() => setRemovingMember(null)}>

@@ -1,5 +1,4 @@
 import {
-  companyProjectsPath,
   type LinkedConversationSummary,
   type ListProjectsQuery,
   type Project,
@@ -24,7 +23,9 @@ export const projectsApi = {
     if (trimmedQuery) params.set("q", trimmedQuery);
     if (query?.limit !== undefined) params.set("limit", String(query.limit));
     const qs = params.toString();
-    return api.get<Project[]>(`${companyProjectsPath(companyId)}${qs ? `?${qs}` : ""}`);
+    return api.get<Project[]>(
+      `/companies/${encodeURIComponent(companyId)}/projects${qs ? `?${qs}` : ""}`,
+    );
   },
   get: (id: string, companyId?: string) => api.get<Project>(projectPath(id, companyId)),
   listLinkedConversations: (id: string, companyId?: string) =>

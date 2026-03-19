@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { User } from "lucide-react";
 import { Identity } from "../components/Identity";
@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { api } from "../api/client";
 import { queryKeys } from "../lib/queryKeys";
 import { AvatarCropDialog } from "../components/AvatarCropDialog";
+import { useBreadcrumbs } from "../context/BreadcrumbContext";
 
 type UserProfile = {
   id: string;
@@ -52,6 +53,7 @@ function parseUserAgent(ua: string | null): string {
 export function Account() {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { setBreadcrumbs } = useBreadcrumbs();
 
   // Avatar crop state
   const [cropFile, setCropFile] = useState<File | null>(null);
@@ -135,6 +137,10 @@ export function Account() {
 
   const profile = profileQuery.data;
   const sessions = sessionsQuery.data ?? [];
+
+  useEffect(() => {
+    setBreadcrumbs([{ label: "Account" }]);
+  }, [setBreadcrumbs]);
 
   const isDirty =
     (editName !== null && editName !== (profile?.name ?? "")) ||
