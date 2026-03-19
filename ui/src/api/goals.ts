@@ -1,5 +1,4 @@
 import {
-  companyGoalsPath,
   type Goal,
   type LinkedConversationSummary,
   type ListGoalsQuery,
@@ -13,7 +12,9 @@ export const goalsApi = {
     if (trimmedQuery) params.set("q", trimmedQuery);
     if (query?.limit !== undefined) params.set("limit", String(query.limit));
     const qs = params.toString();
-    return api.get<Goal[]>(`${companyGoalsPath(companyId)}${qs ? `?${qs}` : ""}`);
+    return api.get<Goal[]>(
+      `/companies/${encodeURIComponent(companyId)}/goals${qs ? `?${qs}` : ""}`,
+    );
   },
   get: (id: string) => api.get<Goal>(`/goals/${id}`),
   listLinkedConversations: (id: string) =>
