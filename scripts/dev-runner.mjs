@@ -94,7 +94,7 @@ if (tailscaleAuth) {
   env.HOST = "0.0.0.0";
   console.log("[paperclip] dev mode: authenticated/private (tailscale-friendly) on 0.0.0.0");
 } else {
-  console.log("[paperclip] dev mode: local_trusted (default)");
+  console.log("[paperclip] dev mode: using configured deployment mode (.env/config, default local_trusted)");
 }
 
 const pnpmBin = process.platform === "win32" ? "pnpm.cmd" : "pnpm";

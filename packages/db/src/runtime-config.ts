@@ -22,7 +22,7 @@ export type ResolvedDatabaseTarget =
   | {
       mode: "postgres";
       connectionString: string;
-      source: "DATABASE_URL" | "paperclip-env" | "config.database.connectionString";
+      source: "DATABASE_URL" | "paperclip-env" | "repo-env" | "config.database.connectionString";
       configPath: string;
       envPath: string;
     }
@@ -72,17 +72,25 @@ function resolveHomeAwarePath(value: string): string {
   return path.resolve(expandHomePrefix(value));
 }
 
-function findConfigFileFromAncestors(startDir: string): string | null {
+function findFileFromAncestors(startDir: string, segments: string[]): string | null {
   let currentDir = path.resolve(startDir);
 
   while (true) {
-    const candidate = path.resolve(currentDir, ".paperclip", CONFIG_BASENAME);
+    const candidate = path.resolve(currentDir, ...segments);
     if (existsSync(candidate)) return candidate;
 
     const nextDir = path.resolve(currentDir, "..");
     if (nextDir === currentDir) return null;
     currentDir = nextDir;
   }
+}
+
+function findConfigFileFromAncestors(startDir: string): string | null {
+  return findFileFromAncestors(startDir, [".paperclip", CONFIG_BASENAME]);
+}
+
+function findEnvFileFromAncestors(startDir: string): string | null {
+  return findFileFromAncestors(startDir, [ENV_BASENAME]);
 }
 
 function resolvePaperclipConfigPath(): string {
@@ -215,6 +223,9 @@ function readConfig(configPath: string): PartialConfig | null {
 export function resolveDatabaseTarget(): ResolvedDatabaseTarget {
   const configPath = resolvePaperclipConfigPath();
   const envPath = resolvePaperclipEnvPath(configPath);
+  const repoEnvPath = findEnvFileFromAncestors(process.cwd());
+  const repoEnvEntries =
+    repoEnvPath && repoEnvPath !== envPath ? readEnvEntries(repoEnvPath) : {};
   const envEntries = readEnvEntries(envPath);
 
   const envUrl = process.env.DATABASE_URL?.trim();
@@ -223,6 +234,17 @@ export function resolveDatabaseTarget(): ResolvedDatabaseTarget {
       mode: "postgres",
       connectionString: envUrl,
       source: "DATABASE_URL",
+      configPath,
+      envPath,
+    };
+  }
+
+  const repoEnvUrl = repoEnvEntries.DATABASE_URL?.trim();
+  if (repoEnvUrl) {
+    return {
+      mode: "postgres",
+      connectionString: repoEnvUrl,
+      source: "repo-env",
       configPath,
       envPath,
     };

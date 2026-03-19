@@ -41,6 +41,27 @@ describe("resolveDatabaseTarget", () => {
     });
   });
 
+  it("uses DATABASE_URL from the nearest ancestor repo .env", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-db-runtime-"));
+    const projectDir = path.join(tempDir, "repo");
+    const nestedDir = path.join(projectDir, "server");
+    fs.mkdirSync(nestedDir, { recursive: true });
+    process.chdir(nestedDir);
+    delete process.env.PAPERCLIP_CONFIG;
+    writeText(
+      path.join(projectDir, ".env"),
+      'DATABASE_URL="postgres://repo-user:repo-pass@db.example.com:6543/paperclip"\n',
+    );
+
+    const target = resolveDatabaseTarget();
+
+    expect(target).toMatchObject({
+      mode: "postgres",
+      connectionString: "postgres://repo-user:repo-pass@db.example.com:6543/paperclip",
+      source: "repo-env",
+    });
+  });
+
   it("uses DATABASE_URL from repo-local .paperclip/.env", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-db-runtime-"));
     const projectDir = path.join(tempDir, "repo");
@@ -66,7 +87,10 @@ describe("resolveDatabaseTarget", () => {
 
   it("uses config postgres connection string when configured", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-db-runtime-"));
+    const workDir = path.join(tempDir, "work");
     const configPath = path.join(tempDir, "instance", "config.json");
+    fs.mkdirSync(workDir, { recursive: true });
+    process.chdir(workDir);
     process.env.PAPERCLIP_CONFIG = configPath;
     writeJson(configPath, {
       database: {
@@ -86,7 +110,10 @@ describe("resolveDatabaseTarget", () => {
 
   it("falls back to embedded postgres settings from config", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-db-runtime-"));
+    const workDir = path.join(tempDir, "work");
     const configPath = path.join(tempDir, "instance", "config.json");
+    fs.mkdirSync(workDir, { recursive: true });
+    process.chdir(workDir);
     process.env.PAPERCLIP_CONFIG = configPath;
     writeJson(configPath, {
       database: {

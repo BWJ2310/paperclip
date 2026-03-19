@@ -5,12 +5,12 @@ import { resolveDefaultConfigPath } from "./home-paths.js";
 const PAPERCLIP_CONFIG_BASENAME = "config.json";
 const PAPERCLIP_ENV_FILENAME = ".env";
 
-function findConfigFileFromAncestors(startDir: string): string | null {
+function findFileFromAncestors(startDir: string, segments: string[]): string | null {
   const absoluteStartDir = path.resolve(startDir);
   let currentDir = absoluteStartDir;
 
   while (true) {
-    const candidate = path.resolve(currentDir, ".paperclip", PAPERCLIP_CONFIG_BASENAME);
+    const candidate = path.resolve(currentDir, ...segments);
     if (fs.existsSync(candidate)) {
       return candidate;
     }
@@ -21,6 +21,14 @@ function findConfigFileFromAncestors(startDir: string): string | null {
   }
 
   return null;
+}
+
+function findConfigFileFromAncestors(startDir: string): string | null {
+  return findFileFromAncestors(startDir, [".paperclip", PAPERCLIP_CONFIG_BASENAME]);
+}
+
+export function findEnvFileFromAncestors(startDir: string): string | null {
+  return findFileFromAncestors(startDir, [PAPERCLIP_ENV_FILENAME]);
 }
 
 export function resolvePaperclipConfigPath(overridePath?: string): string {

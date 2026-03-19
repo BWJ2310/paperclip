@@ -11,9 +11,15 @@ type EmbeddedPostgresInstance = {
 };
 
 let pg: EmbeddedPostgresInstance | null = null;
-let dataDir: string;
+let dataDir: string | null = null;
 
 export default async function setup() {
+  const existingUrl = process.env.TEST_DATABASE_URL;
+  if (existingUrl) {
+    await applyPendingMigrations(existingUrl);
+    return;
+  }
+
   const port = await detectPort(0);
   // Include port in directory name to avoid conflicts when CI runs parallel jobs
   dataDir = resolve(dirname(fileURLToPath(import.meta.url)), `../../../../tmp-test-pg-${port}`);
@@ -45,5 +51,8 @@ export async function teardown() {
     await pg.stop();
     pg = null;
   }
-  rmSync(dataDir, { recursive: true, force: true });
+  if (dataDir) {
+    rmSync(dataDir, { recursive: true, force: true });
+    dataDir = null;
+  }
 }
