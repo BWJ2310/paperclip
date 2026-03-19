@@ -10,6 +10,7 @@ import {
   User,
   LogOut,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useCompany } from "../context/CompanyContext";
 import { useDialog } from "../context/DialogContext";
 import { cn } from "../lib/utils";
@@ -18,6 +19,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@/lib/router";
 import { authApi } from "../api/auth";
 import { healthApi } from "../api/health";
+import { conversationsApi } from "../api/conversations";
 import { queryKeys } from "../lib/queryKeys";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -36,14 +38,15 @@ interface MobileNavLinkItem {
   type: "link";
   to: string;
   label: string;
-  icon: typeof House;
+  icon: LucideIcon;
   badge?: number;
+  activePrefix?: string;
 }
 
 interface MobileNavActionItem {
   type: "action";
   label: string;
-  icon: typeof SquarePen;
+  icon: LucideIcon;
   onClick: () => void;
 }
 
@@ -58,7 +61,7 @@ function deriveInitials(name: string): string {
 export function MobileBottomNav({ visible }: MobileBottomNavProps) {
   const location = useLocation();
   const { selectedCompanyId } = useCompany();
-  const { openNewIssue } = useDialog();
+  const { openNewIssue, openNewConversation } = useDialog();
   const inboxBadge = useInboxBadge(selectedCompanyId);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -78,6 +81,14 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
 
   const isAuthenticated = health?.deploymentMode === "authenticated" && !!session?.user;
 
+  const { data: conversations = [] } = useQuery({
+    queryKey: queryKeys.conversations.list(selectedCompanyId!),
+    queryFn: () => conversationsApi.list(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+
+  const latestConversation = conversations[0] ?? null;
+
   async function handleSignOut() {
     try { await authApi.signOut(); } catch { /* ignore */ }
     queryClient.clear();
@@ -87,7 +98,20 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
   const items = useMemo<MobileNavItem[]>(
     () => [
       { type: "link", to: "/dashboard", label: "Home", icon: House },
-      { type: "link", to: "conversations", label: "Chats", icon: MessageSquare },
+      latestConversation
+        ? {
+            type: "link",
+            to: `/conversations/${latestConversation.id}`,
+            label: "Chats",
+            icon: MessageSquare,
+            activePrefix: "/conversations/",
+          }
+        : {
+            type: "action",
+            label: "Chats",
+            icon: MessageSquare,
+            onClick: () => openNewConversation(),
+          },
       { type: "link", to: "/issues", label: "Issues", icon: CircleDot },
       { type: "action", label: "Create", icon: SquarePen, onClick: () => openNewIssue() },
       {
@@ -98,7 +122,7 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
         badge: inboxBadge.inbox,
       },
     ],
-    [openNewIssue, inboxBadge.inbox],
+    [latestConversation, openNewConversation, openNewIssue, inboxBadge.inbox],
   );
 
   return (
@@ -113,7 +137,10 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
         {items.map((item) => {
           if (item.type === "action") {
             const Icon = item.icon;
-            const active = /\/issues\/new(?:\/|$)/.test(location.pathname);
+            const active =
+              item.label === "Create"
+                ? /\/issues\/new(?:\/|$)/.test(location.pathname)
+                : false;
             return (
               <button
                 key={item.label}
@@ -140,7 +167,9 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
               className={({ isActive }) =>
                 cn(
                   "relative flex min-w-0 flex-col items-center justify-center gap-1 rounded-md text-[10px] font-medium transition-colors",
-                  isActive
+                  (item.activePrefix
+                    ? location.pathname.includes(item.activePrefix)
+                    : isActive)
                     ? "text-foreground"
                     : "text-muted-foreground hover:text-foreground",
                 )

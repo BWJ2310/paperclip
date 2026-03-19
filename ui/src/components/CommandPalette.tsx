@@ -39,7 +39,7 @@ export function CommandPalette() {
   const [query, setQuery] = useState("");
   const navigate = useNavigate();
   const { selectedCompanyId } = useCompany();
-  const { openNewIssue, openNewAgent } = useDialog();
+  const { openNewIssue, openNewAgent, openNewConversation } = useDialog();
   const { isMobile, setSidebarOpen } = useSidebar();
   const searchQuery = query.trim();
 
@@ -145,6 +145,15 @@ export function CommandPalette() {
             <Plus className="mr-2 h-4 w-4" />
             Create new project
           </CommandItem>
+          <CommandItem
+            onSelect={() => {
+              setOpen(false);
+              openNewConversation();
+            }}
+          >
+            <MessageSquare className="mr-2 h-4 w-4" />
+            Create new conversation
+          </CommandItem>
         </CommandGroup>
 
         <CommandSeparator />
@@ -161,10 +170,6 @@ export function CommandPalette() {
           <CommandItem onSelect={() => go("/issues")}>
             <CircleDot className="mr-2 h-4 w-4" />
             Issues
-          </CommandItem>
-          <CommandItem onSelect={() => go("conversations")}>
-            <MessageSquare className="mr-2 h-4 w-4" />
-            Conversations
           </CommandItem>
           <CommandItem onSelect={() => go("/projects")}>
             <Hexagon className="mr-2 h-4 w-4" />

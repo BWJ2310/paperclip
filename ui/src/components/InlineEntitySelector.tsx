@@ -19,6 +19,8 @@ interface InlineEntitySelectorProps {
   onChange: (id: string) => void;
   onConfirm?: () => void;
   className?: string;
+  triggerAriaLabel?: string;
+  triggerTitle?: string;
   renderTriggerValue?: (option: InlineEntityOption | null) => ReactNode;
   renderOption?: (option: InlineEntityOption, isSelected: boolean) => ReactNode;
   /** Skip the Portal so the popover stays in the DOM tree (fixes scroll inside Dialogs). */
@@ -37,6 +39,8 @@ export const InlineEntitySelector = forwardRef<HTMLButtonElement, InlineEntitySe
       onChange,
       onConfirm,
       className,
+      triggerAriaLabel,
+      triggerTitle,
       renderTriggerValue,
       renderOption,
       disablePortal,
@@ -101,6 +105,8 @@ export const InlineEntitySelector = forwardRef<HTMLButtonElement, InlineEntitySe
               "inline-flex min-w-0 items-center gap-1 rounded-md border border-border bg-muted/40 px-2 py-1 text-sm font-medium text-foreground transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               className,
             )}
+            aria-label={triggerAriaLabel}
+            title={triggerTitle}
             onPointerDown={() => { isPointerDownRef.current = true; }}
             onFocus={() => {
               if (!isPointerDownRef.current) setOpen(true);

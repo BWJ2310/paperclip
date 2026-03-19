@@ -8,6 +8,7 @@ import type {
   CreateConversation,
   CreateConversationMessage,
   CreateConversationTargetLink,
+  DeleteConversationMessageResult,
   DeleteConversationParticipantResult,
   DeleteConversationTargetLinkQuery,
   DeleteConversationTargetLinkResult,
@@ -63,6 +64,10 @@ export const conversationsApi = {
     ),
   createMessage: (conversationId: string, data: CreateConversationMessage) =>
     api.post<ConversationMessage>(`/conversations/${conversationId}/messages`, data),
+  deleteMessage: (conversationId: string, messageId: string) =>
+    api.delete<DeleteConversationMessageResult>(
+      `/conversations/${conversationId}/messages/${messageId}`,
+    ),
   markRead: (conversationId: string, data: MarkConversationRead) =>
     api.post<ConversationReadState>(`/conversations/${conversationId}/read`, data),
   createTargetLinks: (conversationId: string, data: CreateConversationTargetLink) =>

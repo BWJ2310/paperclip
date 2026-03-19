@@ -6,7 +6,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type DragEvent,
 } from "react";
 import {
@@ -18,7 +17,6 @@ import {
   type MDXEditorMethods,
   headingsPlugin,
   imagePlugin,
-  linkDialogPlugin,
   linkPlugin,
   listsPlugin,
   markdownShortcutPlugin,
@@ -29,7 +27,6 @@ import {
 } from "@mdxeditor/editor";
 import {
   buildStructuredMentionHref,
-  parseStructuredMentionHref,
   type StructuredMentionKind,
 } from "@paperclipai/shared";
 import { cn } from "../lib/utils";
@@ -65,6 +62,7 @@ interface MarkdownEditorProps {
     kindFilter: MentionFilterKind
   ) => Promise<MentionOption[]>;
   mentionMode?: "legacy" | "structured";
+  structuredKindPicker?: boolean;
   /** Called on Cmd/Ctrl+Enter */
   onSubmit?: () => void;
 }
@@ -146,17 +144,79 @@ function filterMentionOptions(params: {
     .slice(0, 8);
 }
 
+function findFirstTextNode(node: Node | null): Text | null {
+  if (!node) return null;
+  if (node.nodeType === Node.TEXT_NODE) return node as Text;
+
+  const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+  return walker.nextNode() as Text | null;
+}
+
+function findLastTextNode(node: Node | null): Text | null {
+  if (!node) return null;
+  if (node.nodeType === Node.TEXT_NODE) return node as Text;
+
+  const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+  let last: Text | null = null;
+  let current = walker.nextNode();
+  while (current) {
+    last = current as Text;
+    current = walker.nextNode();
+  }
+  return last;
+}
+
+function resolveMentionTextSelection(
+  container: HTMLElement,
+  range: Range,
+): { textNode: Text; offset: number } | null {
+  const startContainer = range.startContainer;
+  if (!container.contains(startContainer)) return null;
+
+  if (startContainer.nodeType === Node.TEXT_NODE) {
+    return {
+      textNode: startContainer as Text,
+      offset: range.startOffset,
+    };
+  }
+
+  if (startContainer.nodeType !== Node.ELEMENT_NODE) return null;
+
+  const element = startContainer as Element;
+  const childBefore = element.childNodes[range.startOffset - 1] ?? null;
+  const childAfter = element.childNodes[range.startOffset] ?? null;
+
+  const trailingText = findLastTextNode(childBefore);
+  if (trailingText && !trailingText.parentElement?.closest("a")) {
+    return {
+      textNode: trailingText,
+      offset: trailingText.textContent?.length ?? 0,
+    };
+  }
+
+  const leadingText = findFirstTextNode(childAfter);
+  if (leadingText && !leadingText.parentElement?.closest("a")) {
+    return {
+      textNode: leadingText,
+      offset: 0,
+    };
+  }
+
+  return null;
+}
+
 function detectMention(container: HTMLElement): MentionState | null {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return null;
 
   const range = sel.getRangeAt(0);
-  const textNode = range.startContainer;
-  if (textNode.nodeType !== Node.TEXT_NODE) return null;
-  if (!container.contains(textNode)) return null;
+  const resolvedSelection = resolveMentionTextSelection(container, range);
+  if (!resolvedSelection) return null;
+
+  const { textNode, offset } = resolvedSelection;
+  if (textNode.parentElement?.closest("a")) return null;
 
   const text = textNode.textContent ?? "";
-  const offset = range.startOffset;
 
   // Walk backwards from cursor to find @
   let atPos = -1;
@@ -205,7 +265,7 @@ function mentionMarkdown(
   ) {
     return `[@${option.name}](${buildStructuredMentionHref(option.kind, targetId, {
       color: option.kind === "project" ? option.projectColor ?? null : null,
-    })}) `;
+    })})\u00A0`;
   }
   if (option.kind === "project" && targetId) {
     return `[@${option.name}](${buildStructuredMentionHref("project", targetId, {
@@ -240,31 +300,6 @@ function replaceMentionQueryText(
   return markdown.slice(0, idx) + replacement + markdown.slice(idx + search.length);
 }
 
-function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
-  const trimmed = hex.trim();
-  const match = /^#([0-9a-f]{6})$/i.exec(trimmed);
-  if (!match) return null;
-  const value = match[1];
-  return {
-    r: parseInt(value.slice(0, 2), 16),
-    g: parseInt(value.slice(2, 4), 16),
-    b: parseInt(value.slice(4, 6), 16),
-  };
-}
-
-function mentionChipStyle(color: string | null): CSSProperties | undefined {
-  if (!color) return undefined;
-  const rgb = hexToRgb(color);
-  if (!rgb) return undefined;
-  const luminance = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
-  const textColor = luminance > 0.55 ? "#111827" : "#f8fafc";
-  return {
-    borderColor: color,
-    backgroundColor: `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.22)`,
-    color: textColor,
-  };
-}
-
 /* ---- Component ---- */
 
 export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>(function MarkdownEditor({
@@ -279,6 +314,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
   mentions,
   loadMentions,
   mentionMode = "legacy",
+  structuredKindPicker = true,
   onSubmit,
 }: MarkdownEditorProps, forwardedRef) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -299,39 +335,107 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
   const [mentionKindFilter, setMentionKindFilter] =
     useState<MentionFilterKind>("all");
   const [loadedMentions, setLoadedMentions] = useState<MentionOption[]>([]);
+  const [isLoadingMentions, setIsLoadingMentions] = useState(false);
   const mentionActive =
     mentionState !== null &&
     (Boolean(loadMentions) || Boolean((mentions ?? []).length > 0));
-  const projectColorById = useMemo(() => {
-    const map = new Map<string, string | null>();
-    for (const mention of mentions ?? []) {
-      if (mention.kind === "project") {
-        map.set(mention.projectId ?? mention.id, mention.projectColor ?? null);
-      }
-    }
-    return map;
-  }, [mentions]);
   const structuredMentionSession = useMemo(() => {
     if (mentionMode !== "structured" || !mentionState) return null;
     return resolveStructuredMentionSession(mentionState.query);
   }, [mentionMode, mentionState]);
+  const structuredKindOptions =
+    structuredMentionSession?.stage === "kind"
+      ? structuredMentionSession.kindOptions
+      : [];
+  const showStructuredKindPicker =
+    mentionMode === "structured" &&
+    structuredKindPicker &&
+    mentionState !== null &&
+    structuredMentionSession?.stage === "kind" &&
+    structuredKindOptions.length > 0;
+  const showStructuredEntityFallback =
+    mentionMode === "structured" &&
+    structuredKindPicker &&
+    mentionState !== null &&
+    structuredMentionSession?.stage === "kind" &&
+    structuredKindOptions.length === 0;
 
   const filteredMentions = useMemo(() => {
     if (!mentionState) return [];
+    const mergeMentionLists = (
+      primary: MentionOption[],
+      secondary: MentionOption[],
+    ) => {
+      const merged: MentionOption[] = [];
+      const seen = new Set<string>();
+      for (const option of [...primary, ...secondary]) {
+        const key = `${option.kind ?? "unknown"}:${option.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(option);
+      }
+      return merged.slice(0, 8);
+    };
     if (mentionMode === "structured") {
-      if (!structuredMentionSession || structuredMentionSession.stage !== "entity") {
+      if (!structuredKindPicker) {
+        const localMentions = mentions
+          ? filterMentionOptions({
+              mentions,
+              query: mentionState.query,
+              mentionMode,
+              kindFilter: "all",
+            })
+          : [];
+        if (loadMentions) {
+          return mergeMentionLists(localMentions, loadedMentions);
+        }
+        return localMentions;
+      }
+      if (!structuredMentionSession) {
         return [];
       }
-      if (loadMentions) return loadedMentions.slice(0, 8);
+      if (structuredMentionSession.stage === "kind") {
+        if (structuredKindOptions.length > 0) {
+          return [];
+        }
+        const localMentions = mentions
+          ? filterMentionOptions({
+              mentions,
+              query: mentionState.query,
+              mentionMode,
+              kindFilter: "all",
+            })
+          : [];
+        if (loadMentions) {
+          return mergeMentionLists(localMentions, loadedMentions);
+        }
+        return localMentions;
+      }
+      const localMentions = mentions
+        ? filterMentionOptions({
+            mentions,
+            query: structuredMentionSession.entityQuery,
+            mentionMode,
+            kindFilter: structuredMentionSession.kind,
+          })
+        : [];
+      if (loadMentions) {
+        return mergeMentionLists(localMentions, loadedMentions);
+      }
       if (!mentions) return [];
-      return filterMentionOptions({
-        mentions,
-        query: structuredMentionSession.entityQuery,
-        mentionMode,
-        kindFilter: structuredMentionSession.kind,
-      });
+      return localMentions;
     }
-    if (loadMentions) return loadedMentions.slice(0, 8);
+    if (loadMentions) {
+      const localMentions = mentions
+        ? filterMentionOptions({
+            mentions,
+            query: mentionState.query,
+            mentionMode,
+            kindFilter: mentionKindFilter,
+          })
+        : [];
+      return mergeMentionLists(localMentions, loadedMentions);
+    }
     if (!mentions) return [];
     return filterMentionOptions({
       mentions,
@@ -346,21 +450,16 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
     mentionMode,
     mentionState,
     mentions,
+    structuredKindPicker,
+    structuredKindOptions.length,
     structuredMentionSession,
   ]);
-  const structuredKindOptions =
-    structuredMentionSession?.stage === "kind"
-      ? structuredMentionSession.kindOptions
-      : [];
-  const showStructuredKindPicker =
-    mentionMode === "structured" &&
-    mentionState !== null &&
-    structuredMentionSession?.stage === "kind";
 
   useEffect(() => {
     setMentionIndex(0);
   }, [
     mentionState?.query,
+    showStructuredEntityFallback,
     showStructuredKindPicker,
     structuredMentionSession?.stage,
     structuredMentionSession?.stage === "entity"
@@ -418,7 +517,6 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
       quotePlugin(),
       tablePlugin(),
       linkPlugin(),
-      linkDialogPlugin(),
       thematicBreakPlugin(),
       codeBlockPlugin({
         defaultCodeBlockLanguage: "txt",
@@ -446,44 +544,62 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
     const links = editable.querySelectorAll("a");
     for (const node of links) {
       const link = node as HTMLAnchorElement;
-      const parsed = parseStructuredMentionHref(link.getAttribute("href") ?? "");
-      if (!parsed) {
-        if (link.dataset.paperclipMention === "true") {
-          link.dataset.paperclipMention = "false";
-          link.classList.remove("paperclip-mention-chip");
-          link.classList.remove("paperclip-project-mention-chip");
-          link.removeAttribute("contenteditable");
-          link.style.removeProperty("border-color");
-          link.style.removeProperty("background-color");
-          link.style.removeProperty("color");
-        }
-        continue;
+      if (link.dataset.paperclipMention === "true") {
+        const labelText =
+          link.dataset.paperclipMentionLabel ?? link.textContent?.trim() ?? "";
+        link.replaceChildren(document.createTextNode(labelText));
       }
-
-      const color =
-        parsed.kind === "project"
-          ? parsed.color ?? projectColorById.get(parsed.targetId) ?? null
-          : null;
-      link.dataset.paperclipMention = "true";
-      link.classList.add("paperclip-mention-chip");
-      if (parsed.kind === "project") {
-        link.classList.add("paperclip-project-mention-chip");
-      } else {
-        link.classList.remove("paperclip-project-mention-chip");
-      }
+      delete link.dataset.paperclipMention;
+      delete link.dataset.paperclipMentionLabel;
+      delete link.dataset.paperclipMentionHref;
+      link.classList.remove("paperclip-mention-chip");
+      link.classList.remove("paperclip-project-mention-chip");
       link.setAttribute("contenteditable", "false");
-      const style = mentionChipStyle(color);
-      if (style) {
-        link.style.borderColor = style.borderColor ?? "";
-        link.style.backgroundColor = style.backgroundColor ?? "";
-        link.style.color = style.color ?? "";
-      } else {
-        link.style.removeProperty("border-color");
-        link.style.removeProperty("background-color");
-        link.style.removeProperty("color");
+      link.setAttribute("draggable", "false");
+      link.setAttribute("tabindex", "-1");
+    }
+  }, []);
+
+  const moveCaretAfterEditorLink = useCallback(() => {
+    const editable = containerRef.current?.querySelector('[contenteditable="true"]');
+    if (!editable) return;
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+
+    const selectionRange = selection.getRangeAt(0);
+    const anchorNode = selection.anchorNode;
+    let anchor =
+      anchorNode instanceof Element
+        ? anchorNode.closest("a")
+        : anchorNode?.parentElement?.closest("a");
+
+    if (!(anchor instanceof HTMLAnchorElement)) {
+      const startContainer = selectionRange.startContainer;
+      if (startContainer.nodeType === Node.ELEMENT_NODE) {
+        const element = startContainer as Element;
+        const childBefore = element.childNodes[selectionRange.startOffset - 1] ?? null;
+        if (childBefore instanceof HTMLAnchorElement) {
+          anchor = childBefore;
+        }
       }
     }
-  }, [projectColorById]);
+
+    if (!(anchor instanceof HTMLAnchorElement) || !editable.contains(anchor)) {
+      return;
+    }
+
+    const range = document.createRange();
+    const trailingText = findFirstTextNode(anchor.nextSibling);
+    if (trailingText && !trailingText.parentElement?.closest("a")) {
+      range.setStart(trailingText, trailingText.textContent?.length ?? 0);
+    } else {
+      range.setStartAfter(anchor);
+    }
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, []);
 
   // Mention detection: listen for selection changes and input events
   const checkMention = useCallback(() => {
@@ -526,20 +642,36 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
   useEffect(() => {
     if (!loadMentions || !mentionState) {
       setLoadedMentions([]);
+      setIsLoadingMentions(false);
       return;
     }
     let mentionQuery = mentionState.query;
     let kindFilter: MentionFilterKind = mentionKindFilter;
     if (mentionMode === "structured") {
-      const entitySession = structuredMentionSession;
-      if (!entitySession || entitySession.stage !== "entity") {
-        setLoadedMentions([]);
-        return;
+      if (!structuredKindPicker) {
+        mentionQuery = mentionState.query;
+        kindFilter = "all";
+      } else {
+        const entitySession = structuredMentionSession;
+        if (!entitySession) {
+          setLoadedMentions([]);
+          return;
+        }
+        if (entitySession.stage === "entity") {
+          mentionQuery = entitySession.entityQuery;
+          kindFilter = entitySession.kind;
+        } else {
+          if (structuredKindOptions.length > 0) {
+            setLoadedMentions([]);
+            return;
+          }
+          mentionQuery = mentionState.query;
+          kindFilter = "all";
+        }
       }
-      mentionQuery = entitySession.entityQuery;
-      kindFilter = entitySession.kind;
     }
     let cancelled = false;
+    setIsLoadingMentions(true);
     Promise.resolve(loadMentions(mentionQuery, kindFilter))
       .then((next) => {
         if (cancelled) return;
@@ -548,6 +680,10 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
       .catch(() => {
         if (cancelled) return;
         setLoadedMentions([]);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setIsLoadingMentions(false);
       });
     return () => {
       cancelled = true;
@@ -557,6 +693,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
     mentionKindFilter,
     mentionMode,
     mentionState,
+    structuredKindPicker,
+    structuredKindOptions.length,
     structuredMentionSession,
   ]);
 
@@ -605,6 +743,59 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
     [onChange],
   );
 
+  const replaceMentionRangeInEditor = useCallback(
+    (
+      replacement: string,
+      state: MentionState,
+      fallback: () => boolean,
+      onAfterInsert?: () => void,
+    ) => {
+      requestAnimationFrame(() => {
+        const editor = ref.current;
+        const selection = window.getSelection();
+        const beforeInsert = latestValueRef.current;
+
+        if (editor && selection && state.textNode.isConnected) {
+          const range = document.createRange();
+          range.setStart(state.textNode, state.atPos);
+          range.setEnd(state.textNode, state.endPos);
+          selection.removeAllRanges();
+          selection.addRange(range);
+          editor.insertMarkdown(replacement);
+
+          requestAnimationFrame(() => {
+            const next = editor.getMarkdown();
+            if (next === beforeInsert) {
+              const replaced = fallback();
+              requestAnimationFrame(() => {
+                if (replaced) {
+                  onAfterInsert?.();
+                }
+              });
+              return;
+            }
+
+            if (next !== latestValueRef.current) {
+              latestValueRef.current = next;
+              onChange(next);
+            }
+
+            onAfterInsert?.();
+          });
+          return;
+        }
+
+        const replaced = fallback();
+        requestAnimationFrame(() => {
+          if (replaced) {
+            onAfterInsert?.();
+          }
+        });
+      });
+    },
+    [onChange],
+  );
+
   const selectMentionKind = useCallback(
     (kind: StructuredMentionKind, stateOverride?: MentionState | null) => {
       const state =
@@ -614,17 +805,16 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
       mentionStateRef.current = null;
       setMentionState(null);
 
-      requestAnimationFrame(() => {
-        replaceMentionKindFromMarkdown(kind, state);
-        requestAnimationFrame(() => {
-          ref.current?.focus(undefined, { defaultSelection: "rootEnd" });
-          requestAnimationFrame(() => {
-            checkMention();
-          });
-        });
-      });
+      replaceMentionRangeInEditor(
+        `@${kind}`,
+        state,
+        () => replaceMentionKindFromMarkdown(kind, state),
+        () => {
+          checkMention();
+        },
+      );
     },
-    [checkMention, replaceMentionKindFromMarkdown],
+    [checkMention, replaceMentionKindFromMarkdown, replaceMentionRangeInEditor],
   );
 
   const selectMention = useCallback(
@@ -640,13 +830,17 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
       ) {
         mentionStateRef.current = null;
         setMentionState(null);
-        requestAnimationFrame(() => {
-          replaceMentionFromMarkdown(option, state);
-          requestAnimationFrame(() => {
-            ref.current?.focus(undefined, { defaultSelection: "rootEnd" });
+        replaceMentionRangeInEditor(
+          mentionMarkdown(option, mentionMode),
+          state,
+          () => replaceMentionFromMarkdown(option, state),
+          () => {
             decorateMentionLinks();
-          });
-        });
+            requestAnimationFrame(() => {
+              moveCaretAfterEditorLink();
+            });
+          },
+        );
         return;
       }
 
@@ -697,7 +891,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
         }
       });
     },
-    [decorateMentionLinks, mentionMode, onChange, replaceMentionFromMarkdown],
+    [decorateMentionLinks, mentionMode, moveCaretAfterEditorLink, onChange, replaceMentionFromMarkdown],
   );
 
   function hasFilePayload(evt: DragEvent<HTMLDivElement>) {
@@ -715,6 +909,42 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
         isDragOver && "ring-1 ring-primary/60 bg-accent/20",
         className,
       )}
+      onPointerDownCapture={(event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const editable = containerRef.current?.querySelector('[contenteditable="true"]');
+        if (!editable) return;
+
+        const anchor = target.closest("a");
+        if (!(anchor instanceof HTMLAnchorElement)) return;
+        if (!editable?.contains(anchor)) return;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onClickCapture={(event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const editable = containerRef.current?.querySelector('[contenteditable="true"]');
+        if (!editable) return;
+
+        const anchor = target.closest("a");
+        if (!(anchor instanceof HTMLAnchorElement)) return;
+        if (!editable.contains(anchor)) return;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onAuxClickCapture={(event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const editable = containerRef.current?.querySelector('[contenteditable="true"]');
+        if (!editable) return;
+
+        const anchor = target.closest("a");
+        if (!(anchor instanceof HTMLAnchorElement)) return;
+        if (!editable.contains(anchor)) return;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
       onKeyDownCapture={(e) => {
         // Cmd/Ctrl+Enter to submit
         if (onSubmit && e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
@@ -749,6 +979,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
               : null;
           if (
             mentionMode === "structured" &&
+            structuredKindPicker &&
             refStructuredSession?.stage === "kind"
           ) {
             const effectiveKinds = refStructuredSession.kindOptions;
@@ -774,7 +1005,6 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
                 return;
               }
             }
-            return;
           }
           // Arrow / Enter / Tab only when there are filtered results.
           // When React state lags (Dialog context), fall back to computing
@@ -785,12 +1015,16 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
                 if (loadMentions) return loadedMentions.slice(0, 8);
                 if (!refState || !mentions) return [];
                 const query =
-                  mentionMode === "structured" && refStructuredSession?.stage === "entity"
-                    ? refStructuredSession.entityQuery
+                  mentionMode === "structured"
+                    ? refStructuredSession?.stage === "entity"
+                      ? refStructuredSession.entityQuery
+                      : refState.query
                     : refState.query;
                 const kindFilter =
-                  mentionMode === "structured" && refStructuredSession?.stage === "entity"
-                    ? refStructuredSession.kind
+                  mentionMode === "structured"
+                    ? refStructuredSession?.stage === "entity"
+                      ? refStructuredSession.kind
+                      : "all"
                     : mentionKindFilter;
                 return filterMentionOptions({
                   mentions,
@@ -848,6 +1082,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
         onChange={(next) => {
           latestValueRef.current = next;
           onChange(next);
+          requestAnimationFrame(() => {
+            decorateMentionLinks();
+          });
         }}
         onBlur={() => onBlur?.()}
         className={cn("paperclip-mdxeditor", !bordered && "paperclip-mdxeditor--borderless")}
@@ -860,10 +1097,15 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
 
       {/* Mention dropdown */}
       {mentionActive &&
-        (showStructuredKindPicker ||
-          (mentionMode === "structured"
-            ? structuredMentionSession?.stage === "entity"
-            : filteredMentions.length > 0)) && (
+        (mentionMode === "structured"
+          ? structuredKindPicker
+            ? Boolean(
+                showStructuredKindPicker ||
+                  showStructuredEntityFallback ||
+                  structuredMentionSession?.stage === "entity",
+              )
+            : Boolean(isLoadingMentions || filteredMentions.length > 0)
+          : Boolean(isLoadingMentions || filteredMentions.length > 0)) && (
         <div
           className="absolute z-50 min-w-[180px] max-h-[200px] overflow-y-auto rounded-md border border-border bg-popover shadow-md"
           style={{ top: mentionState.top + 4, left: mentionState.left }}
@@ -896,6 +1138,10 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
                 No mention kinds match.
               </div>
             )
+          ) : isLoadingMentions && filteredMentions.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-muted-foreground">
+              Loading mentions...
+            </div>
           ) : filteredMentions.length > 0 ? (
             filteredMentions.map((option, i) => (
               <button

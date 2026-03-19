@@ -94,12 +94,15 @@ describe("handleLiveEvent conversation routing", () => {
           companyId: "company-1",
           conversationId: "conversation-1",
           sequence: 1,
+          parentId: null,
+          parentMessage: null,
           authorType: "user",
           authorUserId: "local-board",
           authorAgentId: null,
           runId: null,
           bodyMarkdown: "First",
           refs: [],
+          deletedAt: null,
           createdAt: new Date("2026-03-18T00:00:00.000Z"),
           updatedAt: new Date("2026-03-18T00:00:00.000Z"),
         },
@@ -138,12 +141,25 @@ describe("handleLiveEvent conversation routing", () => {
         message: {
           id: "message-2",
           sequence: 2,
+          parentId: "message-1",
+          parentMessage: {
+            id: "message-1",
+            sequence: 1,
+            authorType: "user",
+            authorUserId: "local-board",
+            authorAgentId: null,
+            bodyMarkdown: "First",
+            deletedAt: null,
+            createdAt: "2026-03-18T00:00:00.000Z",
+          },
           authorType: "agent",
           authorUserId: null,
           authorAgentId: "agent-1",
           runId: "run-1",
           bodyMarkdown: "Second",
+          deletedAt: null,
           createdAt: "2026-03-18T00:00:05.000Z",
+          updatedAt: "2026-03-18T00:00:05.000Z",
           refs: [
             {
               id: "ref-1",
@@ -180,6 +196,15 @@ describe("handleLiveEvent conversation routing", () => {
       "message-1",
       "message-2",
     ]);
+    expect(fullPage?.messages[1]).toMatchObject({
+      id: "message-2",
+      parentId: "message-1",
+      parentMessage: {
+        id: "message-1",
+        sequence: 1,
+      },
+      deletedAt: null,
+    });
     expect(latestOnlyPage?.messages.map((message) => message.id)).toEqual([
       "message-2",
     ]);
@@ -188,6 +213,135 @@ describe("handleLiveEvent conversation routing", () => {
         queryKeys.conversations.detail("conversation-1"),
       )?.latestMessageSequence,
     ).toBe(2);
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: queryKeys.conversations.detail("conversation-1"),
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["conversations", "company-1"],
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: queryKeys.issues.linkedConversations("issue-1"),
+    });
+  });
+
+  it("uses conversation.message_deleted to tombstone cached messages and invalidate affected linked targets", () => {
+    const queryClient = createQueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    const basePage: ConversationMessagePage = {
+      conversationId: "conversation-1",
+      messages: [
+        {
+          id: "message-1",
+          companyId: "company-1",
+          conversationId: "conversation-1",
+          sequence: 1,
+          parentId: null,
+          parentMessage: null,
+          authorType: "user",
+          authorUserId: "local-board",
+          authorAgentId: null,
+          runId: null,
+          bodyMarkdown: "First",
+          refs: [],
+          deletedAt: null,
+          createdAt: new Date("2026-03-18T00:00:00.000Z"),
+          updatedAt: new Date("2026-03-18T00:00:00.000Z"),
+        },
+        {
+          id: "message-2",
+          companyId: "company-1",
+          conversationId: "conversation-1",
+          sequence: 2,
+          parentId: null,
+          parentMessage: null,
+          authorType: "user",
+          authorUserId: "user-2",
+          authorAgentId: null,
+          runId: null,
+          bodyMarkdown: "To be deleted",
+          refs: [
+            {
+              id: "ref-1",
+              companyId: "company-1",
+              messageId: "message-2",
+              refKind: "issue",
+              targetId: "issue-1",
+              displayText: "ENG-1",
+              refOrigin: "message_ref",
+              createdAt: new Date("2026-03-18T00:00:05.000Z"),
+            },
+          ],
+          deletedAt: null,
+          createdAt: new Date("2026-03-18T00:00:05.000Z"),
+          updatedAt: new Date("2026-03-18T00:00:05.000Z"),
+        },
+      ],
+      hasMoreBefore: false,
+      hasMoreAfter: false,
+    };
+
+    queryClient.setQueryData(
+      queryKeys.conversations.messages("conversation-1", { limit: 50 }),
+      basePage,
+    );
+
+    const event: LiveEvent = {
+      id: 3,
+      companyId: "company-1",
+      type: "conversation.message_deleted",
+      createdAt: "2026-03-18T00:00:10.000Z",
+      audience: {
+        scope: "conversationParticipants",
+        conversationId: "conversation-1",
+        participantAgentIds: ["agent-1"],
+      },
+      payload: {
+        conversationId: "conversation-1",
+        latestMessageSequence: 1,
+        latestActivityAt: "2026-03-18T00:00:10.000Z",
+        affectedTargets: [
+          {
+            targetKind: "issue",
+            targetId: "issue-1",
+          },
+        ],
+        message: {
+          id: "message-2",
+          sequence: 2,
+          parentId: null,
+          parentMessage: null,
+          authorType: "user",
+          authorUserId: "user-2",
+          authorAgentId: null,
+          runId: null,
+          bodyMarkdown: "",
+          deletedAt: "2026-03-18T00:00:10.000Z",
+          createdAt: "2026-03-18T00:00:05.000Z",
+          updatedAt: "2026-03-18T00:00:10.000Z",
+          refs: [],
+        },
+      },
+    };
+
+    handleLiveEvent(
+      queryClient,
+      "company-1",
+      event,
+      () => null,
+      createGate(),
+      { userId: "local-board", agentId: null },
+    );
+
+    const page = queryClient.getQueryData<ConversationMessagePage>(
+      queryKeys.conversations.messages("conversation-1", { limit: 50 }),
+    );
+    expect(page?.messages[1]).toMatchObject({
+      id: "message-2",
+      bodyMarkdown: "",
+    });
+    expect(page?.messages[1]?.deletedAt).toEqual(new Date("2026-03-18T00:00:10.000Z"));
 
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: queryKeys.conversations.detail("conversation-1"),

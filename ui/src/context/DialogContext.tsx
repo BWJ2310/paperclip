@@ -24,6 +24,9 @@ interface DialogContextValue {
   newIssueDefaults: NewIssueDefaults;
   openNewIssue: (defaults?: NewIssueDefaults) => void;
   closeNewIssue: () => void;
+  newConversationOpen: boolean;
+  openNewConversation: () => void;
+  closeNewConversation: () => void;
   newProjectOpen: boolean;
   openNewProject: () => void;
   closeNewProject: () => void;
@@ -45,6 +48,7 @@ const DialogContext = createContext<DialogContextValue | null>(null);
 export function DialogProvider({ children }: { children: ReactNode }) {
   const [newIssueOpen, setNewIssueOpen] = useState(false);
   const [newIssueDefaults, setNewIssueDefaults] = useState<NewIssueDefaults>({});
+  const [newConversationOpen, setNewConversationOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [newGoalOpen, setNewGoalOpen] = useState(false);
   const [newGoalDefaults, setNewGoalDefaults] = useState<NewGoalDefaults>({});
@@ -60,6 +64,14 @@ export function DialogProvider({ children }: { children: ReactNode }) {
   const closeNewIssue = useCallback(() => {
     setNewIssueOpen(false);
     setNewIssueDefaults({});
+  }, []);
+
+  const openNewConversation = useCallback(() => {
+    setNewConversationOpen(true);
+  }, []);
+
+  const closeNewConversation = useCallback(() => {
+    setNewConversationOpen(false);
   }, []);
 
   const openNewProject = useCallback(() => {
@@ -105,6 +117,9 @@ export function DialogProvider({ children }: { children: ReactNode }) {
         newIssueDefaults,
         openNewIssue,
         closeNewIssue,
+        newConversationOpen,
+        openNewConversation,
+        closeNewConversation,
         newProjectOpen,
         openNewProject,
         closeNewProject,

@@ -24,6 +24,10 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function readStringAllowEmpty(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
 function readRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -465,6 +469,13 @@ function invalidateConversationQueries(
   });
 }
 
+function invalidateConversationListQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+  companyId: string,
+) {
+  queryClient.invalidateQueries({ queryKey: ["conversations", companyId] });
+}
+
 function readPositiveInteger(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
     return Math.floor(value);
@@ -472,6 +483,17 @@ function readPositiveInteger(value: unknown): number | null {
   if (typeof value === "string") {
     const parsed = Number.parseInt(value.trim(), 10);
     if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return null;
+}
+
+function readNonNegativeInteger(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return Math.floor(value);
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
   }
   return null;
 }
@@ -522,10 +544,11 @@ function normalizeConversationMessage(
 ): ConversationMessage | null {
   const id = readString(payload.id);
   const createdAt = readString(payload.createdAt);
-  const bodyMarkdown = readString(payload.bodyMarkdown);
+  const updatedAt = readString(payload.updatedAt) ?? createdAt;
+  const bodyMarkdown = readStringAllowEmpty(payload.bodyMarkdown);
   const authorType = readString(payload.authorType);
   const sequence = readPositiveInteger(payload.sequence);
-  if (!id || !createdAt || !bodyMarkdown || !authorType || sequence === null) {
+  if (!id || !createdAt || !updatedAt || bodyMarkdown === null || !authorType || sequence === null) {
     return null;
   }
 
@@ -540,17 +563,158 @@ function normalizeConversationMessage(
     companyId,
     conversationId,
     sequence,
+    parentId: readString(payload.parentId),
+    parentMessage: normalizeConversationParentSummary(payload.parentMessage),
     authorType: authorType as ConversationMessage["authorType"],
     authorUserId: readString(payload.authorUserId),
     authorAgentId: readString(payload.authorAgentId),
     runId: readString(payload.runId),
     bodyMarkdown,
     refs,
+    deletedAt: readString(payload.deletedAt) ? new Date(readString(payload.deletedAt)!) : null,
     createdAt: new Date(createdAt),
-    updatedAt: new Date(createdAt),
+    updatedAt: new Date(updatedAt),
   };
 }
 
+function normalizeConversationParentSummary(value: unknown): ConversationMessage["parentMessage"] {
+  const payload = readRecord(value);
+  if (!payload) return null;
+  const id = readString(payload.id);
+  const createdAt = readString(payload.createdAt);
+  const bodyMarkdown = readStringAllowEmpty(payload.bodyMarkdown);
+  const authorType = readString(payload.authorType);
+  const sequence = readPositiveInteger(payload.sequence);
+  if (!id || !createdAt || bodyMarkdown === null || !authorType || sequence === null) {
+    return null;
+  }
+
+  return {
+    id,
+    sequence,
+    authorType: authorType as ConversationMessage["authorType"],
+    authorUserId: readString(payload.authorUserId),
+    authorAgentId: readString(payload.authorAgentId),
+    bodyMarkdown,
+    deletedAt: readString(payload.deletedAt) ? new Date(readString(payload.deletedAt)!) : null,
+    createdAt: new Date(createdAt),
+  };
+}
+
+function invalidateAffectedConversationTargets(
+  queryClient: QueryClient,
+  payload: Record<string, unknown>,
+  fallbackMessage: ConversationMessage,
+) {
+  let invalidated = false;
+  if (Array.isArray(payload.affectedTargets)) {
+    for (const rawTarget of payload.affectedTargets) {
+      const target = readRecord(rawTarget);
+      const targetKind = readString(target?.targetKind);
+      const targetId = readString(target?.targetId);
+      if (!targetKind || !targetId) continue;
+      invalidated = true;
+      invalidateLinkedConversationTargetQueries(queryClient, targetKind, targetId);
+    }
+  }
+
+  if (invalidated) return;
+
+  for (const ref of fallbackMessage.refs) {
+    invalidateLinkedConversationTargetQueries(queryClient, ref.refKind, ref.targetId);
+  }
+}
+
+function handleConversationMessageUpsert(
+  queryClient: QueryClient,
+  companyId: string,
+  payload: Record<string, unknown>,
+) {
+  const conversationId = readString(payload.conversationId);
+  const messagePayload = readRecord(payload.message);
+  if (!conversationId || !messagePayload) return;
+
+  const message = normalizeConversationMessage(companyId, conversationId, messagePayload);
+  if (!message) return;
+
+  for (const [queryKey, current] of queryClient.getQueriesData<ConversationMessagePage>({
+    queryKey: ["conversations", "messages", conversationId],
+  })) {
+    if (!current || !Array.isArray(queryKey)) continue;
+    const params = queryKey[3];
+    if (!isBaseConversationMessagesQueryParams(params)) {
+      queryClient.invalidateQueries({ queryKey });
+      continue;
+    }
+    const limit = readPositiveInteger(readRecord(params)?.limit);
+    queryClient.setQueryData<ConversationMessagePage>(
+      queryKey,
+      upsertConversationMessage(current, message, limit),
+    );
+  }
+
+  queryClient.setQueryData<ConversationDetail>(
+    queryKeys.conversations.detail(conversationId),
+    (current) => {
+      if (!current) return current;
+      const nextLatestMessageSequence =
+        readNonNegativeInteger(payload.latestMessageSequence) ?? current.latestMessageSequence;
+      const nextUpdatedAt =
+        readString(payload.latestActivityAt) ?? current.updatedAt.toISOString();
+      return {
+        ...current,
+        latestMessageSequence: nextLatestMessageSequence,
+        latestMessageAt:
+          !message.deletedAt && nextLatestMessageSequence >= current.latestMessageSequence
+            ? message.createdAt
+            : current.latestMessageAt,
+        updatedAt: new Date(nextUpdatedAt),
+      };
+    },
+  );
+
+  queryClient.invalidateQueries({
+    queryKey: queryKeys.conversations.detail(conversationId),
+  });
+  invalidateConversationListQueries(queryClient, companyId);
+  invalidateAffectedConversationTargets(queryClient, payload, message);
+}
+
+function handleConversationContextChange(
+  queryClient: QueryClient,
+  companyId: string,
+  payload: Record<string, unknown>,
+) {
+  invalidateConversationQueries(queryClient, companyId, payload);
+  invalidateLinkedConversationTargetQueries(
+    queryClient,
+    readString(payload.targetKind),
+    readString(payload.targetId),
+  );
+}
+
+function handleConversationRealtimeEvent(
+  queryClient: QueryClient,
+  companyId: string,
+  event: ConversationLiveEvent,
+) {
+  switch (event.type) {
+    case "conversation.message_posted":
+    case "conversation.message_deleted":
+      handleConversationMessageUpsert(queryClient, companyId, event.payload ?? {});
+      return;
+    case "conversation.context_linked":
+    case "conversation.context_unlinked":
+      handleConversationContextChange(queryClient, companyId, event.payload ?? {});
+      return;
+    case "conversation.created":
+    case "conversation.updated":
+    case "conversation.participant_added":
+    case "conversation.participant_removed":
+      invalidateConversationQueries(queryClient, companyId, event.payload ?? {});
+      return;
+  }
+}
 function upsertConversationMessage(
   current: ConversationMessagePage,
   message: ConversationMessage,
@@ -598,88 +762,6 @@ function invalidateLinkedConversationTargetQueries(
     queryClient.invalidateQueries({
       queryKey: queryKeys.projects.linkedConversations(targetId),
     });
-  }
-}
-
-function handleConversationMessagePosted(
-  queryClient: QueryClient,
-  companyId: string,
-  payload: Record<string, unknown>,
-) {
-  const conversationId = readString(payload.conversationId);
-  const messagePayload = readRecord(payload.message);
-  if (!conversationId || !messagePayload) return;
-
-  const message = normalizeConversationMessage(companyId, conversationId, messagePayload);
-  if (!message) return;
-
-  for (const [queryKey, current] of queryClient.getQueriesData<ConversationMessagePage>({
-    queryKey: ["conversations", "messages", conversationId],
-  })) {
-    if (!current || !Array.isArray(queryKey)) continue;
-    const params = queryKey[3];
-    if (!isBaseConversationMessagesQueryParams(params)) {
-      queryClient.invalidateQueries({ queryKey });
-      continue;
-    }
-    const limit = readPositiveInteger(readRecord(params)?.limit);
-    queryClient.setQueryData<ConversationMessagePage>(
-      queryKey,
-      upsertConversationMessage(current, message, limit),
-    );
-  }
-
-  queryClient.setQueryData<ConversationDetail>(
-    queryKeys.conversations.detail(conversationId),
-    (current) =>
-      current
-        ? {
-            ...current,
-            latestMessageSequence: readPositiveInteger(payload.latestMessageSequence) ?? current.latestMessageSequence,
-            latestMessageAt: message.createdAt,
-            updatedAt: new Date(readString(payload.latestActivityAt) ?? message.createdAt.toISOString()),
-          }
-        : current,
-  );
-
-  invalidateConversationQueries(queryClient, companyId, payload);
-  for (const ref of message.refs) {
-    invalidateLinkedConversationTargetQueries(queryClient, ref.refKind, ref.targetId);
-  }
-}
-
-function handleConversationContextChange(
-  queryClient: QueryClient,
-  companyId: string,
-  payload: Record<string, unknown>,
-) {
-  invalidateConversationQueries(queryClient, companyId, payload);
-  invalidateLinkedConversationTargetQueries(
-    queryClient,
-    readString(payload.targetKind),
-    readString(payload.targetId),
-  );
-}
-
-function handleConversationRealtimeEvent(
-  queryClient: QueryClient,
-  companyId: string,
-  event: ConversationLiveEvent,
-) {
-  switch (event.type) {
-    case "conversation.message_posted":
-      handleConversationMessagePosted(queryClient, companyId, event.payload ?? {});
-      return;
-    case "conversation.context_linked":
-    case "conversation.context_unlinked":
-      handleConversationContextChange(queryClient, companyId, event.payload ?? {});
-      return;
-    case "conversation.created":
-    case "conversation.updated":
-    case "conversation.participant_added":
-    case "conversation.participant_removed":
-      invalidateConversationQueries(queryClient, companyId, event.payload ?? {});
-      return;
   }
 }
 
