@@ -428,10 +428,28 @@ async function loadAppliedMigrations(
   const quotedSchema = quoteIdentifier(migrationTableSchema);
   const qualifiedTable = `${quotedSchema}.${quoteIdentifier(DRIZZLE_MIGRATIONS_TABLE)}`;
   const columnNames = await getMigrationTableColumnNames(sql, migrationTableSchema);
+  const availableMigrationSet = new Set(availableMigrations);
 
   if (columnNames.has("name")) {
+    if (columnNames.has("hash")) {
+      const rows = await sql.unsafe<{ name: string | null; hash: string | null }[]>(
+        `SELECT name, hash FROM ${qualifiedTable} ORDER BY id`,
+      );
+      const hashesToMigrationFiles = await mapHashesToMigrationFiles(availableMigrations);
+
+      return rows
+        .map((row) => {
+          if (row.name && availableMigrationSet.has(row.name)) return row.name;
+          if (!row.hash) return null;
+          return hashesToMigrationFiles.get(row.hash) ?? null;
+        })
+        .filter((name): name is string => Boolean(name));
+    }
+
     const rows = await sql.unsafe<{ name: string }[]>(`SELECT name FROM ${qualifiedTable} ORDER BY id`);
-    return rows.map((row) => row.name).filter((name): name is string => Boolean(name));
+    return rows
+      .map((row) => (availableMigrationSet.has(row.name) ? row.name : null))
+      .filter((name): name is string => Boolean(name));
   }
 
   if (columnNames.has("hash")) {

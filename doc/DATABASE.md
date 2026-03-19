@@ -27,6 +27,16 @@ pnpm db:migrate
 
 When `DATABASE_URL` is unset, this command targets the current embedded PostgreSQL instance for your active Paperclip config/instance.
 
+If migrations fail after a branch rebase because tables or columns already exist, inspect and reconcile migration history first:
+
+```sh
+pnpm db:status
+pnpm db:reconcile
+pnpm db:migrate
+```
+
+`pnpm db:reconcile` is safe for this specific case: it only records a pending migration as applied when the database already matches the full migration file.
+
 This mode is ideal for local development and one-command installs.
 
 Docker note: the Docker quickstart image also uses embedded PostgreSQL by default. Persist `/paperclip` to keep DB state across container restarts (see `doc/DOCKER.md`).

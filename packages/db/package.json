@@ -39,7 +39,9 @@
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "generate": "tsc -p tsconfig.json && drizzle-kit generate",
+    "status": "tsx src/migration-status.ts",
     "migrate": "tsx src/migrate.ts",
+    "reconcile": "tsx src/reconcile-migration-history.ts",
     "seed": "tsx src/seed.ts"
   },
   "dependencies": {
