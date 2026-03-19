@@ -9,6 +9,7 @@ import {
   buildPaperclipEnv,
   parseObject,
   readPaperclipInvokeContext,
+  renderPaperclipConversationReplyNote,
 } from "@paperclipai/adapter-utils/server-utils";
 import crypto, { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
@@ -32,6 +33,7 @@ type WakePayload = {
   conversationResponseMode: string | null;
   conversationTargetKind: string | null;
   conversationTargetId: string | null;
+  conversationReplyContextMarkdown: string | null;
   linkedConversationMemoryMarkdown: string | null;
   linkedConversationRefs: Array<Record<string, unknown>>;
 };
@@ -352,6 +354,8 @@ function buildWakePayload(ctx: AdapterExecutionContext): WakePayload {
     conversationResponseMode: paperclipContext.conversationResponseMode,
     conversationTargetKind: paperclipContext.conversationTargetKind,
     conversationTargetId: paperclipContext.conversationTargetId,
+    conversationReplyContextMarkdown:
+      paperclipContext.conversationReplyContextMarkdown,
     linkedConversationMemoryMarkdown:
       paperclipContext.linkedConversationMemoryMarkdown,
     linkedConversationRefs: paperclipContext.linkedConversationRefs,
@@ -394,6 +398,8 @@ function buildPaperclipEnvForWake(
       conversationResponseMode: wakePayload.conversationResponseMode,
       conversationTargetKind: wakePayload.conversationTargetKind,
       conversationTargetId: wakePayload.conversationTargetId,
+      conversationReplyContextMarkdown:
+        wakePayload.conversationReplyContextMarkdown,
       linkedConversationMemoryMarkdown:
         wakePayload.linkedConversationMemoryMarkdown,
       linkedConversationRefs: wakePayload.linkedConversationRefs,
@@ -426,6 +432,7 @@ function buildWakeText(
     "PAPERCLIP_CONVERSATION_RESPONSE_MODE",
     "PAPERCLIP_CONVERSATION_TARGET_KIND",
     "PAPERCLIP_CONVERSATION_TARGET_ID",
+    "PAPERCLIP_CONVERSATION_REPLY_CONTEXT_MARKDOWN",
     "PAPERCLIP_WAKE_REASON",
     "PAPERCLIP_WAKE_COMMENT_ID",
     "PAPERCLIP_APPROVAL_ID",
@@ -448,6 +455,9 @@ function buildWakeText(
   const apiBaseHint =
     paperclipEnv.PAPERCLIP_API_URL ?? "<set PAPERCLIP_API_URL>";
   const taskScopeKind = payload.taskKey?.split(":")[0] ?? null;
+  const conversationReplyInstructionNote = renderPaperclipConversationReplyNote(
+    payload
+  ).trim();
   const conversationWorkflowLines =
     taskScopeKind === "conversation"
       ? [
@@ -459,7 +469,8 @@ function buildWakeText(
           `   - Current promoted target context: kind=${conversationTargetKindHint} id=${conversationTargetIdHint}`,
           "   - Do lightweight direct work when appropriate.",
           "   - Do NOT checkout issues or mutate issue status unless PAPERCLIP_TASK_KEY itself starts with issue:.",
-          '   - Reply with POST /api/conversations/{conversationId}/messages using {"bodyMarkdown":"...","activeContextTargets":[]}.',
+          '   - Reply with POST /api/conversations/{conversationId}/messages using {"bodyMarkdown":"...","activeContextTargets":[]}; include parentId when replying to a specific triggering message.',
+          '   - Mention other agents with structured markdown like [@Agent Name](agent://AGENT_ID).',
           "   - If you create a new issue, use POST /api/companies/{companyId}/issues and include a structured issue mention in the follow-up conversation reply.",
         ]
       : [
@@ -515,6 +526,16 @@ function buildWakeText(
     "- GET /api/conversations/{conversationId}",
     "- GET /api/conversations/{conversationId}/messages",
     "- POST /api/conversations/{conversationId}/messages",
+    ...(payload.conversationReplyContextMarkdown
+      ? [
+          "",
+          "Conversation reply context:",
+          payload.conversationReplyContextMarkdown,
+        ]
+      : []),
+    ...(conversationReplyInstructionNote
+      ? ["", conversationReplyInstructionNote]
+      : []),
     "",
     "Complete the workflow in this run.",
   ];
@@ -562,6 +583,8 @@ function buildStandardPaperclipPayload(
     conversationResponseMode: wakePayload.conversationResponseMode,
     conversationTargetKind: wakePayload.conversationTargetKind,
     conversationTargetId: wakePayload.conversationTargetId,
+    conversationReplyContextMarkdown:
+      wakePayload.conversationReplyContextMarkdown,
     linkedConversationMemoryMarkdown:
       wakePayload.linkedConversationMemoryMarkdown,
     linkedConversationRefs: wakePayload.linkedConversationRefs,

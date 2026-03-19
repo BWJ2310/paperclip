@@ -7,6 +7,7 @@ import {
   createConversationMessageSchema,
   createConversationSchema,
   createConversationTargetLinkSchema,
+  deleteConversationMessageParamsSchema,
   deleteConversationTargetLinkQuerySchema,
   listConversationMessagesQuerySchema,
   listConversationsQuerySchema,
@@ -156,6 +157,22 @@ export function conversationRoutes(db: Db) {
     assertCompanyAccess(req, companyId);
     const message = await svc.createMessage(conversationId, toConversationActor(req), req.body);
     res.status(201).json(message);
+  });
+
+  router.delete("/conversations/:conversationId/messages/:messageId", async (req, res) => {
+    const params = deleteConversationMessageParamsSchema.parse(req.params);
+    const companyId = await loadConversationCompanyId(params.conversationId);
+    if (!companyId) {
+      res.status(404).json({ error: "Conversation not found" });
+      return;
+    }
+    assertCompanyAccess(req, companyId);
+    const result = await svc.deleteMessage(
+      params.conversationId,
+      toConversationActor(req),
+      params.messageId,
+    );
+    res.json(result);
   });
 
   router.post("/conversations/:conversationId/read", validate(markConversationReadSchema), async (req, res) => {

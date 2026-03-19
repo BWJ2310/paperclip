@@ -38,10 +38,20 @@ export interface ConversationActiveContextTarget {
 export interface CreateConversationMessage {
   bodyMarkdown: string;
   activeContextTargets: ConversationActiveContextTarget[];
+  parentId?: string | null;
 }
 
 export interface MarkConversationRead {
   lastReadSequence: number;
+}
+
+export interface DeleteConversationMessageParams {
+  conversationId: string;
+  messageId: string;
+}
+
+export interface DeleteConversationMessageResult {
+  messageId: string;
 }
 
 export interface CreateConversationTargetLink {
@@ -70,10 +80,13 @@ export interface ConversationParticipant {
   companyId: string;
   conversationId: string;
   agentId: string;
+  agentIcon: string | null;
   agentName: string | null;
   agentRole: string | null;
   agentTitle: string | null;
   agentStatus: string | null;
+  agentModel: string | null;
+  agentThinkingEffort: string | null;
   joinedAt: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -101,17 +114,31 @@ export interface ConversationMessageRef {
   createdAt: Date;
 }
 
+export interface ConversationMessageParentSummary {
+  id: string;
+  sequence: number;
+  authorType: ConversationAuthorType;
+  authorUserId: string | null;
+  authorAgentId: string | null;
+  bodyMarkdown: string;
+  deletedAt: Date | null;
+  createdAt: Date;
+}
+
 export interface ConversationMessage {
   id: string;
   companyId: string;
   conversationId: string;
   sequence: number;
+  parentId: string | null;
+  parentMessage: ConversationMessageParentSummary | null;
   authorType: ConversationAuthorType;
   authorUserId: string | null;
   authorAgentId: string | null;
   runId: string | null;
   bodyMarkdown: string;
   refs: ConversationMessageRef[];
+  deletedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

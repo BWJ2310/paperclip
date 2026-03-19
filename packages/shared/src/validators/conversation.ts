@@ -49,6 +49,7 @@ export const conversationActiveContextTargetSchema = z.object({
 
 export const createConversationMessageSchema = z.object({
   bodyMarkdown: z.string().min(1),
+  parentId: z.string().uuid().optional().nullable(),
   activeContextTargets: z.array(conversationActiveContextTargetSchema).superRefine((targets, ctx) => {
     const seen = new Set<string>();
     for (const [index, target] of targets.entries()) {
@@ -111,6 +112,11 @@ export const listConversationMessagesQuerySchema = z.object({
 
 export const markConversationReadSchema = z.object({
   lastReadSequence: z.coerce.number().int().nonnegative(),
+}).strict();
+
+export const deleteConversationMessageParamsSchema = z.object({
+  conversationId: z.string().uuid(),
+  messageId: z.string().uuid(),
 }).strict();
 
 export const createConversationTargetLinkSchema = z.object({

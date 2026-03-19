@@ -1,6 +1,8 @@
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
 import {
+  agentWakeupRequests,
   agentTargetConversationMemory,
   agents,
   companies,
@@ -10,6 +12,7 @@ import {
   conversationTargetLinks,
   conversations,
   goals,
+  heartbeatRuns,
   issues,
   projects,
 } from "@paperclipai/db";
@@ -511,5 +514,523 @@ describe("conversationRoutes", () => {
     expect(issueMemoryRows).toHaveLength(1);
     expect(issueMemoryRows[0]?.agentId).toBe(fixture.agentA.id);
     expect(issueMemoryRows[0]?.lastSourceMessageSequence).toBe(6);
+  });
+
+  it("wakes all participants for board-authored messages without agent mentions", async () => {
+    const fixture = await seedFixture();
+
+    const res = await request(fixture.app)
+      .post(`/api/conversations/${fixture.conversation.id}/messages`)
+      .send({
+        bodyMarkdown: "Please review and respond with your latest thinking.",
+        activeContextTargets: [],
+      });
+
+    expect(res.status).toBe(201);
+
+    const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
+      (row) =>
+        row.conversationId === fixture.conversation.id &&
+        row.conversationMessageSequence === 6,
+    );
+
+    expect(wakeups.map((row) => row.agentId).sort()).toEqual(
+      [fixture.agentA.id, fixture.agentB.id].sort(),
+    );
+    expect(wakeups.every((row) => row.responseMode === "optional")).toBe(true);
+
+    const runs = (await testDb.db.select().from(heartbeatRuns)).filter((row) => {
+      const context = (row.contextSnapshot ?? {}) as Record<string, unknown>;
+      return (
+        context.conversationId === fixture.conversation.id &&
+        context.conversationMessageSequence === 6
+      );
+    });
+
+    expect(runs).toHaveLength(2);
+    expect(
+      runs.every((row) => {
+        const context = (row.contextSnapshot ?? {}) as Record<string, unknown>;
+        return context.wakePriority === "high";
+      }),
+    ).toBe(true);
+  });
+
+  it("does not wake other agents for agent-authored messages without agent mentions", async () => {
+    const fixture = await seedFixture();
+    setMockActor({
+      type: "agent",
+      agentId: fixture.agentA.id,
+      companyId: fixture.company.id,
+    });
+
+    const res = await request(fixture.app)
+      .post(`/api/conversations/${fixture.conversation.id}/messages`)
+      .send({
+        bodyMarkdown: "Status update: I finished my pass and added notes above.",
+        activeContextTargets: [],
+      });
+
+    expect(res.status).toBe(201);
+
+    const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
+      (row) =>
+        row.conversationId === fixture.conversation.id &&
+        row.conversationMessageSequence === 6,
+    );
+
+    expect(wakeups).toHaveLength(0);
+  });
+
+  it("wakes only the explicitly mentioned agent for agent-authored handoffs", async () => {
+    const fixture = await seedFixture();
+    setMockActor({
+      type: "agent",
+      agentId: fixture.agentA.id,
+      companyId: fixture.company.id,
+    });
+
+    const res = await request(fixture.app)
+      .post(`/api/conversations/${fixture.conversation.id}/messages`)
+      .send({
+        bodyMarkdown: `Looping in [@${fixture.agentB.name}](${buildStructuredMentionHref("agent", fixture.agentB.id)}) for the next step.`,
+        activeContextTargets: [],
+      });
+
+    expect(res.status).toBe(201);
+
+    const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
+      (row) =>
+        row.conversationId === fixture.conversation.id &&
+        row.conversationMessageSequence === 6,
+    );
+
+    expect(wakeups).toHaveLength(1);
+    expect(wakeups[0]?.agentId).toBe(fixture.agentB.id);
+    expect(wakeups[0]?.responseMode).toBe("required");
+  });
+
+  it("wakes only the replied-to agent when a board reply targets an agent-authored message", async () => {
+    const fixture = await seedFixture();
+    const [agentMessage] = await testDb.db
+      .insert(conversationMessages)
+      .values({
+        companyId: fixture.company.id,
+        conversationId: fixture.conversation.id,
+        sequence: 6,
+        authorType: "agent",
+        authorAgentId: fixture.agentA.id,
+        bodyMarkdown: "Please reply with any follow-up questions here.",
+        createdAt: new Date("2026-03-18T12:06:00.000Z"),
+        updatedAt: new Date("2026-03-18T12:06:00.000Z"),
+      })
+      .returning();
+
+    await testDb.db
+      .update(conversations)
+      .set({
+        lastMessageSequence: 6,
+        updatedAt: new Date("2026-03-18T12:06:00.000Z"),
+      })
+      .where(eq(conversations.id, fixture.conversation.id));
+
+    const res = await request(fixture.app)
+      .post(`/api/conversations/${fixture.conversation.id}/messages`)
+      .send({
+        bodyMarkdown: "Please expand on the proposed fix.",
+        parentId: agentMessage.id,
+        activeContextTargets: [],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.sequence).toBe(7);
+    expect(res.body.parentId).toBe(agentMessage.id);
+    expect(res.body.parentMessage).toMatchObject({
+      id: agentMessage.id,
+      sequence: 6,
+      authorType: "agent",
+      authorAgentId: fixture.agentA.id,
+      bodyMarkdown: "Please reply with any follow-up questions here.",
+    });
+
+    const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
+      (row) =>
+        row.conversationId === fixture.conversation.id &&
+        row.conversationMessageSequence === 7,
+    );
+
+    expect(wakeups).toHaveLength(1);
+    expect(wakeups[0]?.agentId).toBe(fixture.agentA.id);
+    expect(wakeups[0]?.responseMode).toBe("required");
+  });
+
+  it("threads an agent reply under the triggering mentioned message when parentId is omitted", async () => {
+    const fixture = await seedFixture();
+    const [mentionMessage] = await testDb.db
+      .insert(conversationMessages)
+      .values({
+        companyId: fixture.company.id,
+        conversationId: fixture.conversation.id,
+        sequence: 6,
+        authorType: "user",
+        authorUserId: "board-user",
+        bodyMarkdown: `Please take this next pass [@${fixture.agentB.name}](${buildStructuredMentionHref("agent", fixture.agentB.id)}).`,
+        createdAt: new Date("2026-03-18T12:06:00.000Z"),
+        updatedAt: new Date("2026-03-18T12:06:00.000Z"),
+      })
+      .returning();
+
+    await testDb.db
+      .update(conversations)
+      .set({
+        lastMessageSequence: 6,
+        updatedAt: new Date("2026-03-18T12:06:00.000Z"),
+      })
+      .where(eq(conversations.id, fixture.conversation.id));
+
+    const [run] = await testDb.db
+      .insert(heartbeatRuns)
+      .values({
+        companyId: fixture.company.id,
+        agentId: fixture.agentB.id,
+        invocationSource: "wakeup",
+        status: "running",
+        startedAt: new Date("2026-03-18T12:06:10.000Z"),
+        contextSnapshot: {
+          conversationId: fixture.conversation.id,
+          conversationMessageId: mentionMessage.id,
+          conversationMessageSequence: 6,
+          conversationResponseMode: "required",
+        },
+      })
+      .returning();
+
+    setMockActor({
+      type: "agent",
+      agentId: fixture.agentB.id,
+      companyId: fixture.company.id,
+      runId: run.id,
+    });
+
+    const res = await request(fixture.app)
+      .post(`/api/conversations/${fixture.conversation.id}/messages`)
+      .send({
+        bodyMarkdown: "I picked it up and I'm posting my follow-up in thread.",
+        activeContextTargets: [],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.sequence).toBe(7);
+    expect(res.body.runId).toBe(run.id);
+    expect(res.body.parentId).toBe(mentionMessage.id);
+    expect(res.body.parentMessage).toMatchObject({
+      id: mentionMessage.id,
+      sequence: 6,
+      authorType: "user",
+      authorUserId: "board-user",
+      bodyMarkdown: mentionMessage.bodyMarkdown,
+    });
+  });
+
+  it("does not infer reply threading when the triggering handoff message was already a reply", async () => {
+    const fixture = await seedFixture();
+    const [rootMessage] = await testDb.db
+      .insert(conversationMessages)
+      .values({
+        companyId: fixture.company.id,
+        conversationId: fixture.conversation.id,
+        sequence: 6,
+        authorType: "user",
+        authorUserId: "board-user",
+        bodyMarkdown: "Initial thread starter.",
+        createdAt: new Date("2026-03-18T12:06:00.000Z"),
+        updatedAt: new Date("2026-03-18T12:06:00.000Z"),
+      })
+      .returning();
+
+    const [replyHandoffMessage] = await testDb.db
+      .insert(conversationMessages)
+      .values({
+        companyId: fixture.company.id,
+        conversationId: fixture.conversation.id,
+        sequence: 7,
+        parentId: rootMessage.id,
+        authorType: "agent",
+        authorAgentId: fixture.agentA.id,
+        bodyMarkdown: `Please take the next pass [@${fixture.agentB.name}](${buildStructuredMentionHref("agent", fixture.agentB.id)}).`,
+        createdAt: new Date("2026-03-18T12:07:00.000Z"),
+        updatedAt: new Date("2026-03-18T12:07:00.000Z"),
+      })
+      .returning();
+
+    await testDb.db
+      .update(conversations)
+      .set({
+        lastMessageSequence: 7,
+        updatedAt: new Date("2026-03-18T12:07:00.000Z"),
+      })
+      .where(eq(conversations.id, fixture.conversation.id));
+
+    const [run] = await testDb.db
+      .insert(heartbeatRuns)
+      .values({
+        companyId: fixture.company.id,
+        agentId: fixture.agentB.id,
+        invocationSource: "wakeup",
+        status: "running",
+        startedAt: new Date("2026-03-18T12:07:10.000Z"),
+        contextSnapshot: {
+          conversationId: fixture.conversation.id,
+          conversationMessageId: replyHandoffMessage.id,
+          conversationMessageSequence: 7,
+          conversationResponseMode: "required",
+          conversationReplyToMessageId: rootMessage.id,
+        },
+      })
+      .returning();
+
+    setMockActor({
+      type: "agent",
+      agentId: fixture.agentB.id,
+      companyId: fixture.company.id,
+      runId: run.id,
+    });
+
+    const res = await request(fixture.app)
+      .post(`/api/conversations/${fixture.conversation.id}/messages`)
+      .send({
+        bodyMarkdown: "Handled. Posting this as a normal top-level update.",
+        activeContextTargets: [],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.sequence).toBe(8);
+    expect(res.body.runId).toBe(run.id);
+    expect(res.body.parentId).toBeNull();
+    expect(res.body.parentMessage).toBeNull();
+
+    const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
+      (row) =>
+        row.conversationId === fixture.conversation.id &&
+        row.conversationMessageSequence === 8,
+    );
+
+    expect(wakeups).toHaveLength(0);
+  });
+
+  it("allows an agent to opt out of inferred threading by sending parentId null", async () => {
+    const fixture = await seedFixture();
+    const [mentionMessage] = await testDb.db
+      .insert(conversationMessages)
+      .values({
+        companyId: fixture.company.id,
+        conversationId: fixture.conversation.id,
+        sequence: 6,
+        authorType: "user",
+        authorUserId: "board-user",
+        bodyMarkdown: `Please take this next pass [@${fixture.agentB.name}](${buildStructuredMentionHref("agent", fixture.agentB.id)}).`,
+        createdAt: new Date("2026-03-18T12:06:00.000Z"),
+        updatedAt: new Date("2026-03-18T12:06:00.000Z"),
+      })
+      .returning();
+
+    await testDb.db
+      .update(conversations)
+      .set({
+        lastMessageSequence: 6,
+        updatedAt: new Date("2026-03-18T12:06:00.000Z"),
+      })
+      .where(eq(conversations.id, fixture.conversation.id));
+
+    const [run] = await testDb.db
+      .insert(heartbeatRuns)
+      .values({
+        companyId: fixture.company.id,
+        agentId: fixture.agentB.id,
+        invocationSource: "wakeup",
+        status: "running",
+        startedAt: new Date("2026-03-18T12:06:10.000Z"),
+        contextSnapshot: {
+          conversationId: fixture.conversation.id,
+          conversationMessageId: mentionMessage.id,
+          conversationMessageSequence: 6,
+          conversationResponseMode: "required",
+        },
+      })
+      .returning();
+
+    setMockActor({
+      type: "agent",
+      agentId: fixture.agentB.id,
+      companyId: fixture.company.id,
+      runId: run.id,
+    });
+
+    const res = await request(fixture.app)
+      .post(`/api/conversations/${fixture.conversation.id}/messages`)
+      .send({
+        bodyMarkdown: "I'm intentionally sending this as a top-level update.",
+        parentId: null,
+        activeContextTargets: [],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.sequence).toBe(7);
+    expect(res.body.parentId).toBeNull();
+    expect(res.body.parentMessage).toBeNull();
+  });
+
+  it("tombstones deleted messages and recomputes linked target state from remaining messages", async () => {
+    const fixture = await seedFixture();
+
+    const createRes = await request(fixture.app)
+      .post(`/api/conversations/${fixture.conversation.id}/messages`)
+      .send({
+        bodyMarkdown: "Fresh issue update for the linked thread.",
+        activeContextTargets: [
+          {
+            targetKind: "issue",
+            targetId: fixture.issue.id,
+            displayText: fixture.issue.identifier ?? fixture.issue.title,
+          },
+        ],
+      });
+
+    expect(createRes.status).toBe(201);
+
+    const deleteRes = await request(fixture.app)
+      .delete(`/api/conversations/${fixture.conversation.id}/messages/${createRes.body.id}`);
+
+    expect(deleteRes.status).toBe(200);
+    expect(deleteRes.body).toEqual({ messageId: createRes.body.id });
+
+    const deletedRow = await testDb.db
+      .select()
+      .from(conversationMessages)
+      .where(eq(conversationMessages.id, createRes.body.id))
+      .then((rows) => rows[0] ?? null);
+    expect(deletedRow?.bodyMarkdown).toBe("");
+    expect(deletedRow?.deletedAt).toBeTruthy();
+
+    const remainingRefs = (await testDb.db.select().from(conversationMessageRefs)).filter(
+      (row) => row.messageId === createRes.body.id,
+    );
+    expect(remainingRefs).toHaveLength(0);
+
+    const issueLinks = (await testDb.db.select().from(conversationTargetLinks)).filter(
+      (row) =>
+        row.conversationId === fixture.conversation.id &&
+        row.targetKind === "issue" &&
+        row.targetId === fixture.issue.id,
+    );
+    expect(
+      issueLinks.map((row) => ({
+        agentId: row.agentId,
+        latestLinkedMessageSequence: row.latestLinkedMessageSequence,
+      })),
+    ).toEqual(
+      expect.arrayContaining([
+        {
+          agentId: fixture.agentA.id,
+          latestLinkedMessageSequence: 4,
+        },
+        {
+          agentId: fixture.agentB.id,
+          latestLinkedMessageSequence: 4,
+        },
+      ]),
+    );
+
+    const detailRes = await request(fixture.app).get(`/api/conversations/${fixture.conversation.id}`);
+    expect(detailRes.status).toBe(200);
+    expect(detailRes.body.latestMessageSequence).toBe(5);
+
+    const messagesRes = await request(fixture.app)
+      .get(`/api/conversations/${fixture.conversation.id}/messages`)
+      .query({ limit: 10 });
+    expect(messagesRes.status).toBe(200);
+
+    const tombstonedMessage = messagesRes.body.messages.find(
+      (message: { id: string }) => message.id === createRes.body.id,
+    );
+    expect(tombstonedMessage).toMatchObject({
+      id: createRes.body.id,
+      sequence: 6,
+      bodyMarkdown: "",
+    });
+    expect(tombstonedMessage?.deletedAt).toBeTruthy();
+  });
+
+  it("drops unread counts when another human's unread message is tombstone-deleted", async () => {
+    const fixture = await seedFixture();
+
+    setMockActor({
+      type: "board",
+      userId: "board-user-2",
+      companyIds: [fixture.company.id],
+      source: "session",
+      isInstanceAdmin: false,
+    });
+
+    const markReadRes = await request(fixture.app)
+      .post(`/api/conversations/${fixture.conversation.id}/read`)
+      .send({ lastReadSequence: 5 });
+    expect(markReadRes.status).toBe(200);
+
+    setMockActor({
+      type: "board",
+      userId: "board-user",
+      companyIds: [fixture.company.id],
+      source: "session",
+      isInstanceAdmin: false,
+    });
+
+    const createRes = await request(fixture.app)
+      .post(`/api/conversations/${fixture.conversation.id}/messages`)
+      .send({
+        bodyMarkdown: "Human follow-up that will be deleted.",
+        activeContextTargets: [],
+      });
+    expect(createRes.status).toBe(201);
+
+    setMockActor({
+      type: "board",
+      userId: "board-user-2",
+      companyIds: [fixture.company.id],
+      source: "session",
+      isInstanceAdmin: false,
+    });
+
+    const unreadBeforeDelete = await request(fixture.app)
+      .get(`/api/companies/${fixture.company.id}/conversations`);
+    expect(unreadBeforeDelete.status).toBe(200);
+    expect(unreadBeforeDelete.body[0]?.unreadCount).toBe(1);
+    expect(unreadBeforeDelete.body[0]?.latestMessageSequence).toBe(6);
+
+    setMockActor({
+      type: "board",
+      userId: "board-user",
+      companyIds: [fixture.company.id],
+      source: "session",
+      isInstanceAdmin: false,
+    });
+
+    const deleteRes = await request(fixture.app)
+      .delete(`/api/conversations/${fixture.conversation.id}/messages/${createRes.body.id}`);
+    expect(deleteRes.status).toBe(200);
+
+    setMockActor({
+      type: "board",
+      userId: "board-user-2",
+      companyIds: [fixture.company.id],
+      source: "session",
+      isInstanceAdmin: false,
+    });
+
+    const unreadAfterDelete = await request(fixture.app)
+      .get(`/api/companies/${fixture.company.id}/conversations`);
+    expect(unreadAfterDelete.status).toBe(200);
+    expect(unreadAfterDelete.body[0]?.unreadCount).toBe(0);
+    expect(unreadAfterDelete.body[0]?.latestMessageSequence).toBe(5);
   });
 });

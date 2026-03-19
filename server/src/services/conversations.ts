@@ -23,12 +23,14 @@ import {
   type ConversationDetail,
   type ConversationMessage,
   type ConversationMessagePage,
+  type ConversationMessageParentSummary,
   type ConversationMessageRef,
   type ConversationParticipant,
   type ConversationReadState,
   type ConversationSummary,
   type ConversationTargetLink,
   type ConversationTargetKind,
+  type DeleteConversationMessageResult,
   type ListConversationMessagesQuery,
 } from "@paperclipai/shared";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
@@ -68,6 +70,12 @@ function toViewer(actor: ConversationActorContext): ConversationViewer {
 
 function readNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function normalizeMessageBody(value: string) {
@@ -122,21 +130,176 @@ function singleTargetFromRefs(
   };
 }
 
+function conversationMessageActorLabel(input: {
+  authorType: "user" | "agent" | "system";
+  authorUserId: string | null;
+  authorAgentId: string | null;
+}) {
+  if (input.authorType === "user") return "Board";
+  if (input.authorType === "agent") {
+    return input.authorAgentId ? `Agent ${input.authorAgentId}` : "Agent";
+  }
+  return "System";
+}
+
+function toConversationMessageParentSummary(
+  row: Pick<
+    typeof conversationMessages.$inferSelect,
+    | "id"
+    | "sequence"
+    | "authorType"
+    | "authorUserId"
+    | "authorAgentId"
+    | "bodyMarkdown"
+    | "deletedAt"
+    | "createdAt"
+  >,
+): ConversationMessageParentSummary {
+  return {
+    id: row.id,
+    sequence: row.sequence,
+    authorType: row.authorType as ConversationMessageParentSummary["authorType"],
+    authorUserId: row.authorUserId,
+    authorAgentId: row.authorAgentId,
+    bodyMarkdown: row.bodyMarkdown,
+    deletedAt: row.deletedAt,
+    createdAt: row.createdAt,
+  };
+}
+
+function buildConversationReplyContextMarkdown(input: {
+  parentMessage: ConversationMessageParentSummary;
+  message: Pick<
+    ConversationMessage,
+    | "id"
+    | "sequence"
+    | "authorType"
+    | "authorUserId"
+    | "authorAgentId"
+    | "bodyMarkdown"
+    | "createdAt"
+  >;
+}) {
+  const lines = [
+    "## Conversation reply context",
+    "### Replied-to message",
+    `- Sequence: #${input.parentMessage.sequence}`,
+    `- Author: ${conversationMessageActorLabel({
+      authorType: input.parentMessage.authorType,
+      authorUserId: input.parentMessage.authorUserId,
+      authorAgentId: input.parentMessage.authorAgentId,
+    })}`,
+    `- Created at: ${input.parentMessage.createdAt.toISOString()}`,
+    "",
+    input.parentMessage.deletedAt
+      ? "_This message was deleted._"
+      : input.parentMessage.bodyMarkdown,
+    "",
+    "### New message that triggered this wake",
+    `- Sequence: #${input.message.sequence}`,
+    `- Author: ${conversationMessageActorLabel({
+      authorType: input.message.authorType,
+      authorUserId: input.message.authorUserId,
+      authorAgentId: input.message.authorAgentId,
+    })}`,
+    `- Created at: ${input.message.createdAt.toISOString()}`,
+    "",
+    input.message.bodyMarkdown,
+  ];
+
+  return lines.join("\n");
+}
+
+function conversationTargetLinkActorFromMessage(input: {
+  authorType: "user" | "agent" | "system";
+  authorUserId: string | null;
+  authorAgentId: string | null;
+}) {
+  if (input.authorType === "agent" && input.authorAgentId) {
+    return {
+      createdByActorType: "agent" as const,
+      createdByActorId: input.authorAgentId,
+    };
+  }
+  if (input.authorType === "user" && input.authorUserId) {
+    return {
+      createdByActorType: "user" as const,
+      createdByActorId: input.authorUserId,
+    };
+  }
+  return {
+    createdByActorType: "system" as const,
+    createdByActorId: "conversation_system",
+  };
+}
+
+function resolveConversationWakeRouting(
+  actor: ConversationActorContext,
+  participantAgentIds: string[],
+  mentionedAgentIds: string[],
+  replyTargetAgentIds: string[],
+): {
+  wakeupAgentIds: string[];
+  responseMode: "optional" | "required" | null;
+  priority: "normal" | "high" | null;
+} {
+  const dedupedParticipantAgentIds = [...new Set(participantAgentIds)];
+  const dedupedMentionedAgentIds = [...new Set(mentionedAgentIds)];
+  const dedupedReplyTargetAgentIds = [...new Set(replyTargetAgentIds)];
+  const routedMentionedAgentIds =
+    actor.viewerType === "agent"
+      ? dedupedMentionedAgentIds.filter((agentId) => agentId !== actor.agentId)
+      : dedupedMentionedAgentIds;
+  const routedReplyTargetAgentIds =
+    actor.viewerType === "agent"
+      ? dedupedReplyTargetAgentIds.filter((agentId) => agentId !== actor.agentId)
+      : dedupedReplyTargetAgentIds;
+  const routedAgentIds = [
+    ...new Set([...routedMentionedAgentIds, ...routedReplyTargetAgentIds]),
+  ];
+
+  if (routedAgentIds.length > 0) {
+    return {
+      wakeupAgentIds: routedAgentIds,
+      responseMode: "required",
+      priority: actor.viewerType === "board" ? "high" : "normal",
+    };
+  }
+
+  if (actor.viewerType === "board" && dedupedParticipantAgentIds.length > 0) {
+    return {
+      wakeupAgentIds: dedupedParticipantAgentIds,
+      responseMode: "optional",
+      priority: "high",
+    };
+  }
+
+  return {
+    wakeupAgentIds: [],
+    responseMode: null,
+    priority: null,
+  };
+}
+
 function hydrateMessages(
   rows: Array<typeof conversationMessages.$inferSelect>,
   refsByMessageId: Map<string, ConversationMessageRef[]>,
+  parentMessagesById: Map<string, ConversationMessageParentSummary>,
 ): ConversationMessage[] {
   return rows.map((row) => ({
     id: row.id,
     companyId: row.companyId,
     conversationId: row.conversationId,
     sequence: row.sequence,
+    parentId: row.parentId,
+    parentMessage: row.parentId ? parentMessagesById.get(row.parentId) ?? null : null,
     authorType: row.authorType as ConversationMessage["authorType"],
     authorUserId: row.authorUserId,
     authorAgentId: row.authorAgentId,
     runId: row.runId,
     bodyMarkdown: row.bodyMarkdown,
     refs: refsByMessageId.get(row.id) ?? [],
+    deletedAt: row.deletedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }));
@@ -275,17 +438,33 @@ export function conversationService(db: Db) {
     return targetRefs;
   }
 
-  async function loadLatestMessageAt(conversationIds: string[]) {
-    if (conversationIds.length === 0) return new Map<string, Date | null>();
+  async function loadLatestVisibleMessageStats(conversationIds: string[]) {
+    if (conversationIds.length === 0) {
+      return new Map<string, { latestMessageAt: Date | null; latestMessageSequence: number }>();
+    }
     const rows = await db
       .select({
         conversationId: conversationMessages.conversationId,
         latestMessageAt: max(conversationMessages.createdAt),
+        latestMessageSequence: max(conversationMessages.sequence),
       })
       .from(conversationMessages)
-      .where(inArray(conversationMessages.conversationId, conversationIds))
+      .where(
+        and(
+          inArray(conversationMessages.conversationId, conversationIds),
+          sql`${conversationMessages.deletedAt} is null`,
+        ),
+      )
       .groupBy(conversationMessages.conversationId);
-    return new Map(rows.map((row) => [row.conversationId, row.latestMessageAt]));
+    return new Map(
+      rows.map((row) => [
+        row.conversationId,
+        {
+          latestMessageAt: row.latestMessageAt,
+          latestMessageSequence: row.latestMessageSequence ?? 0,
+        },
+      ]),
+    );
   }
 
   async function loadViewerReadStates(
@@ -328,30 +507,69 @@ export function conversationService(db: Db) {
     );
   }
 
+  async function loadViewerUnreadCounts(
+    companyId: string,
+    conversationIds: string[],
+    actor: ConversationActorContext,
+  ) {
+    if (conversationIds.length === 0) return new Map<string, number>();
+
+    const actorJoinCondition =
+      actor.viewerType === "agent"
+        ? eq(conversationReadStates.agentId, actor.agentId)
+        : eq(conversationReadStates.userId, actor.actorId);
+
+    const rows = await db
+      .select({
+        conversationId: conversationMessages.conversationId,
+        unreadCount: sql<number>`count(*)`,
+      })
+      .from(conversationMessages)
+      .leftJoin(
+        conversationReadStates,
+        and(
+          eq(conversationReadStates.companyId, companyId),
+          eq(conversationReadStates.conversationId, conversationMessages.conversationId),
+          actorJoinCondition,
+        ),
+      )
+      .where(
+        and(
+          inArray(conversationMessages.conversationId, conversationIds),
+          sql`${conversationMessages.deletedAt} is null`,
+          sql`${conversationMessages.sequence} > coalesce(${conversationReadStates.lastReadSequence}, 0)`,
+        ),
+      )
+      .groupBy(conversationMessages.conversationId);
+
+    return new Map(rows.map((row) => [row.conversationId, Number(row.unreadCount ?? 0)]));
+  }
+
   async function hydrateSummaries(
     rows: ConversationRow[],
     actor: ConversationActorContext,
   ): Promise<ConversationSummary[]> {
     const conversationIds = rows.map((row) => row.id);
     const participantsByConversationId = await listConversationParticipants(db, conversationIds);
-    const latestMessageAtByConversationId = await loadLatestMessageAt(conversationIds);
-    const readStateByConversationId = await loadViewerReadStates(
-      rows[0]?.companyId ?? "",
+    const latestMessageStatsByConversationId = await loadLatestVisibleMessageStats(conversationIds);
+    const companyId = rows[0]?.companyId ?? "";
+    const unreadCountByConversationId = await loadViewerUnreadCounts(
+      companyId,
       conversationIds,
       actor,
     );
 
     return rows.map((row) => {
-      const readState = readStateByConversationId.get(row.id);
+      const latestMessageStats = latestMessageStatsByConversationId.get(row.id);
       return {
         id: row.id,
         companyId: row.companyId,
         title: row.title,
         status: row.status as ConversationSummary["status"],
         participants: participantsByConversationId.get(row.id) ?? [],
-        latestMessageSequence: row.lastMessageSequence,
-        latestMessageAt: latestMessageAtByConversationId.get(row.id) ?? null,
-        unreadCount: Math.max(0, row.lastMessageSequence - (readState?.lastReadSequence ?? 0)),
+        latestMessageSequence: latestMessageStats?.latestMessageSequence ?? 0,
+        latestMessageAt: latestMessageStats?.latestMessageAt ?? null,
+        unreadCount: unreadCountByConversationId.get(row.id) ?? 0,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
       };
@@ -383,6 +601,143 @@ export function conversationService(db: Db) {
       refsByMessageId.set(row.messageId, existing);
     }
     return refsByMessageId;
+  }
+
+  async function loadParentMessageSummaries(messageRows: Array<typeof conversationMessages.$inferSelect>) {
+    const parentIds = [...new Set(messageRows.map((row) => row.parentId).filter(Boolean))] as string[];
+    if (parentIds.length === 0) return new Map<string, ConversationMessageParentSummary>();
+
+    const parentRows = await db
+      .select({
+        id: conversationMessages.id,
+        sequence: conversationMessages.sequence,
+        authorType: conversationMessages.authorType,
+        authorUserId: conversationMessages.authorUserId,
+        authorAgentId: conversationMessages.authorAgentId,
+        bodyMarkdown: conversationMessages.bodyMarkdown,
+        deletedAt: conversationMessages.deletedAt,
+        createdAt: conversationMessages.createdAt,
+      })
+      .from(conversationMessages)
+      .where(inArray(conversationMessages.id, parentIds));
+
+    return new Map(
+      parentRows.map((row) => [row.id, toConversationMessageParentSummary(row)]),
+    );
+  }
+
+  async function syncConversationTargetLinksForPairs(
+    executor: Db,
+    input: {
+      companyId: string;
+      conversationId: string;
+      pairs: Array<{ agentId: string; targetKind: ConversationTargetKind; targetId: string }>;
+    },
+  ) {
+    const dedupedPairs = [
+      ...new Map(
+        input.pairs.map((pair) => [`${pair.agentId}:${pair.targetKind}:${pair.targetId}`, pair]),
+      ).values(),
+    ];
+
+    for (const pair of dedupedPairs) {
+      const latestRelevantMessage = await executor
+        .select({
+          id: conversationMessages.id,
+          sequence: conversationMessages.sequence,
+          authorType: conversationMessages.authorType,
+          authorUserId: conversationMessages.authorUserId,
+          authorAgentId: conversationMessages.authorAgentId,
+        })
+        .from(conversationMessages)
+        .where(
+          and(
+            eq(conversationMessages.companyId, input.companyId),
+            eq(conversationMessages.conversationId, input.conversationId),
+            sql`${conversationMessages.deletedAt} is null`,
+            sql`exists (
+              select 1
+              from ${conversationMessageRefs} target_ref
+              where target_ref.message_id = ${conversationMessages.id}
+                and target_ref.ref_kind = ${pair.targetKind}
+                and target_ref.target_id = ${pair.targetId}
+            )`,
+            sql`(
+              not exists (
+                select 1
+                from ${conversationMessageRefs} any_agent_ref
+                where any_agent_ref.message_id = ${conversationMessages.id}
+                  and any_agent_ref.ref_kind = 'agent'
+              )
+              or exists (
+                select 1
+                from ${conversationMessageRefs} target_agent_ref
+                where target_agent_ref.message_id = ${conversationMessages.id}
+                  and target_agent_ref.ref_kind = 'agent'
+                  and target_agent_ref.target_id = ${pair.agentId}
+              )
+            )`,
+          ),
+        )
+        .orderBy(desc(conversationMessages.sequence))
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+
+      if (!latestRelevantMessage) {
+        await executor
+          .delete(conversationTargetLinks)
+          .where(
+            and(
+              eq(conversationTargetLinks.companyId, input.companyId),
+              eq(conversationTargetLinks.conversationId, input.conversationId),
+              eq(conversationTargetLinks.agentId, pair.agentId),
+              eq(conversationTargetLinks.targetKind, pair.targetKind),
+              eq(conversationTargetLinks.targetId, pair.targetId),
+            ),
+          );
+        continue;
+      }
+
+      const actor = conversationTargetLinkActorFromMessage({
+        authorType: latestRelevantMessage.authorType as "user" | "agent" | "system",
+        authorUserId: latestRelevantMessage.authorUserId,
+        authorAgentId: latestRelevantMessage.authorAgentId,
+      });
+      const now = new Date();
+
+      await executor
+        .insert(conversationTargetLinks)
+        .values({
+          companyId: input.companyId,
+          agentId: pair.agentId,
+          conversationId: input.conversationId,
+          targetKind: pair.targetKind,
+          targetId: pair.targetId,
+          linkOrigin: "message_ref",
+          latestLinkedMessageId: latestRelevantMessage.id,
+          latestLinkedMessageSequence: latestRelevantMessage.sequence,
+          createdByActorType: actor.createdByActorType,
+          createdByActorId: actor.createdByActorId,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [
+            conversationTargetLinks.agentId,
+            conversationTargetLinks.conversationId,
+            conversationTargetLinks.targetKind,
+            conversationTargetLinks.targetId,
+          ],
+          set: {
+            linkOrigin: "message_ref",
+            latestLinkedMessageId: latestRelevantMessage.id,
+            latestLinkedMessageSequence: latestRelevantMessage.sequence,
+            createdByActorType: actor.createdByActorType,
+            createdByActorId: actor.createdByActorId,
+            updatedAt: now,
+          },
+        });
+    }
   }
 
   async function loadConversationTargetLinks(
@@ -969,8 +1324,11 @@ export function conversationService(db: Db) {
           )
           .orderBy(asc(conversationMessages.sequence));
 
-        const refsByMessageId = await loadMessageRefs(rows.map((row) => row.id));
-        const messages = hydrateMessages(rows, refsByMessageId);
+        const [refsByMessageId, parentMessagesById] = await Promise.all([
+          loadMessageRefs(rows.map((row) => row.id)),
+          loadParentMessageSummaries(rows),
+        ]);
+        const messages = hydrateMessages(rows, refsByMessageId, parentMessagesById);
         const firstSequence = messages[0]?.sequence ?? null;
         const lastSequence = messages[messages.length - 1]?.sequence ?? null;
         const [olderRow, newerRow] = await Promise.all([
@@ -1042,8 +1400,11 @@ export function conversationService(db: Db) {
 
       const selectedRowsDesc = rows.slice(0, limit);
       const orderedRows = [...selectedRowsDesc].reverse();
-      const refsByMessageId = await loadMessageRefs(orderedRows.map((row) => row.id));
-      const messages = hydrateMessages(orderedRows, refsByMessageId);
+      const [refsByMessageId, parentMessagesById] = await Promise.all([
+        loadMessageRefs(orderedRows.map((row) => row.id)),
+        loadParentMessageSummaries(orderedRows),
+      ]);
+      const messages = hydrateMessages(orderedRows, refsByMessageId, parentMessagesById);
       const firstSequence = messages[0]?.sequence ?? null;
       const lastSequence = messages[messages.length - 1]?.sequence ?? null;
       const [olderRow, newerRow] = await Promise.all([
@@ -1086,7 +1447,11 @@ export function conversationService(db: Db) {
     createMessage: async (
       conversationId: string,
       actor: ConversationActorContext,
-      input: { bodyMarkdown: string; activeContextTargets: ConversationActiveContextTarget[] },
+      input: {
+        bodyMarkdown: string;
+        activeContextTargets: ConversationActiveContextTarget[];
+        parentId?: string | null;
+      },
     ) => {
       const conversation = await ensureConversationVisible(conversationId, actor);
       if (actor.viewerType === "agent" && !actor.agentId) {
@@ -1094,6 +1459,72 @@ export function conversationService(db: Db) {
       }
 
       const participantAgentIds = await getConversationParticipantAgentIds(conversationId);
+      const hasExplicitParentId = Object.prototype.hasOwnProperty.call(input, "parentId");
+      const explicitParentId = hasExplicitParentId
+        ? readNonEmptyString(input.parentId)
+        : null;
+      const inferredParentId =
+        !hasExplicitParentId && actor.viewerType === "agent" && actor.runId
+          ? await db
+              .select({ contextSnapshot: heartbeatRuns.contextSnapshot })
+              .from(heartbeatRuns)
+              .where(
+                and(
+                  eq(heartbeatRuns.id, actor.runId),
+                  eq(heartbeatRuns.companyId, conversation.companyId),
+                  eq(heartbeatRuns.agentId, actor.agentId),
+                ),
+              )
+              .then((rows) => {
+                const context = asRecord(rows[0]?.contextSnapshot);
+                if (!context) return null;
+                const runConversationId = readNonEmptyString(context.conversationId);
+                const runConversationMessageId = readNonEmptyString(
+                  context.conversationMessageId,
+                );
+                const runConversationReplyToMessageId = readNonEmptyString(
+                  context.conversationReplyToMessageId,
+                );
+                return runConversationId === conversationId
+                  && !runConversationReplyToMessageId
+                  ? runConversationMessageId
+                  : null;
+              })
+          : null;
+      const effectiveParentId = explicitParentId ?? inferredParentId;
+      let parentMessageRow = effectiveParentId
+        ? await db
+            .select({
+              id: conversationMessages.id,
+              sequence: conversationMessages.sequence,
+              authorType: conversationMessages.authorType,
+              authorUserId: conversationMessages.authorUserId,
+              authorAgentId: conversationMessages.authorAgentId,
+              bodyMarkdown: conversationMessages.bodyMarkdown,
+              deletedAt: conversationMessages.deletedAt,
+              createdAt: conversationMessages.createdAt,
+            })
+            .from(conversationMessages)
+            .where(
+              and(
+                eq(conversationMessages.id, effectiveParentId),
+                eq(conversationMessages.conversationId, conversationId),
+              ),
+            )
+            .then((rows) => rows[0] ?? null)
+        : null;
+      if (explicitParentId && !parentMessageRow) {
+        throw unprocessable("Reply target must belong to the same conversation");
+      }
+      if (parentMessageRow?.deletedAt) {
+        if (explicitParentId) {
+          throw unprocessable("Cannot reply to a deleted message");
+        }
+        parentMessageRow = null;
+      }
+      const parentMessage = parentMessageRow
+        ? toConversationMessageParentSummary(parentMessageRow)
+        : null;
       const inlineRefs = parseStructuredRefs(input.bodyMarkdown);
       const targetRefs = await ensureMessageTargetsExist(
         conversation.companyId,
@@ -1125,6 +1556,7 @@ export function conversationService(db: Db) {
             companyId: conversation.companyId,
             conversationId,
             sequence: updatedConversation.lastMessageSequence,
+            parentId: parentMessage?.id ?? null,
             authorType: actor.actorType,
             authorUserId: actor.viewerType === "board" ? actor.actorId : null,
             authorAgentId: actor.viewerType === "agent" ? actor.agentId : null,
@@ -1192,6 +1624,18 @@ export function conversationService(db: Db) {
         const affectedAgentIds = [
           ...new Set(targetedAgentIds.length > 0 ? targetedAgentIds : participantAgentIds),
         ];
+        const replyTargetAgentIds =
+          parentMessage?.authorType === "agent" &&
+          parentMessage.authorAgentId &&
+          participantAgentIds.includes(parentMessage.authorAgentId)
+            ? [parentMessage.authorAgentId]
+            : [];
+        const wakeRouting = resolveConversationWakeRouting(
+          actor,
+          participantAgentIds,
+          targetedAgentIds,
+          replyTargetAgentIds,
+        );
 
         const targetObjectRefs = persistedRefs.filter(
           (ref) => ref.refKind === "issue" || ref.refKind === "goal" || ref.refKind === "project",
@@ -1255,34 +1699,44 @@ export function conversationService(db: Db) {
             companyId: message.companyId,
             conversationId: message.conversationId,
             sequence: message.sequence,
+            parentId: message.parentId,
+            parentMessage,
             authorType: message.authorType as ConversationMessage["authorType"],
             authorUserId: message.authorUserId,
             authorAgentId: message.authorAgentId,
             runId: message.runId,
             bodyMarkdown: message.bodyMarkdown,
             refs: persistedRefs,
+            deletedAt: message.deletedAt,
             createdAt: message.createdAt,
             updatedAt: message.updatedAt,
           } satisfies ConversationMessage,
           affectedPairs,
           participantAgentIds,
           readState,
-          responseAgentIds: affectedAgentIds,
+          wakeupAgentIds: wakeRouting.wakeupAgentIds,
+          wakeupResponseMode: wakeRouting.responseMode,
+          wakeupPriority: wakeRouting.priority,
         };
       });
 
       await memory.rebuildForPairs(conversation.companyId, created.affectedPairs);
 
       const singleTarget = singleTargetFromRefs(created.message.refs);
+      const replyContextMarkdown = created.message.parentMessage
+        ? buildConversationReplyContextMarkdown({
+            parentMessage: created.message.parentMessage,
+            message: created.message,
+          })
+        : null;
       const heartbeat = heartbeatService(db);
-      const responseMode = created.message.refs.some((ref) => ref.refKind === "agent")
-        ? "required"
-        : "optional";
-      for (const agentId of created.responseAgentIds) {
+      for (const agentId of created.wakeupAgentIds) {
+        if (!created.wakeupResponseMode) continue;
         await heartbeat.wakeup(agentId, {
           source: "conversation_message",
           triggerDetail: "manual",
           reason: "conversation_message",
+          priority: created.wakeupPriority ?? undefined,
           requestedByActorType: actor.actorType,
           requestedByActorId: actor.actorId,
           contextSnapshot: {
@@ -1291,9 +1745,11 @@ export function conversationService(db: Db) {
             conversationId,
             conversationMessageId: created.message.id,
             conversationMessageSequence: created.message.sequence,
-            conversationResponseMode: responseMode,
+            conversationResponseMode: created.wakeupResponseMode,
             conversationTargetKind: singleTarget?.targetKind ?? null,
             conversationTargetId: singleTarget?.targetId ?? null,
+            conversationReplyToMessageId: created.message.parentMessage?.id ?? null,
+            conversationReplyContextMarkdown: replyContextMarkdown,
           },
         });
       }
@@ -1330,12 +1786,22 @@ export function conversationService(db: Db) {
           message: {
             id: created.message.id,
             sequence: created.message.sequence,
+            parentId: created.message.parentId,
+            parentMessage: created.message.parentMessage
+              ? {
+                  ...created.message.parentMessage,
+                  deletedAt: created.message.parentMessage.deletedAt?.toISOString() ?? null,
+                  createdAt: created.message.parentMessage.createdAt.toISOString(),
+                }
+              : null,
             authorType: created.message.authorType,
             authorUserId: created.message.authorUserId,
             authorAgentId: created.message.authorAgentId,
             runId: created.message.runId,
             bodyMarkdown: created.message.bodyMarkdown,
+            deletedAt: created.message.deletedAt?.toISOString() ?? null,
             createdAt: created.message.createdAt.toISOString(),
+            updatedAt: created.message.updatedAt.toISOString(),
             refs: created.message.refs,
           },
           latestMessageSequence: created.conversation.lastMessageSequence,
@@ -1344,6 +1810,220 @@ export function conversationService(db: Db) {
       });
 
       return created.message;
+    },
+
+    deleteMessage: async (
+      conversationId: string,
+      actor: ConversationActorContext,
+      messageId: string,
+    ): Promise<DeleteConversationMessageResult> => {
+      const conversation = await ensureConversationVisible(conversationId, actor);
+      const existingMessage = await db
+        .select()
+        .from(conversationMessages)
+        .where(
+          and(
+            eq(conversationMessages.id, messageId),
+            eq(conversationMessages.conversationId, conversationId),
+          ),
+        )
+        .then((rows) => rows[0] ?? null);
+      if (!existingMessage) throw notFound("Message not found");
+      if (existingMessage.authorType === "system") {
+        throw forbidden("System messages cannot be deleted");
+      }
+      if (
+        actor.viewerType === "agent" &&
+        (existingMessage.authorType !== "agent" || existingMessage.authorAgentId !== actor.agentId)
+      ) {
+        throw forbidden("Agents may only delete their own conversation messages");
+      }
+      if (existingMessage.deletedAt) {
+        return { messageId };
+      }
+
+      const participantAgentIds = await getConversationParticipantAgentIds(conversationId);
+      const refRows = await db
+        .select()
+        .from(conversationMessageRefs)
+        .where(eq(conversationMessageRefs.messageId, messageId));
+      const refs: ConversationMessageRef[] = refRows.map((row) => ({
+        id: row.id,
+        companyId: row.companyId,
+        messageId: row.messageId,
+        refKind: row.refKind as ConversationMessageRef["refKind"],
+        targetId: row.targetId,
+        displayText: row.displayText,
+        refOrigin: row.refOrigin as ConversationMessageRef["refOrigin"],
+        createdAt: row.createdAt,
+      }));
+      const targetedAgentIds = refs
+        .filter((ref) => ref.refKind === "agent")
+        .map((ref) => ref.targetId);
+      const affectedAgentIds = [
+        ...new Set(targetedAgentIds.length > 0 ? targetedAgentIds : participantAgentIds),
+      ];
+      const affectedPairs = refs
+        .filter(
+          (ref) => ref.refKind === "issue" || ref.refKind === "goal" || ref.refKind === "project",
+        )
+        .flatMap((ref) =>
+          affectedAgentIds.map((agentId) => ({
+            agentId,
+            targetKind: ref.refKind as ConversationTargetKind,
+            targetId: ref.targetId,
+          })),
+        );
+      const affectedTargets = [
+        ...new Map(
+          affectedPairs.map((pair) => [`${pair.targetKind}:${pair.targetId}`, pair]),
+        ).values(),
+      ].map((pair) => ({ targetKind: pair.targetKind, targetId: pair.targetId }));
+      const now = new Date();
+
+      const deletedMessage = await db.transaction(async (tx) => {
+        const [updatedMessage] = await tx
+          .update(conversationMessages)
+          .set({
+            bodyMarkdown: "",
+            deletedAt: now,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(conversationMessages.id, messageId),
+              eq(conversationMessages.conversationId, conversationId),
+              sql`${conversationMessages.deletedAt} is null`,
+            ),
+          )
+          .returning();
+
+        if (!updatedMessage) {
+          const currentMessage = await tx
+            .select()
+            .from(conversationMessages)
+            .where(
+              and(
+                eq(conversationMessages.id, messageId),
+                eq(conversationMessages.conversationId, conversationId),
+              ),
+            )
+            .then((rows) => rows[0] ?? null);
+          if (!currentMessage) throw notFound("Message not found");
+          return currentMessage;
+        }
+
+        await tx
+          .delete(conversationMessageRefs)
+          .where(eq(conversationMessageRefs.messageId, messageId));
+        await tx
+          .update(conversations)
+          .set({ updatedAt: now })
+          .where(
+            and(
+              eq(conversations.id, conversationId),
+              eq(conversations.companyId, conversation.companyId),
+            ),
+          );
+        await syncConversationTargetLinksForPairs(tx as unknown as Db, {
+          companyId: conversation.companyId,
+          conversationId,
+          pairs: affectedPairs,
+        });
+
+        return updatedMessage;
+      });
+
+      if (affectedPairs.length > 0) {
+        await memory.rebuildForPairs(conversation.companyId, affectedPairs);
+      }
+
+      const parentMessagesById = await loadParentMessageSummaries([deletedMessage]);
+      const deletedConversationMessage: ConversationMessage = {
+        id: deletedMessage.id,
+        companyId: deletedMessage.companyId,
+        conversationId: deletedMessage.conversationId,
+        sequence: deletedMessage.sequence,
+        parentId: deletedMessage.parentId,
+        parentMessage: deletedMessage.parentId
+          ? parentMessagesById.get(deletedMessage.parentId) ?? null
+          : null,
+        authorType: deletedMessage.authorType as ConversationMessage["authorType"],
+        authorUserId: deletedMessage.authorUserId,
+        authorAgentId: deletedMessage.authorAgentId,
+        runId: deletedMessage.runId,
+        bodyMarkdown: deletedMessage.bodyMarkdown,
+        refs: [],
+        deletedAt: deletedMessage.deletedAt,
+        createdAt: deletedMessage.createdAt,
+        updatedAt: deletedMessage.updatedAt,
+      };
+      const latestVisibleStats = (await loadLatestVisibleMessageStats([conversationId])).get(
+        conversationId,
+      ) ?? {
+        latestMessageAt: null,
+        latestMessageSequence: 0,
+      };
+
+      await logActivity(db, {
+        companyId: conversation.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "conversation.message_deleted",
+        entityType: "conversation",
+        entityId: conversationId,
+        audience: {
+          scope: "conversationParticipants",
+          conversationId,
+          participantAgentIds,
+        },
+        details: {
+          messageId,
+          sequence: deletedConversationMessage.sequence,
+        },
+      });
+      publishLiveEvent({
+        companyId: conversation.companyId,
+        type: "conversation.message_deleted",
+        audience: {
+          scope: "conversationParticipants",
+          conversationId,
+          participantAgentIds,
+        },
+        payload: {
+          conversationId,
+          affectedTargets,
+          message: {
+            id: deletedConversationMessage.id,
+            sequence: deletedConversationMessage.sequence,
+            parentId: deletedConversationMessage.parentId,
+            parentMessage: deletedConversationMessage.parentMessage
+              ? {
+                  ...deletedConversationMessage.parentMessage,
+                  deletedAt:
+                    deletedConversationMessage.parentMessage.deletedAt?.toISOString() ?? null,
+                  createdAt: deletedConversationMessage.parentMessage.createdAt.toISOString(),
+                }
+              : null,
+            authorType: deletedConversationMessage.authorType,
+            authorUserId: deletedConversationMessage.authorUserId,
+            authorAgentId: deletedConversationMessage.authorAgentId,
+            runId: deletedConversationMessage.runId,
+            bodyMarkdown: deletedConversationMessage.bodyMarkdown,
+            deletedAt: deletedConversationMessage.deletedAt?.toISOString() ?? null,
+            createdAt: deletedConversationMessage.createdAt.toISOString(),
+            updatedAt: deletedConversationMessage.updatedAt.toISOString(),
+            refs: [],
+          },
+          latestMessageSequence: latestVisibleStats.latestMessageSequence,
+          latestActivityAt:
+            latestVisibleStats.latestMessageAt?.toISOString() ?? now.toISOString(),
+        },
+      });
+
+      return { messageId };
     },
 
     markRead: async (

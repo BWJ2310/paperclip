@@ -91,6 +91,11 @@ export type ConversationMessagePostedLiveEvent = LiveEventBase<
   ConversationMessageLiveEventPayload
 >;
 
+export type ConversationMessageDeletedLiveEvent = LiveEventBase<
+  "conversation.message_deleted",
+  ConversationMessageLiveEventPayload
+>;
+
 export type ConversationContextLinkedLiveEvent = LiveEventBase<
   "conversation.context_linked",
   ConversationContextLinkLiveEventPayload
@@ -107,6 +112,7 @@ export type ConversationLiveEvent =
   | ConversationParticipantAddedLiveEvent
   | ConversationParticipantRemovedLiveEvent
   | ConversationMessagePostedLiveEvent
+  | ConversationMessageDeletedLiveEvent
   | ConversationContextLinkedLiveEvent
   | ConversationContextUnlinkedLiveEvent;
 

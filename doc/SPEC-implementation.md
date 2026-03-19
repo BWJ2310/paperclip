@@ -247,11 +247,13 @@ Invariant: participants must belong to the same company as the conversation.
 - `company_id` uuid fk `companies.id` not null
 - `conversation_id` uuid fk `conversations.id` not null
 - `sequence` bigint not null
+- `parent_id` uuid fk `conversation_messages.id` null
 - `author_type` enum: `user | agent | system`
 - `author_agent_id` uuid fk `agents.id` null
 - `author_user_id` text null (auth user id / board actor id)
 - `run_id` uuid fk `heartbeat_runs.id` null
 - `body_markdown` text not null
+- `deleted_at` timestamptz null
 
 Invariants:
 
@@ -260,6 +262,7 @@ Invariants:
 - if `author_type = system`, then both `author_agent_id` and `author_user_id` must be null
 - `sequence` is monotonic per conversation and allocated from `conversations.last_message_sequence`
 - if `run_id` is set, then `author_type` must be `agent`
+- deletes are tombstones: `deleted_at` is set, `body_markdown` is blanked, refs are removed, and reply ancestry remains intact through `parent_id`
 
 ## 7.11 `conversation_message_refs`
 
@@ -676,6 +679,7 @@ Server behavior:
 - `DELETE /conversations/:conversationId/participants/:agentId`
 - `GET /conversations/:conversationId/messages`
 - `POST /conversations/:conversationId/messages`
+- `DELETE /conversations/:conversationId/messages/:messageId`
 - `POST /conversations/:conversationId/read`
 - `POST /conversations/:conversationId/targets`
 - `DELETE /conversations/:conversationId/targets`
@@ -707,7 +711,7 @@ Conversation REST contract notes:
   - `createdAt`
   - `updatedAt`
 - `unreadCount` is the unread visible-message count for the requesting actor, not a boolean unread flag
-- `unreadCount` is derived from the actor-scoped conversation read state using message sequences greater than that actor's `last_read_sequence`
+- `unreadCount` is derived from the actor-scoped conversation read state using non-deleted message sequences greater than that actor's `last_read_sequence`
 - direct conversation routes remain object-addressed and must enforce company access plus participant-scoped agent visibility
 - `GET /conversations/:conversationId` returns conversation detail and embeds:
   - `viewerReadState`
@@ -731,6 +735,9 @@ Conversation REST contract notes:
   - `messages`
   - `hasMoreBefore`
   - `hasMoreAfter`
+- conversation message objects may include reply ancestry through `parentId` and `parentMessage`
+- deleted messages remain in the conversation timeline as tombstones with `deletedAt` set, blank body markdown, and no persisted refs
+- replying to a specific message is a first-class alternative to explicit `@agent` mentions; replying to an agent-authored message wakes only that agent and includes reply context plus linked conversation memory in the wake payload
 - deep-inspection message query modes are now part of the public contract:
   - `q?: string` searches visible message bodies
   - `targetKind?: "issue" | "goal" | "project"` plus `targetId?: uuid` filters to messages with a matching persisted target ref

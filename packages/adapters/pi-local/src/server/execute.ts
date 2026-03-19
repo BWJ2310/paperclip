@@ -19,6 +19,7 @@ import {
   readPaperclipRuntimeSkillEntries,
   resolvePaperclipDesiredSkillNames,
   removeMaintainerOnlySkillSymlinks,
+  renderPaperclipConversationReplyNote,
   renderTemplate,
   runChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
@@ -156,10 +157,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const hasExplicitApiKey =
     typeof envConfig.PAPERCLIP_API_KEY === "string" &&
     envConfig.PAPERCLIP_API_KEY.trim().length > 0;
+  const paperclipContext = readPaperclipInvokeContext(context);
   const env: Record<string, string> = {
     ...buildPaperclipEnv(agent, {
       runId,
-      ...readPaperclipInvokeContext(context),
+      ...paperclipContext,
     }),
   };
   if (workspaceCwd) env.PAPERCLIP_WORKSPACE_CWD = workspaceCwd;
@@ -298,6 +300,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     context.paperclipSessionHandoffMarkdown,
     ""
   ).trim();
+  const conversationReplyInstructionNote = renderPaperclipConversationReplyNote(
+    paperclipContext
+  ).trim();
+  const conversationReplyContextNote = asString(
+    context.paperclipConversationReplyContextMarkdown,
+    asString(context.conversationReplyContextMarkdown, "")
+  ).trim();
   const linkedConversationMemoryNote = asString(
     context.paperclipLinkedConversationMemoryMarkdown,
     ""
@@ -305,6 +314,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const userPrompt = joinPromptSections([
     renderedBootstrapPrompt,
     sessionHandoffNote,
+    conversationReplyInstructionNote,
+    conversationReplyContextNote,
     linkedConversationMemoryNote,
     renderedHeartbeatPrompt,
   ]);
@@ -313,6 +324,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     promptChars: userPrompt.length,
     bootstrapPromptChars: renderedBootstrapPrompt.length,
     sessionHandoffChars: sessionHandoffNote.length,
+    conversationReplyContextChars: conversationReplyContextNote.length,
     linkedConversationMemoryChars: linkedConversationMemoryNote.length,
     heartbeatPromptChars: renderedHeartbeatPrompt.length,
   };

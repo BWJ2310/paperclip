@@ -24,11 +24,13 @@ export type MockActor =
       companyIds: string[];
       source?: string;
       isInstanceAdmin?: boolean;
+      runId?: string;
     }
   | {
       type: "agent";
       agentId: string;
       companyId: string;
+      runId?: string;
     };
 
 const defaultActor: MockActor = {

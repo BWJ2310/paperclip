@@ -176,6 +176,7 @@ export {
   createConversationMessageSchema,
   listConversationMessagesQuerySchema,
   markConversationReadSchema,
+  deleteConversationMessageParamsSchema,
   createConversationTargetLinkSchema,
   deleteConversationTargetLinkQuerySchema,
   conversationMessageRefKindSchema,

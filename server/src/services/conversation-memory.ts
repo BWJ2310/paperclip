@@ -27,6 +27,41 @@ function normalizeWhitespace(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asNonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function extractAgentModel(adapterConfig: unknown) {
+  return asNonEmptyString(asRecord(adapterConfig)?.model);
+}
+
+function extractAgentThinkingEffort(
+  adapterType: string,
+  adapterConfig: unknown,
+) {
+  const config = asRecord(adapterConfig);
+  if (!config) return null;
+  if (adapterType === "codex_local") {
+    return (
+      asNonEmptyString(config.modelReasoningEffort) ??
+      asNonEmptyString(config.reasoningEffort)
+    );
+  }
+  if (adapterType === "cursor") {
+    return asNonEmptyString(config.mode);
+  }
+  if (adapterType === "opencode_local") {
+    return asNonEmptyString(config.variant);
+  }
+  return asNonEmptyString(config.effort);
+}
+
 function buildAuthorLabel(input: {
   authorType: string;
   authorUserId: string | null;
@@ -107,7 +142,10 @@ export async function listConversationParticipants(
       companyId: conversationParticipants.companyId,
       conversationId: conversationParticipants.conversationId,
       agentId: conversationParticipants.agentId,
+      agentIcon: agents.icon,
       agentName: agents.name,
+      agentAdapterType: agents.adapterType,
+      agentAdapterConfig: agents.adapterConfig,
       agentRole: agents.role,
       agentTitle: agents.title,
       agentStatus: agents.status,
@@ -127,10 +165,16 @@ export async function listConversationParticipants(
       companyId: row.companyId,
       conversationId: row.conversationId,
       agentId: row.agentId,
+      agentIcon: row.agentIcon,
       agentName: row.agentName,
       agentRole: row.agentRole,
       agentTitle: row.agentTitle,
       agentStatus: row.agentStatus,
+      agentModel: extractAgentModel(row.agentAdapterConfig),
+      agentThinkingEffort: extractAgentThinkingEffort(
+        row.agentAdapterType,
+        row.agentAdapterConfig,
+      ),
       joinedAt: row.joinedAt,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,

@@ -378,6 +378,7 @@ export const LIVE_EVENT_TYPES = [
   "conversation.participant_added",
   "conversation.participant_removed",
   "conversation.message_posted",
+  "conversation.message_deleted",
   "conversation.context_linked",
   "conversation.context_unlinked",
   "plugin.ui.updated",

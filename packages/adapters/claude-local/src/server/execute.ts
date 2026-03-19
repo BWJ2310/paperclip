@@ -22,6 +22,7 @@ import {
   ensureAbsoluteDirectory,
   ensureCommandResolvable,
   ensurePathInEnv,
+  renderPaperclipConversationReplyNote,
   renderTemplate,
   runChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
@@ -162,10 +163,11 @@ async function buildClaudeRuntimeConfig(
   const hasExplicitApiKey =
     typeof envConfig.PAPERCLIP_API_KEY === "string" &&
     envConfig.PAPERCLIP_API_KEY.trim().length > 0;
+  const paperclipContext = readPaperclipInvokeContext(context);
   const env: Record<string, string> = {
     ...buildPaperclipEnv(agent, {
       runId,
-      ...readPaperclipInvokeContext(context),
+      ...paperclipContext,
     }),
   };
   if (effectiveWorkspaceCwd) {
@@ -376,6 +378,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     run: { id: runId, source: "on_demand" },
     context,
   };
+  const paperclipContext = readPaperclipInvokeContext(context);
   const renderedPrompt = renderTemplate(promptTemplate, templateData);
   const renderedBootstrapPrompt =
     !sessionId && bootstrapPromptTemplate.trim().length > 0
@@ -385,6 +388,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     context.paperclipSessionHandoffMarkdown,
     ""
   ).trim();
+  const conversationReplyInstructionNote = renderPaperclipConversationReplyNote(
+    paperclipContext
+  ).trim();
+  const conversationReplyContextNote = asString(
+    context.paperclipConversationReplyContextMarkdown,
+    asString(context.conversationReplyContextMarkdown, "")
+  ).trim();
   const linkedConversationMemoryNote = asString(
     context.paperclipLinkedConversationMemoryMarkdown,
     ""
@@ -392,6 +402,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const prompt = joinPromptSections([
     renderedBootstrapPrompt,
     sessionHandoffNote,
+    conversationReplyInstructionNote,
+    conversationReplyContextNote,
     linkedConversationMemoryNote,
     renderedPrompt,
   ]);
@@ -399,6 +411,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     promptChars: prompt.length,
     bootstrapPromptChars: renderedBootstrapPrompt.length,
     sessionHandoffChars: sessionHandoffNote.length,
+    conversationReplyContextChars: conversationReplyContextNote.length,
     linkedConversationMemoryChars: linkedConversationMemoryNote.length,
     heartbeatPromptChars: renderedPrompt.length,
   };

@@ -15,11 +15,15 @@ export const conversationMessages = pgTable(
       .notNull()
       .references(() => conversations.id, { onDelete: "cascade" }),
     sequence: bigint("sequence", { mode: "number" }).notNull(),
+    parentId: uuid("parent_id").references((): AnyPgColumn => conversationMessages.id, {
+      onDelete: "set null",
+    }),
     authorType: text("author_type").notNull(),
     authorUserId: text("author_user_id"),
     authorAgentId: uuid("author_agent_id").references(() => agents.id),
     runId: uuid("run_id").references((): AnyPgColumn => heartbeatRuns.id, { onDelete: "set null" }),
     bodyMarkdown: text("body_markdown").notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -29,6 +33,7 @@ export const conversationMessages = pgTable(
       table.conversationId,
       table.sequence,
     ),
+    parentIdx: index("conversation_messages_parent_idx").on(table.parentId),
     conversationSequenceUq: uniqueIndex("conversation_messages_conversation_sequence_uq").on(
       table.conversationId,
       table.sequence,

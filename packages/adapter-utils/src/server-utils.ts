@@ -87,6 +87,7 @@ export interface PaperclipInvokeContext {
   conversationResponseMode: string | null;
   conversationTargetKind: string | null;
   conversationTargetId: string | null;
+  conversationReplyContextMarkdown: string | null;
   linkedConversationMemoryMarkdown: string | null;
   linkedConversationRefs: Array<Record<string, unknown>>;
 }
@@ -273,6 +274,27 @@ export function joinPromptSections(
     .join(separator);
 }
 
+export function renderPaperclipConversationReplyNote(
+  context: Pick<PaperclipInvokeContext, "conversationId" | "conversationMessageId">
+): string {
+  const conversationId = readNonEmptyString(context.conversationId);
+  const conversationMessageId = readNonEmptyString(
+    context.conversationMessageId
+  );
+  if (!conversationId || !conversationMessageId) return "";
+
+  return [
+    "Paperclip conversation reply note:",
+    `This run was triggered by conversation ${conversationId}, message ${conversationMessageId}.`,
+    `Post conversation responses to /api/conversations/${conversationId}/messages.`,
+    "Only set parentId when you intentionally want to continue a specific thread.",
+    "If the triggering message is already a reply, prefer a normal top-level response so you do not reopen a high-priority reply chain.",
+    "If you need to hand off to another agent, use a structured mention like [@Agent Name](agent://AGENT_ID); plain @name text does not route wakeups.",
+    `You can inspect valid participants and ids with GET /api/conversations/${conversationId}.`,
+    "",
+  ].join("\n");
+}
+
 export function redactEnvForLogs(
   env: Record<string, string>
 ): Record<string, string> {
@@ -320,6 +342,9 @@ export function readPaperclipInvokeContext(
   const conversationTargetId =
     readNonEmptyString(context?.paperclipConversationTargetId) ??
     readNonEmptyString(context?.conversationTargetId);
+  const conversationReplyContextMarkdown =
+    readNonEmptyString(context?.paperclipConversationReplyContextMarkdown) ??
+    readNonEmptyString(context?.conversationReplyContextMarkdown);
   const linkedConversationMemoryMarkdown = readNonEmptyString(
     context?.paperclipLinkedConversationMemoryMarkdown
   );
@@ -352,6 +377,7 @@ export function readPaperclipInvokeContext(
         : null,
     conversationTargetId:
       conversationTargetKind && conversationTargetId ? conversationTargetId : null,
+    conversationReplyContextMarkdown,
     linkedConversationMemoryMarkdown,
     linkedConversationRefs,
   };
@@ -374,6 +400,7 @@ export function buildPaperclipEnv(
     conversationResponseMode?: string | null;
     conversationTargetKind?: string | null;
     conversationTargetId?: string | null;
+    conversationReplyContextMarkdown?: string | null;
     linkedConversationMemoryMarkdown?: string | null;
     linkedConversationRefs?: Array<Record<string, unknown>>;
   }
@@ -453,6 +480,11 @@ export function buildPaperclipEnv(
     )!;
     vars.PAPERCLIP_CONVERSATION_TARGET_ID = readNonEmptyString(
       options?.conversationTargetId
+    )!;
+  }
+  if (readNonEmptyString(options?.conversationReplyContextMarkdown)) {
+    vars.PAPERCLIP_CONVERSATION_REPLY_CONTEXT_MARKDOWN = readNonEmptyString(
+      options?.conversationReplyContextMarkdown
     )!;
   }
   if ((options?.linkedIssueIds ?? []).length > 0) {
