@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { and, asc, desc, eq, inArray, max, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -237,11 +238,47 @@ function conversationTargetLinkActorFromMessage(input: {
 function responseModeForConversationWakePriority(
   priority: "xlow" | "low" | "normal" | "high" | null,
 ): "optional" | "required" | null {
-  if (priority === "high") return "required";
-  if (priority === "normal" || priority === "low" || priority === "xlow") {
-    return "optional";
+  return priority ? "optional" : null;
+}
+
+function wakeSampleRateForConversationPriority(
+  priority: "xlow" | "low" | "normal" | "high" | null,
+): number {
+  switch (priority) {
+    case "high":
+      return 1;
+    case "normal":
+      return 0.5;
+    case "low":
+      return 0.125;
+    case "xlow":
+      return 0.025;
+    default:
+      return 0;
   }
-  return null;
+}
+
+function shouldTriggerConversationWakeForAgent(input: {
+  conversationId: string;
+  conversationMessageSequence: number;
+  agentId: string;
+  priority: "xlow" | "low" | "normal" | "high" | null;
+}) {
+  const rate = wakeSampleRateForConversationPriority(input.priority);
+  if (rate <= 0) return false;
+  if (rate >= 1) return true;
+
+  const sample = parseInt(
+    createHash("sha256")
+      .update(
+        `${input.conversationId}:${input.conversationMessageSequence}:${input.agentId}:${input.priority}`,
+      )
+      .digest("hex")
+      .slice(0, 8),
+    16,
+  ) / 0x1_0000_0000;
+
+  return sample < rate;
 }
 
 function resolveConversationWakeRouting(
@@ -379,6 +416,16 @@ export function conversationService(db: Db) {
       const heartbeat = heartbeatService(db);
       for (const agentId of created.wakeupAgentIds) {
         if (!wakeupResponseMode) continue;
+        if (
+          !shouldTriggerConversationWakeForAgent({
+            conversationId: conversation.id,
+            conversationMessageSequence: created.message.sequence,
+            agentId,
+            priority: created.wakeupPriority,
+          })
+        ) {
+          continue;
+        }
         await heartbeat.wakeup(agentId, {
           source: "conversation_message",
           triggerDetail: "manual",

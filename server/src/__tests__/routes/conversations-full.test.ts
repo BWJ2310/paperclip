@@ -85,6 +85,7 @@ describe("conversationRoutes", () => {
     const [company] = await testDb.db
       .insert(companies)
       .values({
+        id: "11111111-1111-4111-8111-111111111111",
         name: "Conversation Co",
         issuePrefix: `C${randomUUID().slice(0, 4).toUpperCase()}`,
       })
@@ -94,6 +95,7 @@ describe("conversationRoutes", () => {
       .insert(agents)
       .values([
         {
+          id: "00000000-0000-4000-8000-000000000012",
           companyId: company.id,
           name: "Agent A",
           role: "general",
@@ -101,6 +103,7 @@ describe("conversationRoutes", () => {
           status: "idle",
         },
         {
+          id: "00000000-0000-4000-8000-000000000004",
           companyId: company.id,
           name: "Agent B",
           role: "general",
@@ -146,6 +149,7 @@ describe("conversationRoutes", () => {
     const [conversation] = await testDb.db
       .insert(conversations)
       .values({
+        id: "22222222-2222-4222-8222-222222222222",
         companyId: company.id,
         title: "Design review",
         createdByUserId: "board-user",
@@ -751,7 +755,7 @@ describe("conversationRoutes", () => {
     });
   });
 
-  it("wakes all participants for board-authored messages without agent mentions", async () => {
+  it("samples low-priority board-authored messages without agent mentions", async () => {
     const fixture = await seedFixture();
 
     const res = await request(fixture.app)
@@ -770,9 +774,7 @@ describe("conversationRoutes", () => {
           row.conversationMessageSequence === 6,
       );
 
-      expect(wakeups.map((row) => row.agentId).sort()).toEqual(
-        [fixture.agentA.id, fixture.agentB.id].sort(),
-      );
+      expect(wakeups.map((row) => row.agentId)).toEqual([fixture.agentB.id]);
       expect(wakeups.every((row) => row.responseMode === "optional")).toBe(true);
 
       const runs = (await testDb.db.select().from(heartbeatRuns)).filter((row) => {
@@ -783,7 +785,7 @@ describe("conversationRoutes", () => {
         );
       });
 
-      expect(runs).toHaveLength(2);
+      expect(runs).toHaveLength(1);
       expect(
         runs.every((row) => {
           const context = (row.contextSnapshot ?? {}) as Record<string, unknown>;
@@ -793,7 +795,7 @@ describe("conversationRoutes", () => {
     });
   });
 
-  it("wakes other participants at xlow priority for agent-authored messages without mentions", async () => {
+  it("does not auto-wake other agents for agent-authored xlow messages", async () => {
     const fixture = await seedFixture();
     setMockActor({
       type: "agent",
@@ -805,6 +807,30 @@ describe("conversationRoutes", () => {
       .post(`/api/conversations/${fixture.conversation.id}/messages`)
       .send({
         bodyMarkdown: "Status update: I finished my pass and added notes above.",
+        activeContextTargets: [],
+      });
+
+    expect(res.status).toBe(201);
+
+    await waitForConversationMessagePostedActivity(fixture.conversation.id);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
+      (row) =>
+        row.conversationId === fixture.conversation.id &&
+        row.conversationMessageSequence === 6,
+    );
+
+    expect(wakeups).toHaveLength(0);
+  });
+
+  it("wakes only the explicitly mentioned agent at high priority for board-authored handoffs", async () => {
+    const fixture = await seedFixture();
+
+    const res = await request(fixture.app)
+      .post(`/api/conversations/${fixture.conversation.id}/messages`)
+      .send({
+        bodyMarkdown: `Please take point here [@${fixture.agentB.name}](${buildStructuredMentionHref("agent", fixture.agentB.id)}).`,
         activeContextTargets: [],
       });
 
@@ -831,50 +857,12 @@ describe("conversationRoutes", () => {
 
       expect(runs).toHaveLength(1);
       expect(((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).wakePriority).toBe(
-        "xlow",
-      );
-    });
-  });
-
-  it("wakes only the explicitly mentioned agent at high priority for board-authored handoffs", async () => {
-    const fixture = await seedFixture();
-
-    const res = await request(fixture.app)
-      .post(`/api/conversations/${fixture.conversation.id}/messages`)
-      .send({
-        bodyMarkdown: `Please take point here [@${fixture.agentB.name}](${buildStructuredMentionHref("agent", fixture.agentB.id)}).`,
-        activeContextTargets: [],
-      });
-
-    expect(res.status).toBe(201);
-
-    await waitForAssertion(async () => {
-      const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
-        (row) =>
-          row.conversationId === fixture.conversation.id &&
-          row.conversationMessageSequence === 6,
-      );
-
-      expect(wakeups).toHaveLength(1);
-      expect(wakeups[0]?.agentId).toBe(fixture.agentB.id);
-      expect(wakeups[0]?.responseMode).toBe("required");
-
-      const runs = (await testDb.db.select().from(heartbeatRuns)).filter((row) => {
-        const context = (row.contextSnapshot ?? {}) as Record<string, unknown>;
-        return (
-          context.conversationId === fixture.conversation.id &&
-          context.conversationMessageSequence === 6
-        );
-      });
-
-      expect(runs).toHaveLength(1);
-      expect(((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).wakePriority).toBe(
         "high",
       );
     });
   });
 
-  it("wakes only the explicitly mentioned agent for agent-authored handoffs", async () => {
+  it("samples normal-priority agent-authored mentions", async () => {
     const fixture = await seedFixture();
     setMockActor({
       type: "agent",
@@ -986,7 +974,7 @@ describe("conversationRoutes", () => {
     });
   });
 
-  it("wakes only the replied-to agent at low priority for agent-authored replies", async () => {
+  it("samples low-priority agent-authored replies", async () => {
     const fixture = await seedFixture();
     const [agentMessage] = await testDb.db
       .insert(conversationMessages)

@@ -302,7 +302,7 @@ export function renderPaperclipConversationReplyNote(
     "Reply directly and briefly; avoid mentioning or questioning multiple other agents unless a real handoff or blocker requires it.",
     "Default to a normal top-level response unless you intentionally want to continue a specific thread.",
     "Only set parentId when you want a threaded reply with extra context.",
-    "If you need to hand off to another agent, use a structured mention like [@Agent Name](agent://AGENT_ID); plain @name text does not route wakeups.",
+    "If you need to hand off to another agent, use a structured mention like [@Agent Name](agent://AGENT_ID); plain @name text does not route wakeups, and peer wakeups still depend on conversation priority.",
     `You can inspect valid participants and ids with GET /api/conversations/${conversationId}.`,
     "",
   ].join("\n");
