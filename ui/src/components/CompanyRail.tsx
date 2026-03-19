@@ -42,6 +42,7 @@ import type { Company } from "@paperclipai/shared";
 import { CompanyPatternIcon } from "./CompanyPatternIcon";
 
 const ORDER_STORAGE_KEY = "paperclip.companyOrder";
+const RAIL_ACTION_BUTTON_CLASS = "flex items-center justify-center w-11 h-11 rounded-[22px] hover:rounded-[14px] border-2 border-dashed border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground transition-[border-color,color,border-radius] duration-150";
 
 function getStoredOrder(): string[] {
   try {
@@ -210,10 +211,10 @@ function UserRailAvatar() {
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="flex items-center justify-center cursor-pointer rounded-full transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className={RAIL_ACTION_BUTTON_CLASS}
           aria-label={`User menu for ${userName}`}
         >
-          <Avatar size="default">
+          <Avatar size="default" className="rounded-[22px] hover:rounded-[10px] transition-[border-radius] duration-150">
             {avatarUrl && <AvatarImage src={avatarUrl} alt={userName} />}
             <AvatarFallback>{initials}</AvatarFallback>
           </Avatar>
@@ -397,7 +398,7 @@ export function CompanyRail() {
           <TooltipTrigger asChild>
             <button
               onClick={() => openOnboarding()}
-              className="flex items-center justify-center w-11 h-11 rounded-[22px] hover:rounded-[14px] border-2 border-dashed border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground transition-[border-color,color,border-radius] duration-150"
+              className={RAIL_ACTION_BUTTON_CLASS}
               aria-label="Add company"
             >
               <Plus className="h-5 w-5" />
@@ -411,7 +412,7 @@ export function CompanyRail() {
 
 
       {/* Separator before add button */}
-      <div className="w-8 h-px bg-border mx-auto shrink-0" />
+      <div className="w-8 h-px mb-2 bg-border mx-auto shrink-0" />
 
       {/* User avatar */}
       <div className="flex items-center justify-center pb-3 shrink-0">
