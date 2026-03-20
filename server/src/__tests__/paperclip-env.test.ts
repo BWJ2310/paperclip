@@ -130,5 +130,9 @@ describe("renderPaperclipConversationReplyNote", () => {
     expect(note).toContain(
       "Reply directly and briefly; avoid mentioning or questioning multiple other agents unless a real handoff or blocker requires it."
     );
+    expect(note).toContain("Paperclip does not choose a reply anchor for you.");
+    expect(note).toContain(
+      "If you want to reply in-thread, choose the message you are actually answering and set parentId explicitly."
+    );
   });
 });

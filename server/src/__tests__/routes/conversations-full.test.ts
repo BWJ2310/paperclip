@@ -540,6 +540,290 @@ describe("conversationRoutes", () => {
     expect(res.body.error).toBe("Agents can only include direct reports in conversations");
   });
 
+  it("downranks direct-report mentions to a manager while keeping same-level peer mentions at normal priority", async () => {
+    const now = new Date("2026-03-18T16:00:00.000Z");
+    const [company] = await testDb.db
+      .insert(companies)
+      .values({
+        id: "44444444-4444-4444-8444-444444444444",
+        name: "Hierarchy Priority Co",
+        issuePrefix: "HPRI",
+      })
+      .returning();
+
+    const [manager, reportA, reportB] = await testDb.db
+      .insert(agents)
+      .values([
+        {
+          id: "00000000-0000-4000-8000-000000000007",
+          companyId: company.id,
+          name: "Manager",
+          role: "manager",
+          adapterType: "process",
+          status: "idle",
+        },
+        {
+          id: "00000000-0000-4000-8000-000000000005",
+          companyId: company.id,
+          name: "Report A",
+          role: "general",
+          adapterType: "process",
+          status: "idle",
+          reportsTo: "00000000-0000-4000-8000-000000000007",
+        },
+        {
+          id: "00000000-0000-4000-8000-000000000004",
+          companyId: company.id,
+          name: "Report B",
+          role: "general",
+          adapterType: "process",
+          status: "idle",
+          reportsTo: "00000000-0000-4000-8000-000000000007",
+        },
+      ])
+      .returning();
+
+    const [conversation] = await testDb.db
+      .insert(conversations)
+      .values({
+        id: "33333333-3333-4333-8333-333333333333",
+        companyId: company.id,
+        title: "Hierarchy Wake Test",
+        createdByUserId: "board-user",
+        lastMessageSequence: 5,
+        updatedAt: now,
+      })
+      .returning();
+
+    await testDb.db.insert(conversationParticipants).values([
+      {
+        companyId: company.id,
+        conversationId: conversation.id,
+        agentId: manager.id,
+        joinedAt: now,
+        updatedAt: now,
+      },
+      {
+        companyId: company.id,
+        conversationId: conversation.id,
+        agentId: reportA.id,
+        joinedAt: now,
+        updatedAt: now,
+      },
+      {
+        companyId: company.id,
+        conversationId: conversation.id,
+        agentId: reportB.id,
+        joinedAt: now,
+        updatedAt: now,
+      },
+    ]);
+
+    setMockActor({
+      type: "agent",
+      agentId: reportA.id,
+      companyId: company.id,
+    });
+
+    const app = createTestApp(testDb.db);
+
+    const managerMention = await request(app)
+      .post(`/api/conversations/${conversation.id}/messages`)
+      .send({
+        bodyMarkdown: `Looping in [@${manager.name}](${buildStructuredMentionHref("agent", manager.id)}).`,
+        activeContextTargets: [],
+      });
+
+    expect(managerMention.status).toBe(201);
+
+    await waitForAssertion(async () => {
+      const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
+        (row) =>
+          row.conversationId === conversation.id &&
+          row.conversationMessageSequence === 6,
+      );
+      expect(wakeups).toHaveLength(1);
+      expect(wakeups[0]?.agentId).toBe(manager.id);
+
+      const runs = (await testDb.db.select().from(heartbeatRuns)).filter((row) => {
+        const context = (row.contextSnapshot ?? {}) as Record<string, unknown>;
+        return (
+          context.conversationId === conversation.id &&
+          context.conversationMessageSequence === 6
+        );
+      });
+      expect(runs).toHaveLength(1);
+      expect(((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).wakePriority).toBe(
+        "low",
+      );
+    });
+
+    const peerMention = await request(app)
+      .post(`/api/conversations/${conversation.id}/messages`)
+      .send({
+        bodyMarkdown: `Looping in [@${reportB.name}](${buildStructuredMentionHref("agent", reportB.id)}).`,
+        activeContextTargets: [],
+      });
+
+    expect(peerMention.status).toBe(201);
+
+    await waitForAssertion(async () => {
+      const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
+        (row) =>
+          row.conversationId === conversation.id &&
+          row.conversationMessageSequence === 7,
+      );
+      expect(wakeups).toHaveLength(1);
+      expect(wakeups[0]?.agentId).toBe(reportB.id);
+
+      const runs = (await testDb.db.select().from(heartbeatRuns)).filter((row) => {
+        const context = (row.contextSnapshot ?? {}) as Record<string, unknown>;
+        return (
+          context.conversationId === conversation.id &&
+          context.conversationMessageSequence === 7
+        );
+      });
+      expect(runs).toHaveLength(1);
+      expect(((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).wakePriority).toBe(
+        "normal",
+      );
+    });
+  });
+
+  it("lets the highest-rank manager kickoff a new turn in a direct-report-only conversation", async () => {
+    const now = new Date("2026-03-18T17:00:00.000Z");
+    const [company] = await testDb.db
+      .insert(companies)
+      .values({
+        id: "55555555-5555-4555-8555-555555555555",
+        name: "Manager Kickoff Co",
+        issuePrefix: "MKOF",
+      })
+      .returning();
+
+    const [manager, report] = await testDb.db
+      .insert(agents)
+      .values([
+        {
+          id: "00000000-0000-4000-8000-000000000001",
+          companyId: company.id,
+          name: "Manager",
+          role: "manager",
+          adapterType: "process",
+          status: "idle",
+        },
+        {
+          id: "00000000-0000-4000-8000-000000000002",
+          companyId: company.id,
+          name: "Report",
+          role: "general",
+          adapterType: "process",
+          status: "idle",
+          reportsTo: "00000000-0000-4000-8000-000000000001",
+        },
+      ])
+      .returning();
+
+    const [conversation] = await testDb.db
+      .insert(conversations)
+      .values({
+        id: "33333333-3333-4333-8333-333333333333",
+        companyId: company.id,
+        title: "Manager Kickoff Test",
+        createdByUserId: "board-user",
+        lastMessageSequence: 8,
+        updatedAt: now,
+      })
+      .returning();
+
+    await testDb.db.insert(conversationParticipants).values([
+      {
+        companyId: company.id,
+        conversationId: conversation.id,
+        agentId: manager.id,
+        joinedAt: now,
+        updatedAt: now,
+      },
+      {
+        companyId: company.id,
+        conversationId: conversation.id,
+        agentId: report.id,
+        joinedAt: now,
+        updatedAt: now,
+      },
+    ]);
+
+    await testDb.db.insert(conversationMessages).values([
+      {
+        companyId: company.id,
+        conversationId: conversation.id,
+        sequence: 6,
+        authorType: "user",
+        authorUserId: "board-user",
+        bodyMarkdown: "Please discuss the latest tradeoffs.",
+        createdAt: new Date("2026-03-18T17:06:00.000Z"),
+        updatedAt: new Date("2026-03-18T17:06:00.000Z"),
+      },
+      {
+        companyId: company.id,
+        conversationId: conversation.id,
+        sequence: 7,
+        authorType: "agent",
+        authorAgentId: report.id,
+        bodyMarkdown: "First report response.",
+        createdAt: new Date("2026-03-18T17:07:00.000Z"),
+        updatedAt: new Date("2026-03-18T17:07:00.000Z"),
+      },
+      {
+        companyId: company.id,
+        conversationId: conversation.id,
+        sequence: 8,
+        authorType: "agent",
+        authorAgentId: report.id,
+        bodyMarkdown: "Second report response.",
+        createdAt: new Date("2026-03-18T17:08:00.000Z"),
+        updatedAt: new Date("2026-03-18T17:08:00.000Z"),
+      },
+    ]);
+
+    setMockActor({
+      type: "agent",
+      agentId: manager.id,
+      companyId: company.id,
+    });
+
+    const res = await request(createTestApp(testDb.db))
+      .post(`/api/conversations/${conversation.id}/messages`)
+      .send({
+        bodyMarkdown: `[@${report.name}](${buildStructuredMentionHref("agent", report.id)}) please start a fresh pass from here.`,
+        activeContextTargets: [],
+      });
+
+    expect(res.status).toBe(201);
+
+    await waitForAssertion(async () => {
+      const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
+        (row) =>
+          row.conversationId === conversation.id &&
+          row.conversationMessageSequence === 9,
+      );
+      expect(wakeups).toHaveLength(1);
+      expect(wakeups[0]?.agentId).toBe(report.id);
+
+      const runs = (await testDb.db.select().from(heartbeatRuns)).filter((row) => {
+        const context = (row.contextSnapshot ?? {}) as Record<string, unknown>;
+        return (
+          context.conversationId === conversation.id &&
+          context.conversationMessageSequence === 9
+        );
+      });
+      expect(runs).toHaveLength(1);
+      expect(((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).wakePriority).toBe(
+        "normal",
+      );
+    });
+  });
+
   it("filters messages by text query with latest-window pagination", async () => {
     const fixture = await seedFixture();
 
@@ -974,6 +1258,183 @@ describe("conversationRoutes", () => {
     });
   });
 
+  it("does not auto-wake peers for an agent reply-to-human thread reply without mentions", async () => {
+    const fixture = await seedFixture();
+    const now = new Date("2026-03-18T12:05:00.000Z");
+    const [agentC] = await testDb.db
+      .insert(agents)
+      .values({
+        id: "00000000-0000-4000-8000-000000000007",
+        companyId: fixture.company.id,
+        name: "Agent C",
+        role: "general",
+        adapterType: "process",
+        status: "idle",
+      })
+      .returning();
+
+    await testDb.db.insert(conversationParticipants).values({
+      companyId: fixture.company.id,
+      conversationId: fixture.conversation.id,
+      agentId: agentC.id,
+      joinedAt: now,
+      updatedAt: now,
+    });
+
+    const [humanMessage] = await testDb.db
+      .insert(conversationMessages)
+      .values({
+        companyId: fixture.company.id,
+        conversationId: fixture.conversation.id,
+        sequence: 6,
+        authorType: "user",
+        authorUserId: "board-user",
+        bodyMarkdown: "Agent B, can you take the next pass on this?",
+        createdAt: new Date("2026-03-18T12:06:00.000Z"),
+        updatedAt: new Date("2026-03-18T12:06:00.000Z"),
+      })
+      .returning();
+
+    await testDb.db
+      .update(conversations)
+      .set({
+        lastMessageSequence: 6,
+        updatedAt: new Date("2026-03-18T12:06:00.000Z"),
+      })
+      .where(eq(conversations.id, fixture.conversation.id));
+
+    setMockActor({
+      type: "agent",
+      agentId: fixture.agentB.id,
+      companyId: fixture.company.id,
+    });
+
+    const res = await request(fixture.app)
+      .post(`/api/conversations/${fixture.conversation.id}/messages`)
+      .send({
+        bodyMarkdown: "Taking it from here.",
+        parentId: humanMessage.id,
+        activeContextTargets: [],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.parentId).toBe(humanMessage.id);
+
+    await waitForConversationMessagePostedActivity(fixture.conversation.id);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
+      (row) =>
+        row.conversationId === fixture.conversation.id &&
+        row.conversationMessageSequence === 7,
+    );
+
+    expect(wakeups).toHaveLength(0);
+  });
+
+  it("stops creating new wakes once the current human-to-human turn has at least one message per participant", async () => {
+    const fixture = await seedFixture();
+    const now = new Date("2026-03-18T12:05:00.000Z");
+    const [agentC] = await testDb.db
+      .insert(agents)
+      .values({
+        id: "00000000-0000-4000-8000-000000000021",
+        companyId: fixture.company.id,
+        name: "Agent C",
+        role: "general",
+        adapterType: "process",
+        status: "idle",
+      })
+      .returning();
+
+    await testDb.db.insert(conversationParticipants).values({
+      companyId: fixture.company.id,
+      conversationId: fixture.conversation.id,
+      agentId: agentC.id,
+      joinedAt: now,
+      updatedAt: now,
+    });
+
+    await testDb.db
+      .insert(conversationMessages)
+      .values([
+        {
+          companyId: fixture.company.id,
+          conversationId: fixture.conversation.id,
+          sequence: 6,
+          authorType: "user",
+          authorUserId: "board-user",
+          bodyMarkdown: "Team, please discuss the current tradeoffs.",
+          createdAt: new Date("2026-03-18T12:06:00.000Z"),
+          updatedAt: new Date("2026-03-18T12:06:00.000Z"),
+        },
+        {
+          companyId: fixture.company.id,
+          conversationId: fixture.conversation.id,
+          sequence: 7,
+          authorType: "agent",
+          authorAgentId: fixture.agentA.id,
+          bodyMarkdown: "First pass from Agent A.",
+          createdAt: new Date("2026-03-18T12:07:00.000Z"),
+          updatedAt: new Date("2026-03-18T12:07:00.000Z"),
+        },
+        {
+          companyId: fixture.company.id,
+          conversationId: fixture.conversation.id,
+          sequence: 8,
+          authorType: "agent",
+          authorAgentId: fixture.agentB.id,
+          bodyMarkdown: "Second pass from Agent B.",
+          createdAt: new Date("2026-03-18T12:08:00.000Z"),
+          updatedAt: new Date("2026-03-18T12:08:00.000Z"),
+        },
+        {
+          companyId: fixture.company.id,
+          conversationId: fixture.conversation.id,
+          sequence: 9,
+          authorType: "agent",
+          authorAgentId: agentC.id,
+          bodyMarkdown: "Third pass from Agent C.",
+          createdAt: new Date("2026-03-18T12:09:00.000Z"),
+          updatedAt: new Date("2026-03-18T12:09:00.000Z"),
+        },
+      ]);
+
+    await testDb.db
+      .update(conversations)
+      .set({
+        lastMessageSequence: 9,
+        updatedAt: new Date("2026-03-18T12:09:00.000Z"),
+      })
+      .where(eq(conversations.id, fixture.conversation.id));
+
+    setMockActor({
+      type: "agent",
+      agentId: fixture.agentA.id,
+      companyId: fixture.company.id,
+    });
+
+    const res = await request(fixture.app)
+      .post(`/api/conversations/${fixture.conversation.id}/messages`)
+      .send({
+        bodyMarkdown: `Looping in [@${fixture.agentB.name}](${buildStructuredMentionHref("agent", fixture.agentB.id)}) even though the turn budget is exhausted.`,
+        activeContextTargets: [],
+      });
+
+    expect(res.status).toBe(201);
+
+    await waitForConversationMessagePostedActivity(fixture.conversation.id);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
+      (row) =>
+        row.conversationId === fixture.conversation.id &&
+        row.conversationMessageSequence === 10,
+    );
+
+    expect(wakeups).toHaveLength(0);
+  });
+
   it("samples low-priority agent-authored replies", async () => {
     const fixture = await seedFixture();
     const [agentMessage] = await testDb.db
@@ -1040,7 +1501,7 @@ describe("conversationRoutes", () => {
     });
   });
 
-  it("posts an agent reply as top-level when parentId is omitted for a human handoff", async () => {
+  it("keeps an agent reply top-level when parentId is omitted after a direct mention", async () => {
     const fixture = await seedFixture();
     const [mentionMessage] = await testDb.db
       .insert(conversationMessages)
@@ -1102,7 +1563,7 @@ describe("conversationRoutes", () => {
     expect(res.body.parentMessage).toBeNull();
   });
 
-  it("does not infer reply threading when the triggering handoff message was already a reply", async () => {
+  it("keeps an agent reply top-level when parentId is omitted for a mention inside a thread", async () => {
     const fixture = await seedFixture();
     const [rootMessage] = await testDb.db
       .insert(conversationMessages)
@@ -1169,7 +1630,7 @@ describe("conversationRoutes", () => {
     const res = await request(fixture.app)
       .post(`/api/conversations/${fixture.conversation.id}/messages`)
       .send({
-        bodyMarkdown: "Handled. Posting this as a normal top-level update.",
+        bodyMarkdown: "Handled. Posting this back under the threaded handoff message.",
         activeContextTargets: [],
       });
 
@@ -1178,14 +1639,59 @@ describe("conversationRoutes", () => {
     expect(res.body.runId).toBe(run.id);
     expect(res.body.parentId).toBeNull();
     expect(res.body.parentMessage).toBeNull();
+  });
 
-    const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
-      (row) =>
-        row.conversationId === fixture.conversation.id &&
-        row.conversationMessageSequence === 8,
-    );
+  it("includes candidate anchor context so a mentioned agent can choose what to reply to", async () => {
+    const fixture = await seedFixture();
+    const [contextMessage] = await testDb.db
+      .insert(conversationMessages)
+      .values({
+        companyId: fixture.company.id,
+        conversationId: fixture.conversation.id,
+        sequence: 6,
+        authorType: "user",
+        authorUserId: "board-user",
+        bodyMarkdown: "Please review the earlier proposal and call out the sharpest risks.",
+        createdAt: new Date("2026-03-18T12:06:00.000Z"),
+        updatedAt: new Date("2026-03-18T12:06:00.000Z"),
+      })
+      .returning();
 
-    expect(wakeups).toHaveLength(0);
+    await testDb.db
+      .update(conversations)
+      .set({
+        lastMessageSequence: 6,
+        updatedAt: new Date("2026-03-18T12:06:00.000Z"),
+      })
+      .where(eq(conversations.id, fixture.conversation.id));
+
+    const res = await request(fixture.app)
+      .post(`/api/conversations/${fixture.conversation.id}/messages`)
+      .send({
+        bodyMarkdown: `[@${fixture.agentB.name}](${buildStructuredMentionHref("agent", fixture.agentB.id)})`,
+        activeContextTargets: [],
+      });
+
+    expect(res.status).toBe(201);
+
+    await waitForAssertion(async () => {
+      const runs = (await testDb.db.select().from(heartbeatRuns)).filter((row) => {
+        const context = (row.contextSnapshot ?? {}) as Record<string, unknown>;
+        return (
+          context.conversationId === fixture.conversation.id &&
+          context.conversationMessageSequence === 7
+        );
+      });
+
+      expect(runs).toHaveLength(1);
+      const context = (runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>;
+      const replyContextMarkdown = String(context.conversationReplyContextMarkdown ?? "");
+
+      expect(replyContextMarkdown).toContain("Choose `parentId` yourself");
+      expect(replyContextMarkdown).toContain(`- Message ID: ${res.body.id}`);
+      expect(replyContextMarkdown).toContain(`#6 | ${contextMessage.id} | Board`);
+      expect(replyContextMarkdown).toContain(contextMessage.bodyMarkdown);
+    });
   });
 
   it("allows an agent to explicitly reply in-thread by sending parentId", async () => {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, asc, desc, eq, inArray, max, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, max, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agentTaskSessions,
@@ -72,12 +72,6 @@ function toViewer(actor: ConversationActorContext): ConversationViewer {
 
 function readNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function normalizeMessageBody(value: string) {
@@ -169,9 +163,39 @@ function toConversationMessageParentSummary(
   };
 }
 
-function buildConversationReplyContextMarkdown(input: {
-  parentMessage: ConversationMessageParentSummary;
-  message: Pick<
+function renderConversationContextMessageBlock(
+  heading: string,
+  message:
+    | ConversationMessageParentSummary
+    | Pick<
+        ConversationMessage,
+        | "id"
+        | "sequence"
+        | "authorType"
+        | "authorUserId"
+        | "authorAgentId"
+        | "bodyMarkdown"
+        | "deletedAt"
+        | "createdAt"
+      >,
+) {
+  return [
+    `### ${heading}`,
+    `- Message ID: ${message.id}`,
+    `- Sequence: #${message.sequence}`,
+    `- Author: ${conversationMessageActorLabel({
+      authorType: message.authorType,
+      authorUserId: message.authorUserId,
+      authorAgentId: message.authorAgentId,
+    })}`,
+    `- Created at: ${message.createdAt.toISOString()}`,
+    "",
+    message.deletedAt ? "_This message was deleted._" : message.bodyMarkdown,
+  ];
+}
+
+function buildConversationWakeContextMarkdown(input: {
+  triggerMessage: Pick<
     ConversationMessage,
     | "id"
     | "sequence"
@@ -179,35 +203,49 @@ function buildConversationReplyContextMarkdown(input: {
     | "authorUserId"
     | "authorAgentId"
     | "bodyMarkdown"
+    | "deletedAt"
     | "createdAt"
   >;
+  triggerParentMessage: ConversationMessageParentSummary | null;
+  recentMessages: ConversationMessageParentSummary[];
+  directlyMentioned: boolean;
 }) {
   const lines = [
-    "## Conversation reply context",
-    "### Replied-to message",
-    `- Sequence: #${input.parentMessage.sequence}`,
-    `- Author: ${conversationMessageActorLabel({
-      authorType: input.parentMessage.authorType,
-      authorUserId: input.parentMessage.authorUserId,
-      authorAgentId: input.parentMessage.authorAgentId,
-    })}`,
-    `- Created at: ${input.parentMessage.createdAt.toISOString()}`,
+    "## Conversation wake context",
+    "Choose `parentId` yourself only when you intentionally want a threaded reply. Reply top-level otherwise.",
+    ...(input.directlyMentioned
+      ? [
+          "You were directly mentioned in the triggering message.",
+          "If that mention is only a nudge or handoff, you may instead anchor to the earlier message you are actually answering.",
+        ]
+      : []),
     "",
-    input.parentMessage.deletedAt
-      ? "_This message was deleted._"
-      : input.parentMessage.bodyMarkdown,
-    "",
-    "### New message that triggered this wake",
-    `- Sequence: #${input.message.sequence}`,
-    `- Author: ${conversationMessageActorLabel({
-      authorType: input.message.authorType,
-      authorUserId: input.message.authorUserId,
-      authorAgentId: input.message.authorAgentId,
-    })}`,
-    `- Created at: ${input.message.createdAt.toISOString()}`,
-    "",
-    input.message.bodyMarkdown,
+    ...renderConversationContextMessageBlock("Triggering message", input.triggerMessage),
   ];
+
+  if (input.triggerParentMessage) {
+    lines.push(
+      "",
+      ...renderConversationContextMessageBlock(
+        "Message that the trigger replied to",
+        input.triggerParentMessage,
+      ),
+    );
+  }
+
+  if (input.recentMessages.length > 0) {
+    lines.push("", "### Recent earlier messages");
+    for (const message of input.recentMessages) {
+      lines.push(
+        `- #${message.sequence} | ${message.id} | ${conversationMessageActorLabel({
+          authorType: message.authorType,
+          authorUserId: message.authorUserId,
+          authorAgentId: message.authorAgentId,
+        })}`,
+      );
+      lines.push(message.deletedAt ? "  _This message was deleted._" : `  ${message.bodyMarkdown}`);
+    }
+  }
 
   return lines.join("\n");
 }
@@ -235,10 +273,21 @@ function conversationTargetLinkActorFromMessage(input: {
   };
 }
 
-function responseModeForConversationWakePriority(
-  priority: "xlow" | "low" | "normal" | "high" | null,
-): "optional" | "required" | null {
-  return priority ? "optional" : null;
+type ConversationWakePriority = "xlow" | "low" | "normal" | "high";
+
+type ConversationWakeTarget = {
+  agentId: string;
+  priority: ConversationWakePriority;
+};
+
+function downgradeConversationWakePriority(
+  priority: ConversationWakePriority,
+  steps: number,
+): ConversationWakePriority {
+  if (steps <= 0) return priority;
+  const ordered: ConversationWakePriority[] = ["high", "normal", "low", "xlow"];
+  const index = ordered.indexOf(priority);
+  return ordered[Math.min(ordered.length - 1, index + steps)]!;
 }
 
 function wakeSampleRateForConversationPriority(
@@ -281,61 +330,117 @@ function shouldTriggerConversationWakeForAgent(input: {
   return sample < rate;
 }
 
+function conversationAncestorDistance(input: {
+  descendantAgentId: string;
+  ancestorAgentId: string;
+  parentById: Map<string, string | null>;
+}) {
+  let distance = 0;
+  let currentAgentId = input.descendantAgentId;
+  const visited = new Set<string>();
+
+  while (!visited.has(currentAgentId)) {
+    visited.add(currentAgentId);
+    const parentAgentId = input.parentById.get(currentAgentId) ?? null;
+    if (!parentAgentId) return null;
+    distance += 1;
+    if (parentAgentId === input.ancestorAgentId) return distance;
+    currentAgentId = parentAgentId;
+  }
+
+  return null;
+}
+
+function toConversationWakeTargets(input: {
+  actor: ConversationActorContext;
+  targetAgentIds: string[];
+  basePriority: ConversationWakePriority;
+  parentById: Map<string, string | null>;
+}) {
+  return input.targetAgentIds.map((agentId) => {
+    if (input.actor.viewerType !== "agent") {
+      return { agentId, priority: input.basePriority } satisfies ConversationWakeTarget;
+    }
+
+    const hierarchyDistance = conversationAncestorDistance({
+      descendantAgentId: input.actor.agentId,
+      ancestorAgentId: agentId,
+      parentById: input.parentById,
+    });
+
+    return {
+      agentId,
+      priority:
+        hierarchyDistance === null
+          ? input.basePriority
+          : downgradeConversationWakePriority(
+              input.basePriority,
+              Math.min(hierarchyDistance, 2),
+            ),
+    } satisfies ConversationWakeTarget;
+  });
+}
+
+function uniqueConversationWakeAgentIds(
+  actor: ConversationActorContext,
+  agentIds: string[],
+) {
+  const uniqueAgentIds = [...new Set(agentIds)];
+  return actor.viewerType === "agent"
+    ? uniqueAgentIds.filter((agentId) => agentId !== actor.agentId)
+    : uniqueAgentIds;
+}
+
 function resolveConversationWakeRouting(
   actor: ConversationActorContext,
   participantAgentIds: string[],
   mentionedAgentIds: string[],
   replyTargetAgentIds: string[],
+  parentById: Map<string, string | null>,
 ): {
-  wakeupAgentIds: string[];
-  priority: "xlow" | "low" | "normal" | "high" | null;
+  wakeTargets: ConversationWakeTarget[];
 } {
-  const dedupedParticipantAgentIds = [...new Set(participantAgentIds)];
-  const dedupedMentionedAgentIds = [...new Set(mentionedAgentIds)];
-  const dedupedReplyTargetAgentIds = [...new Set(replyTargetAgentIds)];
-  const routedParticipantAgentIds =
-    actor.viewerType === "agent"
-      ? dedupedParticipantAgentIds.filter((agentId) => agentId !== actor.agentId)
-      : dedupedParticipantAgentIds;
-  const routedMentionedAgentIds =
-    actor.viewerType === "agent"
-      ? dedupedMentionedAgentIds.filter((agentId) => agentId !== actor.agentId)
-      : dedupedMentionedAgentIds;
-  const routedReplyTargetAgentIds =
-    actor.viewerType === "agent"
-      ? dedupedReplyTargetAgentIds.filter((agentId) => agentId !== actor.agentId)
-      : dedupedReplyTargetAgentIds;
-  const routedAgentIds = [
-    ...new Set([...routedMentionedAgentIds, ...routedReplyTargetAgentIds]),
-  ];
+  const routedParticipantAgentIds = uniqueConversationWakeAgentIds(actor, participantAgentIds);
+  const routedMentionedAgentIds = uniqueConversationWakeAgentIds(actor, mentionedAgentIds);
+  const routedReplyTargetAgentIds = uniqueConversationWakeAgentIds(actor, replyTargetAgentIds);
 
   if (routedMentionedAgentIds.length > 0) {
-    const priority = actor.viewerType === "board" ? "high" : "normal";
     return {
-      wakeupAgentIds: routedAgentIds,
-      priority,
+      wakeTargets: toConversationWakeTargets({
+        actor,
+        targetAgentIds: [
+          ...new Set([...routedMentionedAgentIds, ...routedReplyTargetAgentIds]),
+        ],
+        basePriority: actor.viewerType === "board" ? "high" : "normal",
+        parentById,
+      }),
     };
   }
 
   if (routedReplyTargetAgentIds.length > 0) {
-    const priority = actor.viewerType === "board" ? "normal" : "low";
     return {
-      wakeupAgentIds: routedReplyTargetAgentIds,
-      priority,
+      wakeTargets: toConversationWakeTargets({
+        actor,
+        targetAgentIds: routedReplyTargetAgentIds,
+        basePriority: actor.viewerType === "board" ? "normal" : "low",
+        parentById,
+      }),
     };
   }
 
   if (routedParticipantAgentIds.length > 0) {
-    const priority = actor.viewerType === "board" ? "low" : "xlow";
     return {
-      wakeupAgentIds: routedParticipantAgentIds,
-      priority,
+      wakeTargets: toConversationWakeTargets({
+        actor,
+        targetAgentIds: routedParticipantAgentIds,
+        basePriority: actor.viewerType === "board" ? "low" : "xlow",
+        parentById,
+      }),
     };
   }
 
   return {
-    wakeupAgentIds: [],
-    priority: null,
+    wakeTargets: [],
   };
 }
 
@@ -387,13 +492,174 @@ export function conversationService(db: Db) {
     return Boolean(message) && message?.deletedAt === null;
   }
 
+  async function loadRecentWakeContextMessages(input: {
+    companyId: string;
+    conversationId: string;
+    beforeSequence: number;
+    excludeMessageIds: string[];
+  }) {
+    const excludedIds = new Set(input.excludeMessageIds);
+    const rows = await db
+      .select({
+        id: conversationMessages.id,
+        sequence: conversationMessages.sequence,
+        authorType: conversationMessages.authorType,
+        authorUserId: conversationMessages.authorUserId,
+        authorAgentId: conversationMessages.authorAgentId,
+        bodyMarkdown: conversationMessages.bodyMarkdown,
+        deletedAt: conversationMessages.deletedAt,
+        createdAt: conversationMessages.createdAt,
+      })
+      .from(conversationMessages)
+      .where(
+        and(
+          eq(conversationMessages.companyId, input.companyId),
+          eq(conversationMessages.conversationId, input.conversationId),
+          isNull(conversationMessages.deletedAt),
+          sql`${conversationMessages.sequence} < ${input.beforeSequence}`,
+        ),
+      )
+      .orderBy(desc(conversationMessages.sequence))
+      .limit(4);
+
+    return rows
+      .filter((row) => !excludedIds.has(row.id))
+      .slice(0, 3)
+      .reverse()
+      .map((row) => toConversationMessageParentSummary(row));
+  }
+
+  async function loadConversationParticipantHierarchy(
+    companyId: string,
+    participantAgentIds: string[],
+  ) {
+    const uniqueParticipantAgentIds = [...new Set(participantAgentIds)];
+    if (uniqueParticipantAgentIds.length === 0) {
+      return {
+        parentById: new Map<string, string | null>(),
+        kickoffEligibleAgentIds: new Set<string>(),
+      };
+    }
+
+    const parentById = new Map<string, string | null>();
+    let frontier = [...uniqueParticipantAgentIds];
+
+    while (frontier.length > 0) {
+      const batch = frontier.filter((agentId) => !parentById.has(agentId));
+      if (batch.length === 0) break;
+
+      const rows = await db
+        .select({
+          id: agents.id,
+          reportsTo: agents.reportsTo,
+        })
+        .from(agents)
+        .where(and(eq(agents.companyId, companyId), inArray(agents.id, batch)));
+
+      for (const row of rows) {
+        parentById.set(row.id, row.reportsTo ?? null);
+      }
+
+      frontier = rows
+        .map((row) => row.reportsTo)
+        .filter(
+          (agentId): agentId is string =>
+            typeof agentId === "string" && !parentById.has(agentId),
+        );
+    }
+
+    const kickoffEligibleAgentIds = new Set(
+      uniqueParticipantAgentIds.length <= 1
+        ? []
+        : uniqueParticipantAgentIds.filter((agentId) =>
+            uniqueParticipantAgentIds
+              .filter((candidateId) => candidateId !== agentId)
+              .every((candidateId) => parentById.get(candidateId) === agentId),
+          ),
+    );
+
+    return {
+      parentById,
+      kickoffEligibleAgentIds,
+    };
+  }
+
+  async function hasConversationWakeCapacityForMessage(input: {
+    companyId: string;
+    conversationId: string;
+    messageSequence: number;
+    messageAuthorType: ConversationMessage["authorType"];
+    messageAuthorAgentId: string | null;
+    messageParentId: string | null;
+    participantAgentIds: string[];
+    kickoffEligibleAgentIds: Set<string>;
+  }) {
+    if (input.messageAuthorType === "user") return true;
+
+    const participantAgentCount = [...new Set(input.participantAgentIds)].length;
+    if (participantAgentCount <= 0) return false;
+
+    const currentMessageIsManagerKickoff =
+      input.messageAuthorType === "agent" &&
+      input.messageParentId === null &&
+      input.messageAuthorAgentId !== null &&
+      input.kickoffEligibleAgentIds.has(input.messageAuthorAgentId);
+    if (currentMessageIsManagerKickoff) return true;
+
+    const latestResetSequence = await db
+      .select({
+        sequence: max(conversationMessages.sequence),
+      })
+      .from(conversationMessages)
+      .where(
+        and(
+          eq(conversationMessages.companyId, input.companyId),
+          eq(conversationMessages.conversationId, input.conversationId),
+          sql`${conversationMessages.sequence} < ${input.messageSequence}`,
+          input.kickoffEligibleAgentIds.size > 0
+            ? or(
+                eq(conversationMessages.authorType, "user"),
+                and(
+                  eq(conversationMessages.authorType, "agent"),
+                  isNull(conversationMessages.parentId),
+                  inArray(
+                    conversationMessages.authorAgentId,
+                    [...input.kickoffEligibleAgentIds],
+                  ),
+                ),
+              )
+            : eq(conversationMessages.authorType, "user"),
+        ),
+      )
+      .then((rows) => rows[0]?.sequence ?? null);
+
+    const priorTurnMessageCount = await db
+      .select({
+        count: sql<number>`count(*)`,
+      })
+      .from(conversationMessages)
+      .where(
+        and(
+          eq(conversationMessages.companyId, input.companyId),
+          eq(conversationMessages.conversationId, input.conversationId),
+          latestResetSequence === null
+            ? sql`${conversationMessages.sequence} < ${input.messageSequence}`
+            : sql`${conversationMessages.sequence} > ${latestResetSequence} and ${conversationMessages.sequence} < ${input.messageSequence}`,
+        ),
+      )
+      .then((rows) => Number(rows[0]?.count ?? 0));
+
+    return priorTurnMessageCount < participantAgentCount;
+  }
+
   async function runMessagePostSideEffects(input: {
     conversation: ConversationRow;
     actor: ConversationActorContext;
     created: {
       message: ConversationMessage;
-      wakeupAgentIds: string[];
-      wakeupPriority: "xlow" | "low" | "normal" | "high" | null;
+      participantAgentIds: string[];
+      kickoffEligibleAgentIds: Set<string>;
+      wakeTargets: ConversationWakeTarget[];
     };
   }) {
     const { conversation, actor, created } = input;
@@ -403,34 +669,56 @@ export function conversationService(db: Db) {
     }
 
     try {
+      if (created.wakeTargets.length === 0) return;
+
       const singleTarget = singleTargetFromRefs(created.message.refs);
-      const replyContextMarkdown = created.message.parentMessage
-        ? buildConversationReplyContextMarkdown({
-            parentMessage: created.message.parentMessage,
-            message: created.message,
-          })
-        : null;
-      const wakeupResponseMode = responseModeForConversationWakePriority(
-        created.wakeupPriority,
-      );
+      const hasWakeCapacity = await hasConversationWakeCapacityForMessage({
+        companyId: conversation.companyId,
+        conversationId: conversation.id,
+        messageSequence: created.message.sequence,
+        messageAuthorType: created.message.authorType,
+        messageAuthorAgentId: created.message.authorAgentId,
+        messageParentId: created.message.parentId,
+        participantAgentIds: created.participantAgentIds,
+        kickoffEligibleAgentIds: created.kickoffEligibleAgentIds,
+      });
+      if (!hasWakeCapacity) return;
+
+      const recentWakeContextMessages = await loadRecentWakeContextMessages({
+        companyId: conversation.companyId,
+        conversationId: conversation.id,
+        beforeSequence: created.message.sequence,
+        excludeMessageIds: [
+          created.message.id,
+          ...(created.message.parentMessage ? [created.message.parentMessage.id] : []),
+        ],
+      });
       const heartbeat = heartbeatService(db);
-      for (const agentId of created.wakeupAgentIds) {
-        if (!wakeupResponseMode) continue;
+      for (const wakeTarget of created.wakeTargets) {
         if (
           !shouldTriggerConversationWakeForAgent({
             conversationId: conversation.id,
             conversationMessageSequence: created.message.sequence,
-            agentId,
-            priority: created.wakeupPriority,
+            agentId: wakeTarget.agentId,
+            priority: wakeTarget.priority,
           })
         ) {
           continue;
         }
-        await heartbeat.wakeup(agentId, {
+        const directlyMentioned = created.message.refs.some(
+          (ref) => ref.refKind === "agent" && ref.targetId === wakeTarget.agentId,
+        );
+        const replyContextMarkdown = buildConversationWakeContextMarkdown({
+          triggerMessage: created.message,
+          triggerParentMessage: created.message.parentMessage,
+          recentMessages: recentWakeContextMessages,
+          directlyMentioned,
+        });
+        await heartbeat.wakeup(wakeTarget.agentId, {
           source: "conversation_message",
           triggerDetail: "manual",
           reason: "conversation_message",
-          priority: created.wakeupPriority ?? undefined,
+          priority: wakeTarget.priority,
           requestedByActorType: actor.actorType,
           requestedByActorId: actor.actorId,
           contextSnapshot: {
@@ -439,10 +727,9 @@ export function conversationService(db: Db) {
             conversationId: conversation.id,
             conversationMessageId: created.message.id,
             conversationMessageSequence: created.message.sequence,
-            conversationResponseMode: wakeupResponseMode,
+            conversationResponseMode: "optional",
             conversationTargetKind: singleTarget?.targetKind ?? null,
             conversationTargetId: singleTarget?.targetId ?? null,
-            conversationReplyToMessageId: created.message.parentMessage?.id ?? null,
             conversationReplyContextMarkdown: replyContextMarkdown,
           },
         });
@@ -1658,8 +1945,7 @@ export function conversationService(db: Db) {
       const explicitParentId = hasExplicitParentId
         ? readNonEmptyString(input.parentId)
         : null;
-      const effectiveParentId = explicitParentId;
-      let parentMessageRow = effectiveParentId
+      let parentMessageRow = explicitParentId
         ? await db
             .select({
               id: conversationMessages.id,
@@ -1674,7 +1960,7 @@ export function conversationService(db: Db) {
             .from(conversationMessages)
             .where(
               and(
-                eq(conversationMessages.id, effectiveParentId),
+                eq(conversationMessages.id, explicitParentId),
                 eq(conversationMessages.conversationId, conversationId),
               ),
             )
@@ -1797,12 +2083,6 @@ export function conversationService(db: Db) {
           participantAgentIds.includes(parentMessage.authorAgentId)
             ? [parentMessage.authorAgentId]
             : [];
-        const wakeRouting = resolveConversationWakeRouting(
-          actor,
-          participantAgentIds,
-          targetedAgentIds,
-          replyTargetAgentIds,
-        );
 
         const targetObjectRefs = persistedRefs.filter(
           (ref) => ref.refKind === "issue" || ref.refKind === "goal" || ref.refKind === "project",
@@ -1880,11 +2160,32 @@ export function conversationService(db: Db) {
           } satisfies ConversationMessage,
           affectedPairs,
           participantAgentIds,
+          targetedAgentIds,
+          replyTargetAgentIds,
           readState,
-          wakeupAgentIds: wakeRouting.wakeupAgentIds,
-          wakeupPriority: wakeRouting.priority,
         };
       });
+
+      const participantHierarchy = await loadConversationParticipantHierarchy(
+        conversation.companyId,
+        created.participantAgentIds,
+      );
+      const suppressWakeRoutingForAgentHumanThreadReply =
+        actor.viewerType === "agent" &&
+        created.message.parentMessage !== null &&
+        created.targetedAgentIds.length === 0 &&
+        created.replyTargetAgentIds.length === 0;
+      const wakeRouting = suppressWakeRoutingForAgentHumanThreadReply
+        ? {
+            wakeTargets: [],
+          }
+        : resolveConversationWakeRouting(
+            actor,
+            created.participantAgentIds,
+            created.targetedAgentIds,
+            created.replyTargetAgentIds,
+            participantHierarchy.parentById,
+          );
 
       await memory.rebuildForPairs(conversation.companyId, created.affectedPairs);
 
@@ -1950,8 +2251,9 @@ export function conversationService(db: Db) {
           actor,
           created: {
             message: created.message,
-            wakeupAgentIds: created.wakeupAgentIds,
-            wakeupPriority: created.wakeupPriority,
+            participantAgentIds: created.participantAgentIds,
+            kickoffEligibleAgentIds: participantHierarchy.kickoffEligibleAgentIds,
+            wakeTargets: wakeRouting.wakeTargets,
           },
         }).catch((err) => {
           logger.error(
