@@ -4,13 +4,14 @@ import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import type { BillingType } from "@paperclipai/shared";
+import { parseTaskKey, readIssueIdFromTaskKey, type BillingType } from "@paperclipai/shared";
 import {
   agents,
   agentRuntimeState,
   agentTaskSessions,
   agentWakeupRequests,
   authUsers,
+  conversationMessages,
   heartbeatRunEvents,
   heartbeatRuns,
   issues,
@@ -544,6 +545,124 @@ function buildConversationWakeupFields(
   };
 }
 
+type SucceededWakeupStatusResolution = {
+  status: "completed" | "failed" | "cancelled";
+  error: string | null;
+  missingRequiredReply: boolean;
+  conversationId: string | null;
+  activeRequiredTriggerSequence: number | null;
+};
+
+export async function resolveSucceededWakeupStatus(
+  db: Db,
+  run: typeof heartbeatRuns.$inferSelect,
+  defaultError: string | null
+): Promise<SucceededWakeupStatusResolution> {
+  if (!run.wakeupRequestId) {
+    return {
+      status: "completed",
+      error: defaultError,
+      missingRequiredReply: false,
+      conversationId: null,
+      activeRequiredTriggerSequence: null,
+    };
+  }
+
+  const wakeupRequest = await db
+    .select({
+      id: agentWakeupRequests.id,
+      status: agentWakeupRequests.status,
+      conversationId: agentWakeupRequests.conversationId,
+      conversationMessageSequence: agentWakeupRequests.conversationMessageSequence,
+      responseMode: agentWakeupRequests.responseMode,
+      error: agentWakeupRequests.error,
+    })
+    .from(agentWakeupRequests)
+    .where(eq(agentWakeupRequests.id, run.wakeupRequestId))
+    .then((rows) => rows[0] ?? null);
+
+  if (!wakeupRequest) {
+    return {
+      status: "completed",
+      error: defaultError,
+      missingRequiredReply: false,
+      conversationId: null,
+      activeRequiredTriggerSequence: null,
+    };
+  }
+
+  if (wakeupRequest.status === "cancelled") {
+    return {
+      status: "cancelled",
+      error: wakeupRequest.error ?? defaultError ?? "cancelled",
+      missingRequiredReply: false,
+      conversationId: wakeupRequest.conversationId,
+      activeRequiredTriggerSequence: wakeupRequest.conversationMessageSequence,
+    };
+  }
+
+  if (wakeupRequest.status === "failed") {
+    return {
+      status: "failed",
+      error: wakeupRequest.error ?? defaultError,
+      missingRequiredReply: false,
+      conversationId: wakeupRequest.conversationId,
+      activeRequiredTriggerSequence: wakeupRequest.conversationMessageSequence,
+    };
+  }
+
+  if (wakeupRequest.responseMode !== "required") {
+    return {
+      status: "completed",
+      error: defaultError,
+      missingRequiredReply: false,
+      conversationId: wakeupRequest.conversationId,
+      activeRequiredTriggerSequence: wakeupRequest.conversationMessageSequence,
+    };
+  }
+
+  const matchingReply =
+    wakeupRequest.conversationId &&
+    wakeupRequest.conversationMessageSequence
+      ? await db
+          .select({
+            id: conversationMessages.id,
+            sequence: conversationMessages.sequence,
+          })
+          .from(conversationMessages)
+          .where(
+            and(
+              eq(conversationMessages.conversationId, wakeupRequest.conversationId),
+              eq(conversationMessages.authorType, "agent"),
+              eq(conversationMessages.authorAgentId, run.agentId),
+              eq(conversationMessages.runId, run.id),
+              gt(conversationMessages.sequence, wakeupRequest.conversationMessageSequence),
+            )
+          )
+          .orderBy(asc(conversationMessages.sequence))
+          .limit(1)
+          .then((rows) => rows[0] ?? null)
+      : null;
+
+  if (matchingReply) {
+    return {
+      status: "completed",
+      error: defaultError,
+      missingRequiredReply: false,
+      conversationId: wakeupRequest.conversationId,
+      activeRequiredTriggerSequence: wakeupRequest.conversationMessageSequence,
+    };
+  }
+
+  return {
+    status: "failed",
+    error: "required_reply_missing",
+    missingRequiredReply: true,
+    conversationId: wakeupRequest.conversationId,
+    activeRequiredTriggerSequence: wakeupRequest.conversationMessageSequence,
+  };
+}
+
 function normalizeUsageTotals(
   usage: UsageSummary | null | undefined
 ): UsageTotals | null {
@@ -703,15 +822,26 @@ function deriveTaskKey(
   contextSnapshot: Record<string, unknown> | null | undefined,
   payload: Record<string, unknown> | null | undefined,
 ) {
-  return (
-    readNonEmptyString(contextSnapshot?.taskKey) ??
-    readNonEmptyString(contextSnapshot?.taskId) ??
-    readNonEmptyString(contextSnapshot?.issueId) ??
-    readNonEmptyString(payload?.taskKey) ??
-    readNonEmptyString(payload?.taskId) ??
-    readNonEmptyString(payload?.issueId) ??
-    null
-  );
+  const contextTaskKey = parseTaskKey(readNonEmptyString(contextSnapshot?.taskKey));
+  if (contextTaskKey) return contextTaskKey.raw;
+
+  const payloadTaskKey = parseTaskKey(readNonEmptyString(payload?.taskKey));
+  return payloadTaskKey?.raw ?? null;
+}
+
+function normalizeTaskScopeContextSnapshot(
+  contextSnapshot: Record<string, unknown>,
+) {
+  const existingTaskKey = parseTaskKey(readNonEmptyString(contextSnapshot["taskKey"]));
+
+  delete contextSnapshot.taskId;
+  if (existingTaskKey) {
+    contextSnapshot.taskKey = existingTaskKey.raw;
+  } else {
+    delete contextSnapshot.taskKey;
+  }
+
+  return contextSnapshot;
 }
 
 export function shouldResetTaskSessionForWake(
@@ -759,23 +889,19 @@ function enrichWakeContextSnapshot(input: {
   source: WakeupOptions["source"];
   triggerDetail: WakeupOptions["triggerDetail"] | null;
   payload: Record<string, unknown> | null;
+  priority?: WakePriority | null;
 }) {
-  const { contextSnapshot, reason, source, triggerDetail, payload } = input;
+  const { contextSnapshot, reason, source, triggerDetail, payload, priority } = input;
   const issueIdFromPayload = readNonEmptyString(payload?.["issueId"]);
   const commentIdFromPayload = readNonEmptyString(payload?.["commentId"]);
   const taskKey = deriveTaskKey(contextSnapshot, payload);
   const wakeCommentId = deriveCommentId(contextSnapshot, payload);
+  normalizeTaskScopeContextSnapshot(contextSnapshot);
 
   if (!readNonEmptyString(contextSnapshot["wakeReason"]) && reason) {
     contextSnapshot.wakeReason = reason;
   }
-  if (!readNonEmptyString(contextSnapshot["issueId"]) && issueIdFromPayload) {
-    contextSnapshot.issueId = issueIdFromPayload;
-  }
-  if (!readNonEmptyString(contextSnapshot["taskId"]) && issueIdFromPayload) {
-    contextSnapshot.taskId = issueIdFromPayload;
-  }
-  if (!readNonEmptyString(contextSnapshot["taskKey"]) && taskKey) {
+  if (taskKey) {
     contextSnapshot.taskKey = taskKey;
   }
   if (!readNonEmptyString(contextSnapshot["commentId"]) && commentIdFromPayload) {
@@ -789,6 +915,33 @@ function enrichWakeContextSnapshot(input: {
   }
   if (!readNonEmptyString(contextSnapshot["wakeTriggerDetail"]) && triggerDetail) {
     contextSnapshot.wakeTriggerDetail = triggerDetail;
+  }
+  const conversationResponseModeFromPayload = readConversationResponseMode(
+    payload?.["conversationResponseMode"] ?? payload?.["responseMode"]
+  );
+  if (
+    !readConversationResponseMode(contextSnapshot["conversationResponseMode"]) &&
+    conversationResponseModeFromPayload
+  ) {
+    contextSnapshot.conversationResponseMode = conversationResponseModeFromPayload;
+  }
+  const conversationTargetKindFromPayload = readConversationTargetKind(
+    payload?.["conversationTargetKind"]
+  );
+  const conversationTargetIdFromPayload = readNonEmptyString(
+    payload?.["conversationTargetId"]
+  );
+  if (
+    !readConversationTargetKind(contextSnapshot["conversationTargetKind"]) &&
+    conversationTargetKindFromPayload &&
+    conversationTargetIdFromPayload
+  ) {
+    contextSnapshot.conversationTargetKind = conversationTargetKindFromPayload;
+    contextSnapshot.conversationTargetId = conversationTargetIdFromPayload;
+  }
+  const normalizedPriority = readWakePriority(priority);
+  if (normalizedPriority) {
+    contextSnapshot.wakePriority = normalizedPriority;
   }
 
   return {
@@ -814,7 +967,21 @@ function mergeCoalescedContextSnapshot(
     merged.commentId = commentId;
     merged.wakeCommentId = commentId;
   }
-  return merged;
+  const mergedConversationState = mergeConversationWakeStates(
+    readConversationWakeState(existing, null),
+    readConversationWakeState(incoming, null),
+  );
+  applyConversationWakeState(merged, mergedConversationState);
+  const mergedPriority = mergeWakePriorities(
+    readWakePriority(existing.wakePriority),
+    readWakePriority(incoming.wakePriority),
+  );
+  if (mergedPriority) {
+    merged.wakePriority = mergedPriority;
+  } else {
+    delete merged.wakePriority;
+  }
+  return normalizeTaskScopeContextSnapshot(merged);
 }
 
 function runTaskKey(run: typeof heartbeatRuns.$inferSelect) {
@@ -1532,6 +1699,21 @@ export function heartbeatService(db: Db) {
       .where(eq(agentWakeupRequests.id, wakeupRequestId));
   }
 
+  async function syncConversationWakeupState(
+    database: Pick<Db, "update">,
+    wakeupRequestId: string | null | undefined,
+    contextSnapshot: Record<string, unknown> | null | undefined,
+  ) {
+    if (!wakeupRequestId) return;
+    await database
+      .update(agentWakeupRequests)
+      .set({
+        ...buildConversationWakeupFields(contextSnapshot, null),
+        updatedAt: new Date(),
+      })
+      .where(eq(agentWakeupRequests.id, wakeupRequestId));
+  }
+
   async function appendRunEvent(
     run: typeof heartbeatRuns.$inferSelect,
     seq: number,
@@ -2036,12 +2218,11 @@ export function heartbeatService(db: Db) {
         .select()
         .from(heartbeatRuns)
         .where(and(eq(heartbeatRuns.agentId, agentId), eq(heartbeatRuns.status, "queued")))
-        .orderBy(asc(heartbeatRuns.createdAt))
-        .limit(availableSlots);
+        .orderBy(asc(heartbeatRuns.createdAt));
       if (queuedRuns.length === 0) return [];
 
       const claimedRuns: Array<typeof heartbeatRuns.$inferSelect> = [];
-      for (const queuedRun of queuedRuns) {
+      for (const queuedRun of queuedRuns.sort(compareQueuedRunsForStart).slice(0, availableSlots)) {
         const claimed = await claimQueuedRun(queuedRun);
         if (claimed) claimedRuns.push(claimed);
       }
@@ -2791,13 +2972,33 @@ export function heartbeatService(db: Db) {
         logCompressed: logSummary?.compressed ?? false,
       });
 
-      await setWakeupStatus(run.wakeupRequestId, outcome === "succeeded" ? "completed" : status, {
+      const succeededWakeup = await resolveSucceededWakeupStatus(
+        db,
+        run,
+        adapterResult.errorMessage ?? null,
+      );
+      await setWakeupStatus(run.wakeupRequestId, outcome === "succeeded" ? succeededWakeup.status : status, {
         finishedAt: new Date(),
-        error: adapterResult.errorMessage ?? null,
+        error: outcome === "succeeded" ? succeededWakeup.error : adapterResult.errorMessage ?? null,
       });
 
       const finalizedRun = await getRun(run.id);
       if (finalizedRun) {
+        if (outcome === "succeeded" && succeededWakeup.missingRequiredReply) {
+          await appendRunEvent(finalizedRun, seq++, {
+            eventType: "required_reply_missing",
+            stream: "system",
+            level: "warn",
+            message: "run succeeded without satisfying required conversation reply",
+            payload: {
+              conversationId: succeededWakeup.conversationId,
+              activeRequiredTriggerSequence: succeededWakeup.activeRequiredTriggerSequence,
+              wakeupRequestId: finalizedRun.wakeupRequestId,
+              wakeupStatus: succeededWakeup.status,
+              wakeupError: succeededWakeup.error,
+            },
+          });
+        }
         await appendRunEvent(finalizedRun, seq++, {
           eventType: "lifecycle",
           stream: "system",
@@ -3097,7 +3298,6 @@ export function heartbeatService(db: Db) {
     const payload = opts.payload ?? null;
     const {
       contextSnapshot: enrichedContextSnapshot,
-      issueIdFromPayload,
       taskKey,
       wakeCommentId,
     } = enrichWakeContextSnapshot({
@@ -3106,8 +3306,12 @@ export function heartbeatService(db: Db) {
       source,
       triggerDetail,
       payload,
+      priority: opts.priority ?? null,
     });
-    const issueId = readNonEmptyString(enrichedContextSnapshot.issueId) ?? issueIdFromPayload;
+    const issueId =
+      readIssueIdFromTaskKey(taskKey) ??
+      readNonEmptyString(enrichedContextSnapshot.issueId) ??
+      null;
 
     const agent = await getAgent(agentId);
     if (!agent) throw notFound("Agent not found");
@@ -3124,6 +3328,7 @@ export function heartbeatService(db: Db) {
         requestedByActorType: opts.requestedByActorType ?? null,
         requestedByActorId: opts.requestedByActorId ?? null,
         idempotencyKey: opts.idempotencyKey ?? null,
+        ...buildConversationWakeupFields(enrichedContextSnapshot, payload),
         finishedAt: new Date(),
       });
     };
@@ -3204,6 +3409,7 @@ export function heartbeatService(db: Db) {
             requestedByActorType: opts.requestedByActorType ?? null,
             requestedByActorId: opts.requestedByActorId ?? null,
             idempotencyKey: opts.idempotencyKey ?? null,
+            ...buildConversationWakeupFields(enrichedContextSnapshot, payload),
             finishedAt: new Date(),
           });
           return { kind: "skipped" as const };
@@ -3301,6 +3507,12 @@ export function heartbeatService(db: Db) {
               .returning()
               .then((rows) => rows[0] ?? activeExecutionRun);
 
+            await syncConversationWakeupState(
+              tx,
+              activeExecutionRun.wakeupRequestId,
+              mergedContextSnapshot,
+            );
+
             await tx.insert(agentWakeupRequests).values({
               companyId: agent.companyId,
               agentId,
@@ -3313,6 +3525,7 @@ export function heartbeatService(db: Db) {
               requestedByActorType: opts.requestedByActorType ?? null,
               requestedByActorId: opts.requestedByActorId ?? null,
               idempotencyKey: opts.idempotencyKey ?? null,
+              ...buildConversationWakeupFields(mergedContextSnapshot, payload),
               runId: mergedRun.id,
               finishedAt: new Date(),
             });
@@ -3378,6 +3591,7 @@ export function heartbeatService(db: Db) {
             requestedByActorType: opts.requestedByActorType ?? null,
             requestedByActorId: opts.requestedByActorId ?? null,
             idempotencyKey: opts.idempotencyKey ?? null,
+            ...buildConversationWakeupFields(enrichedContextSnapshot, deferredPayload),
           });
 
           return { kind: "deferred" as const };
@@ -3396,6 +3610,7 @@ export function heartbeatService(db: Db) {
             requestedByActorType: opts.requestedByActorType ?? null,
             requestedByActorId: opts.requestedByActorId ?? null,
             idempotencyKey: opts.idempotencyKey ?? null,
+            ...buildConversationWakeupFields(enrichedContextSnapshot, payload),
           })
           .returning()
           .then((rows) => rows[0]);
@@ -3470,10 +3685,16 @@ export function heartbeatService(db: Db) {
     );
     const shouldQueueFollowupForCommentWake =
       Boolean(wakeCommentId) && Boolean(sameScopeRunningRun) && !sameScopeQueuedRun;
+    const shouldQueueFollowupForConversationWake =
+      source === "conversation_message" &&
+      Boolean(sameScopeRunningRun) &&
+      !sameScopeQueuedRun;
 
     const coalescedTargetRun =
       sameScopeQueuedRun ??
-      (shouldQueueFollowupForCommentWake ? null : sameScopeRunningRun ?? null);
+      (shouldQueueFollowupForCommentWake || shouldQueueFollowupForConversationWake
+        ? null
+        : sameScopeRunningRun ?? null);
 
     if (coalescedTargetRun) {
       const mergedContextSnapshot = mergeCoalescedContextSnapshot(
@@ -3490,6 +3711,12 @@ export function heartbeatService(db: Db) {
         .returning()
         .then((rows) => rows[0] ?? coalescedTargetRun);
 
+      await syncConversationWakeupState(
+        db,
+        coalescedTargetRun.wakeupRequestId,
+        mergedContextSnapshot,
+      );
+
       await db.insert(agentWakeupRequests).values({
         companyId: agent.companyId,
         agentId,
@@ -3502,6 +3729,7 @@ export function heartbeatService(db: Db) {
         requestedByActorType: opts.requestedByActorType ?? null,
         requestedByActorId: opts.requestedByActorId ?? null,
         idempotencyKey: opts.idempotencyKey ?? null,
+        ...buildConversationWakeupFields(mergedContextSnapshot, payload),
         runId: mergedRun.id,
         finishedAt: new Date(),
       });
@@ -3521,6 +3749,7 @@ export function heartbeatService(db: Db) {
         requestedByActorType: opts.requestedByActorType ?? null,
         requestedByActorId: opts.requestedByActorId ?? null,
         idempotencyKey: opts.idempotencyKey ?? null,
+        ...buildConversationWakeupFields(enrichedContextSnapshot, payload),
       })
       .returning()
       .then((rows) => rows[0]);

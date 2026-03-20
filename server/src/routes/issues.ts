@@ -19,6 +19,7 @@ import {
 import type { StorageService } from "../storage/types.js";
 import { validate } from "../middleware/validate.js";
 import {
+  conversationService,
   accessService,
   agentService,
   executionWorkspaceService,
@@ -49,6 +50,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
   const agentsSvc = agentService(db);
   const projectsSvc = projectService(db);
   const goalsSvc = goalService(db);
+  const conversationsSvc = conversationService(db);
   const issueApprovalsSvc = issueApprovalService(db);
   const executionWorkspacesSvc = executionWorkspaceService(db);
   const workProductsSvc = workProductService(db);
@@ -396,6 +398,27 @@ export function issueRoutes(db: Db, storage: StorageService) {
       currentExecutionWorkspace,
       workProducts,
     });
+  });
+
+  router.get("/issues/:id/linked-conversations", async (req, res) => {
+    const id = req.params.id as string;
+    const issue = await svc.getById(id);
+    if (!issue) {
+      res.status(404).json({ error: "Issue not found" });
+      return;
+    }
+    assertCompanyAccess(req, issue.companyId);
+    const actor = getActorInfo(req);
+    const rows = await conversationsSvc.listLinkedConversations({
+      companyId: issue.companyId,
+      targetKind: "issue",
+      targetId: issue.id,
+      viewer:
+        req.actor.type === "agent" && req.actor.agentId
+          ? { type: "agent", agentId: req.actor.agentId }
+          : { type: "board", userId: actor.actorId },
+    });
+    res.json(rows);
   });
 
   router.get("/issues/:id/heartbeat-context", async (req, res) => {

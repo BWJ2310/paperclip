@@ -1,6 +1,6 @@
 {
-  "id": "331c4b42-5097-49dc-bdeb-051792ef93a2",
-  "prevId": "722affbc-68b2-4c10-b73c-433e0b67d194",
+  "id": "722affbc-68b2-4c10-b73c-433e0b67d194",
+  "prevId": "2e291eb2-09c4-4f8d-b7fc-2c1bc325f9cc",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -4911,13 +4911,7 @@
           "name": "created_by_user_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
-        },
-        "created_by_agent_id": {
-          "name": "created_by_agent_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "created_at": {
           "name": "created_at",
@@ -4996,19 +4990,6 @@
             "id"
           ],
           "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "conversations_created_by_agent_id_agents_id_fk": {
-          "name": "conversations_created_by_agent_id_agents_id_fk",
-          "tableFrom": "conversations",
-          "tableTo": "agents",
-          "columnsFrom": [
-            "created_by_agent_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },

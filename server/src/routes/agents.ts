@@ -38,11 +38,11 @@ import {
   issueApprovalService,
   issueService,
   logActivity,
-  normalizeAgentRuntimeConfigForPersistence,
   secretService,
   syncInstructionsBundleConfigFromFilePath,
   workspaceOperationService,
 } from "../services/index.js";
+import { normalizeAgentRuntimeConfigForPersistence } from "../services/agents.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { findServerAdapter, listAdapterModels } from "../adapters/index.js";
@@ -101,9 +101,14 @@ export function agentRoutes(db: Db) {
   }
 
   async function buildAgentAccessState(agent: NonNullable<Awaited<ReturnType<typeof svc.getById>>>) {
-    const membership = await access.getMembership(agent.companyId, "agent", agent.id);
+    const membership =
+      typeof access.getMembership === "function"
+        ? await access.getMembership(agent.companyId, "agent", agent.id)
+        : null;
     const grants = membership
-      ? await access.listPrincipalGrants(agent.companyId, "agent", agent.id)
+      ? typeof access.listPrincipalGrants === "function"
+        ? await access.listPrincipalGrants(agent.companyId, "agent", agent.id)
+        : []
       : [];
     const hasExplicitTaskAssignGrant = grants.some((grant) => grant.permissionKey === "tasks:assign");
 
@@ -164,14 +169,26 @@ export function agentRoutes(db: Db) {
     grantedByUserId: string | null,
   ) {
     await access.ensureMembership(companyId, "agent", agentId, "member", "active");
-    await access.setPrincipalPermission(
-      companyId,
-      "agent",
-      agentId,
-      "tasks:assign",
-      true,
-      grantedByUserId,
-    );
+    if (typeof access.setPrincipalPermission === "function") {
+      await access.setPrincipalPermission(
+        companyId,
+        "agent",
+        agentId,
+        "tasks:assign",
+        true,
+        grantedByUserId,
+      );
+      return;
+    }
+    if (typeof access.setPrincipalGrants === "function") {
+      await access.setPrincipalGrants(
+        companyId,
+        "agent",
+        agentId,
+        [{ permissionKey: "tasks:assign", scope: null }],
+        grantedByUserId,
+      );
+    }
   }
 
   async function assertCanCreateAgentsForCompany(req: Request, companyId: string) {

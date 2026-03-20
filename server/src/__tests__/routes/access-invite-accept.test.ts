@@ -75,7 +75,7 @@ function createInviteAcceptDbStub(options?: { actorEmail?: string | null }) {
     tokenHash: "hash",
     allowedJoinTypes: "both",
     defaultsPayload: null,
-    expiresAt: new Date("2026-03-20T00:00:00.000Z"),
+    expiresAt: new Date("2099-03-20T00:00:00.000Z"),
     invitedByUserId: null,
     revokedAt: null,
     acceptedAt: null,
