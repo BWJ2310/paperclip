@@ -1,6 +1,3 @@
-ALTER TABLE "conversations" DROP CONSTRAINT "conversations_created_by_agent_id_agents_id_fk";
---> statement-breakpoint
-ALTER TABLE "conversations" ALTER COLUMN "created_by_user_id" SET NOT NULL;--> statement-breakpoint
 ALTER TABLE "agent_wakeup_requests" ADD COLUMN "conversation_id" uuid;--> statement-breakpoint
 ALTER TABLE "agent_wakeup_requests" ADD COLUMN "conversation_message_id" uuid;--> statement-breakpoint
 ALTER TABLE "agent_wakeup_requests" ADD COLUMN "conversation_message_sequence" bigint;--> statement-breakpoint
@@ -11,7 +8,6 @@ ALTER TABLE "agent_wakeup_requests" ADD CONSTRAINT "agent_wakeup_requests_conver
 ALTER TABLE "cost_events" ADD CONSTRAINT "cost_events_conversation_id_conversations_id_fk" FOREIGN KEY ("conversation_id") REFERENCES "public"."conversations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "agent_wakeup_requests_company_agent_conversation_status_idx" ON "agent_wakeup_requests" USING btree ("company_id","agent_id","conversation_id","status");--> statement-breakpoint
 CREATE INDEX "cost_events_company_conversation_occurred_idx" ON "cost_events" USING btree ("company_id","conversation_id","occurred_at");--> statement-breakpoint
-ALTER TABLE "conversations" DROP COLUMN "created_by_agent_id";--> statement-breakpoint
 ALTER TABLE "agent_wakeup_requests" ADD CONSTRAINT "agent_wakeup_requests_response_mode_check" CHECK ("agent_wakeup_requests"."response_mode" is null or "agent_wakeup_requests"."response_mode" in ('optional', 'required'));--> statement-breakpoint
 ALTER TABLE "agent_wakeup_requests" ADD CONSTRAINT "agent_wakeup_requests_conversation_reply_fields_check" CHECK ((
         "agent_wakeup_requests"."conversation_id" is null

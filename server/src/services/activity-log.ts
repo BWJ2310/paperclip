@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
 import { activityLog } from "@paperclipai/db";
-import { PLUGIN_EVENT_TYPES, type PluginEventType } from "@paperclipai/shared";
+import {
+  PLUGIN_EVENT_TYPES,
+  type LiveEventAudience,
+  type PluginEventType,
+} from "@paperclipai/shared";
 import type { PluginEvent } from "@paperclipai/plugin-sdk";
 import { publishLiveEvent } from "./live-events.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
@@ -31,6 +35,7 @@ export interface LogActivityInput {
   entityId: string;
   agentId?: string | null;
   runId?: string | null;
+  audience?: Partial<LiveEventAudience> | null;
   details?: Record<string, unknown> | null;
 }
 
@@ -57,6 +62,7 @@ export async function logActivity(db: Db, input: LogActivityInput) {
   publishLiveEvent({
     companyId: input.companyId,
     type: "activity.logged",
+    audience: input.audience,
     payload: {
       actorType: input.actorType,
       actorId: input.actorId,

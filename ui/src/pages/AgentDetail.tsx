@@ -1939,13 +1939,14 @@ function PromptsTab({
     selectedFile: string;
   } | null>(null);
 
+  const adapterType = agent.adapterType as string;
   const isLocal =
-    agent.adapterType === "claude_local" ||
-    agent.adapterType === "codex_local" ||
-    agent.adapterType === "opencode_local" ||
-    agent.adapterType === "pi_local" ||
-    agent.adapterType === "hermes_local" ||
-    agent.adapterType === "cursor";
+    adapterType === "claude_local" ||
+    adapterType === "codex_local" ||
+    adapterType === "opencode_local" ||
+    adapterType === "pi_local" ||
+    adapterType === "hermes_local" ||
+    adapterType === "cursor";
 
   const { data: bundle, isLoading: bundleLoading } = useQuery({
     queryKey: queryKeys.agents.instructionsBundle(agent.id),

@@ -100,8 +100,11 @@ function renderPaperclipEnvNote(env: Record<string, string>): string {
   ].join("\n");
 }
 
-function cursorSkillsHome(): string {
-  return path.join(os.homedir(), ".cursor", "skills");
+function resolveCursorSkillsHome(homeOverride: string | null | undefined): string {
+  const home = asString(homeOverride, "");
+  const envHome = asString(process.env.HOME, "");
+  const resolvedHome = home.length > 0 ? home : envHome.length > 0 ? envHome : os.homedir();
+  return path.join(resolvedHome, ".cursor", "skills");
 }
 
 type EnsureCursorSkillsInjectedOptions = {
@@ -128,7 +131,7 @@ export async function ensureCursorSkillsInjected(
       : await readPaperclipRuntimeSkillEntries({}, __moduleDir));
   if (skillsEntries.length === 0) return;
 
-  const skillsHome = options.skillsHome ?? cursorSkillsHome();
+  const skillsHome = options.skillsHome ?? resolveCursorSkillsHome(undefined);
   try {
     await fs.mkdir(skillsHome, { recursive: true });
   } catch (err) {
@@ -208,13 +211,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     : workspaceCwd;
   const cwd = effectiveWorkspaceCwd || configuredCwd || process.cwd();
   await ensureAbsoluteDirectory(cwd, { createIfMissing: true });
+  const envConfig = parseObject(config.env);
   const cursorSkillEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
   const desiredCursorSkillNames = resolvePaperclipDesiredSkillNames(config, cursorSkillEntries);
   await ensureCursorSkillsInjected(onLog, {
     skillsEntries: cursorSkillEntries.filter((entry) => desiredCursorSkillNames.includes(entry.key)),
+    skillsHome: resolveCursorSkillsHome(asString(envConfig.HOME, "")),
   });
 
-  const envConfig = parseObject(config.env);
   const hasExplicitApiKey =
     typeof envConfig.PAPERCLIP_API_KEY === "string" &&
     envConfig.PAPERCLIP_API_KEY.trim().length > 0;
