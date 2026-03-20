@@ -1,20 +1,23 @@
 import {
+  memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   MoreHorizontal,
   MessageSquare,
+  Play,
   Reply,
   Send,
   Trash2,
   X,
 } from "lucide-react";
-import { useParams } from "@/lib/router";
+import { Link, useParams } from "@/lib/router";
 import { authApi } from "../api/auth";
 import { conversationsApi } from "../api/conversations";
 import { issuesApi } from "../api/issues";
@@ -165,7 +168,7 @@ function StampedContextRow({
   );
 }
 
-function ConversationMessageRow({
+const ConversationMessageRow = memo(function ConversationMessageRow({
   message,
   participantNames,
   participantIcons,
@@ -228,6 +231,10 @@ function ConversationMessageRow({
     })
     : null;
   const deletePending = deletingMessageId === message.id;
+  const messageRunHref =
+    message.authorType === "agent" && message.authorAgentId && message.runId
+      ? `/agents/${message.authorAgentId}/runs/${message.runId}`
+      : null;
 
   return (
     <div className="w-full py-4">
@@ -293,6 +300,14 @@ function ConversationMessageRow({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align={isCurrentUserMessage ? "end" : "start"}>
+              {messageRunHref ? (
+                <DropdownMenuItem asChild>
+                  <Link to={messageRunHref} className="no-underline text-inherit">
+                    <Play className="h-4 w-4" />
+                    View run
+                  </Link>
+                </DropdownMenuItem>
+              ) : null}
               <DropdownMenuItem
                 disabled={message.deletedAt !== null}
                 onSelect={() => onReply(message)}
@@ -311,7 +326,13 @@ function ConversationMessageRow({
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        <div className={cn(isCurrentUserMessage ? "pr-8 sm:pr-9" : "pl-8 sm:pl-9")}>
+        <div
+          className={cn(
+            isCurrentUserMessage
+              ? "ml-auto w-fit max-w-3xl text-left"
+              : "max-w-3xl pl-8 sm:pl-9",
+          )}
+        >
           {message.parentMessage ? (
             <div className="mb-3 rounded-xl border border-border/70 bg-muted/40 px-3 py-2 text-left">
               <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -347,7 +368,7 @@ function ConversationMessageRow({
       </div>
     </div>
   );
-}
+});
 
 export function ConversationDetail() {
   const { conversationId } = useParams<{ conversationId: string }>();
@@ -360,8 +381,13 @@ export function ConversationDetail() {
   const [mobileParticipantsOpen, setMobileParticipantsOpen] = useState(false);
   const lastMarkedSequenceRef = useRef(0);
   const lastScrolledMessageIdRef = useRef<string | null>(null);
+  const messageScrollRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<MarkdownEditorRef | null>(null);
+  const pendingOlderPageScrollRestoreRef = useRef<{
+    previousHeight: number;
+    previousTop: number;
+  } | null>(null);
 
   const { data: session } = useQuery({
     queryKey: queryKeys.auth.session,
@@ -384,18 +410,36 @@ export function ConversationDetail() {
     [companies, resolvedCompanyId],
   );
 
-  const { data: messagePage } = useQuery({
+  const {
+    data: messagePages,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: queryKeys.conversations.messages(conversationId!, { limit: 50 }),
-    queryFn: () => conversationsApi.listMessages(conversationId!, { limit: 50 }),
+    queryFn: ({ pageParam }) =>
+      conversationsApi.listMessages(conversationId!, {
+        limit: 50,
+        beforeSequence: pageParam,
+      }),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (lastPage) =>
+      lastPage.hasMoreBefore
+        ? lastPage.messages[0]?.sequence
+        : undefined,
     enabled: !!conversationId,
   });
+  const messages = useMemo(
+    () => [...(messagePages?.pages ?? [])].reverse().flatMap((page) => page.messages),
+    [messagePages?.pages],
+  );
   const currentUserId = session?.user.id ?? session?.session.userId ?? null;
   const replyTarget = useMemo(
     () =>
       replyTargetId
-        ? messagePage?.messages.find((message) => message.id === replyTargetId) ?? null
+        ? messages.find((message) => message.id === replyTargetId) ?? null
         : null,
-    [messagePage?.messages, replyTargetId],
+    [messages, replyTargetId],
   );
 
   useEffect(() => {
@@ -655,21 +699,22 @@ export function ConversationDetail() {
   useEffect(() => {
     lastMarkedSequenceRef.current = 0;
     lastScrolledMessageIdRef.current = null;
+    pendingOlderPageScrollRestoreRef.current = null;
     setReplyTargetId(null);
     setMobileParticipantsOpen(false);
   }, [conversationId]);
 
   useEffect(() => {
-    if (!messagePage || !replyTargetId) return;
+    if (!messagePages || !replyTargetId) return;
     if (!replyTarget || replyTarget.deletedAt) {
       setReplyTargetId(null);
     }
-  }, [messagePage, replyTarget, replyTargetId]);
+  }, [messagePages, replyTarget, replyTargetId]);
 
   useEffect(() => {
     if (!conversation) return;
     const latestSequence =
-      messagePage?.messages[messagePage.messages.length - 1]?.sequence ??
+      messages[messages.length - 1]?.sequence ??
       conversation.latestMessageSequence;
     const lastReadSequence = conversation.viewerReadState?.lastReadSequence ?? 0;
     if (
@@ -683,19 +728,38 @@ export function ConversationDetail() {
   }, [
     conversation,
     markRead,
-    messagePage?.messages,
+    messages,
   ]);
 
   useEffect(() => {
-    const latestMessageId =
-      messagePage?.messages[messagePage.messages.length - 1]?.id ?? null;
+    const latestMessageId = messages[messages.length - 1]?.id ?? null;
     if (!latestMessageId || latestMessageId === lastScrolledMessageIdRef.current) {
       return;
     }
     const behavior = lastScrolledMessageIdRef.current ? "smooth" : "auto";
     lastScrolledMessageIdRef.current = latestMessageId;
     messagesEndRef.current?.scrollIntoView({ behavior });
-  }, [conversationId, messagePage?.messages]);
+  }, [conversationId, messages]);
+
+  useLayoutEffect(() => {
+    const restore = pendingOlderPageScrollRestoreRef.current;
+    const scrollElement = messageScrollRef.current;
+    if (!restore || !scrollElement) return;
+    scrollElement.scrollTop =
+      restore.previousTop + (scrollElement.scrollHeight - restore.previousHeight);
+    pendingOlderPageScrollRestoreRef.current = null;
+  }, [messages]);
+
+  const maybeLoadOlderMessages = useCallback(() => {
+    const scrollElement = messageScrollRef.current;
+    if (!scrollElement || !hasNextPage || isFetchingNextPage) return;
+    if (scrollElement.scrollTop > 120) return;
+    pendingOlderPageScrollRestoreRef.current = {
+      previousHeight: scrollElement.scrollHeight,
+      previousTop: scrollElement.scrollTop,
+    };
+    void fetchNextPage();
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
 
   const handleReplyToMessage = useCallback((message: ConversationMessage) => {
     if (message.deletedAt) return;
@@ -706,7 +770,36 @@ export function ConversationDetail() {
   const handleDeleteMessage = useCallback((message: ConversationMessage) => {
     if (message.deletedAt) return;
     deleteMessage.mutate(message);
-  }, [deleteMessage]);
+  }, [deleteMessage.mutate]);
+  const deletingMessageId = deleteMessage.isPending
+    ? deleteMessage.variables?.id ?? null
+    : null;
+  const renderedMessages = useMemo(
+    () =>
+      messages.map((message) => (
+        <ConversationMessageRow
+          key={message.id}
+          message={message}
+          participantNames={participantNames}
+          participantIcons={participantIcons}
+          companyBrandColor={resolvedCompany?.brandColor ?? null}
+          currentUserId={currentUserId}
+          onReply={handleReplyToMessage}
+          onDelete={handleDeleteMessage}
+          deletingMessageId={deletingMessageId}
+        />
+      )),
+    [
+      currentUserId,
+      deletingMessageId,
+      handleDeleteMessage,
+      handleReplyToMessage,
+      messages,
+      participantIcons,
+      participantNames,
+      resolvedCompany?.brandColor,
+    ],
+  );
 
   if (isLoading) {
     return <PageSkeleton variant="detail" />;
@@ -772,8 +865,8 @@ export function ConversationDetail() {
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto w-full px-4 sm:px-6">
-        {!messagePage || messagePage.messages.length === 0 ? (
+      <div className="min-h-0 flex-1 overflow-hidden w-full">
+        {!messagePages || messages.length === 0 ? (
           <div className="flex h-full min-h-[20rem] items-center justify-center">
             <EmptyState
               icon={MessageSquare}
@@ -781,28 +874,27 @@ export function ConversationDetail() {
             />
           </div>
         ) : (
-          <div className="py-2">
-            {messagePage.messages.map((message) => (
-              <ConversationMessageRow
-                key={message.id}
-                message={message}
-                participantNames={participantNames}
-                participantIcons={participantIcons}
-                companyBrandColor={resolvedCompany?.brandColor ?? null}
-                currentUserId={currentUserId}
-                onReply={handleReplyToMessage}
-                onDelete={handleDeleteMessage}
-                deletingMessageId={deleteMessage.isPending ? deleteMessage.variables?.id ?? null : null}
-              />
-            ))}
-            <div ref={messagesEndRef} />
+          <div
+            ref={messageScrollRef}
+            className="h-full overflow-y-auto px-6 sm:px-4"
+            onScroll={maybeLoadOlderMessages}
+          >
+            <div className="py-2">
+              {hasNextPage || isFetchingNextPage ? (
+                <div className="pb-2 text-center text-xs text-muted-foreground">
+                  {isFetchingNextPage ? "Loading older messages..." : "Scroll up to load earlier messages"}
+                </div>
+              ) : null}
+              {renderedMessages}
+              <div ref={messagesEndRef} />
+            </div>
           </div>
         )}
       </div>
 
       <div className="sticky bottom-[calc(5rem+env(safe-area-inset-bottom))] z-10 px-4 pt-2 sm:px-6 md:bottom-0">
         <div className="mx-auto w-full">
-          <div className="rounded-2xl border border-border bg-background/95 shadow-lg backdrop-blur-sm">
+          <div className="border border-border bg-background/95 shadow-lg backdrop-blur-sm">
             <div className="px-3 py-3">
               {replyTarget ? (
                 <div className="mb-3 rounded-xl border border-border/70 bg-muted/40 px-3 py-2">

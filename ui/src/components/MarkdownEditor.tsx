@@ -708,10 +708,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
     observer.observe(editable, {
       subtree: true,
       childList: true,
-      characterData: true,
     });
     return () => observer.disconnect();
-  }, [decorateMentionLinks, value]);
+  }, [decorateMentionLinks]);
 
   const replaceMentionFromMarkdown = useCallback(
     (option: MentionOption, state: MentionState) => {
@@ -1082,9 +1081,6 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
         onChange={(next) => {
           latestValueRef.current = next;
           onChange(next);
-          requestAnimationFrame(() => {
-            decorateMentionLinks();
-          });
         }}
         onBlur={() => onBlur?.()}
         className={cn("paperclip-mdxeditor", !bordered && "paperclip-mdxeditor--borderless")}

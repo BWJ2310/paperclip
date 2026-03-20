@@ -1,5 +1,10 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import {
+  useQuery,
+  useQueryClient,
+  type InfiniteData,
+  type QueryClient,
+} from "@tanstack/react-query";
 import type {
   Agent,
   ConversationDetail,
@@ -637,7 +642,9 @@ function handleConversationMessageUpsert(
   const message = normalizeConversationMessage(companyId, conversationId, messagePayload);
   if (!message) return;
 
-  for (const [queryKey, current] of queryClient.getQueriesData<ConversationMessagePage>({
+  for (const [queryKey, current] of queryClient.getQueriesData<
+    ConversationMessagePage | InfiniteData<ConversationMessagePage>
+  >({
     queryKey: ["conversations", "messages", conversationId],
   })) {
     if (!current || !Array.isArray(queryKey)) continue;
@@ -647,9 +654,9 @@ function handleConversationMessageUpsert(
       continue;
     }
     const limit = readPositiveInteger(readRecord(params)?.limit);
-    queryClient.setQueryData<ConversationMessagePage>(
+    queryClient.setQueryData<ConversationMessagePage | InfiniteData<ConversationMessagePage>>(
       queryKey,
-      upsertConversationMessage(current, message, limit),
+      upsertConversationMessageData(current, message, limit),
     );
   }
 
@@ -738,6 +745,63 @@ function upsertConversationMessage(
     ...current,
     messages: nextMessages,
   };
+}
+
+function isConversationMessageInfiniteData(
+  value: ConversationMessagePage | InfiniteData<ConversationMessagePage>,
+): value is InfiniteData<ConversationMessagePage> {
+  return "pages" in value && Array.isArray(value.pages) && "pageParams" in value;
+}
+
+function upsertConversationMessageInInfiniteData(
+  current: InfiniteData<ConversationMessagePage>,
+  message: ConversationMessage,
+): InfiniteData<ConversationMessagePage> {
+  const existingPageIndex = current.pages.findIndex((page) =>
+    page.messages.some((entry) => entry.id === message.id),
+  );
+
+  if (existingPageIndex >= 0) {
+    return {
+      ...current,
+      pages: current.pages.map((page, index) =>
+        index === existingPageIndex
+          ? {
+              ...page,
+              messages: page.messages.map((entry) =>
+                entry.id === message.id ? message : entry,
+              ),
+            }
+          : page,
+      ),
+    };
+  }
+
+  if (current.pages.length === 0) return current;
+
+  const [latestPage, ...olderPages] = current.pages;
+  return {
+    ...current,
+    pages: [
+      {
+        ...latestPage,
+        messages: [...latestPage.messages, message].sort(
+          (left, right) => left.sequence - right.sequence,
+        ),
+      },
+      ...olderPages,
+    ],
+  };
+}
+
+function upsertConversationMessageData(
+  current: ConversationMessagePage | InfiniteData<ConversationMessagePage>,
+  message: ConversationMessage,
+  limit: number | null,
+): ConversationMessagePage | InfiniteData<ConversationMessagePage> {
+  return isConversationMessageInfiniteData(current)
+    ? upsertConversationMessageInInfiniteData(current, message)
+    : upsertConversationMessage(current, message, limit);
 }
 
 function invalidateLinkedConversationTargetQueries(
