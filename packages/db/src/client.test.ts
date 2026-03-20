@@ -102,6 +102,36 @@ afterEach(async () => {
 });
 
 describe("applyPendingMigrations", () => {
+  it("keeps migration file prefixes unique and journal entries resolvable", async () => {
+    const migrationDir = new URL("./migrations/", import.meta.url);
+    const migrationFiles = (await fs.promises.readdir(migrationDir))
+      .filter((name) => name.endsWith(".sql"))
+      .sort();
+
+    const prefixes = new Map<string, string[]>();
+    for (const migrationFile of migrationFiles) {
+      const prefix = migrationFile.match(/^(\d{4})_/)?.[1];
+      if (!prefix) continue;
+      const existing = prefixes.get(prefix) ?? [];
+      existing.push(migrationFile);
+      prefixes.set(prefix, existing);
+    }
+
+    const duplicatePrefixes = Array.from(prefixes.entries())
+      .filter(([, files]) => files.length > 1)
+      .map(([prefix, files]) => `${prefix}: ${files.join(", ")}`);
+    expect(duplicatePrefixes).toEqual([]);
+
+    const journal = JSON.parse(
+      await fs.promises.readFile(new URL("./migrations/meta/_journal.json", import.meta.url), "utf8"),
+    ) as { entries?: Array<{ tag?: string }> };
+    const migrationFileSet = new Set(migrationFiles);
+    const missingJournalFiles = (journal.entries ?? [])
+      .map((entry) => (typeof entry.tag === "string" ? `${entry.tag}.sql` : null))
+      .filter((name): name is string => name !== null && !migrationFileSet.has(name));
+    expect(missingJournalFiles).toEqual([]);
+  });
+
   it(
     "applies an inserted earlier migration without replaying later legacy migrations",
     async () => {
