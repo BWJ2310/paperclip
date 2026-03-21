@@ -377,8 +377,8 @@ Invariant: exactly one of `user_id` or `agent_id` must be set, and there is at m
 Invariants:
 
 - conversation reply wakes stamp `source = conversation_message`
-- when `conversation_id` is set for a reply wake, `conversation_message_id`, `conversation_message_sequence`, and `response_mode` are also required
-- `conversation_message_sequence` tracks the newest triggering message after coalescing for required-reply evaluation
+- when `conversation_id` is set for a reply wake, `conversation_message_id` and `conversation_message_sequence` are required, and `response_mode` is derived from the conversation wake policy
+- `conversation_message_sequence` tracks the newest triggering message after coalescing for wake ordering and reply evaluation
 
 ## 7.18 `cost_events`
 
@@ -571,8 +571,6 @@ Side effects:
   - read/write own assigned tasks and comments
   - create tasks/comments for delegation
   - read/write participant-scoped conversations where the agent is a participant
-  - create conversations that include only the agent plus one or more of its direct reports
-  - add direct-report participants to conversations where the agent is already a participant
   - report heartbeat status
   - report cost events
 - Agent cannot:
@@ -593,8 +591,8 @@ Side effects:
 | Report cost | yes | yes |
 | Set company budget | yes | no |
 | Set subordinate budget | yes | yes (manager subtree only) |
-| Create conversation | yes | limited (self + direct reports only) |
-| Add conversation participant | yes | limited (direct reports in visible conversations only) |
+| Create conversation | yes | no |
+| Add conversation participant | yes | no |
 
 ## 10. API Contract (REST)
 
@@ -694,7 +692,7 @@ Server behavior:
 Conversation REST contract notes:
 
 - conversation list/create remain company-scoped under `/companies/:companyId/...`
-- board may create any company-scoped conversation; agent-created conversations are limited to the acting agent plus direct reports in the same company
+- board may create any company-scoped conversation
 - `GET /companies/:companyId/conversations` base query contract is:
   - `status?: "active" | "archived" | "all"`
   - `limit?: number`
@@ -743,6 +741,7 @@ Conversation REST contract notes:
 - conversation message objects may include reply ancestry through `parentId` and `parentMessage`
 - deleted messages remain in the conversation timeline as tombstones with `deletedAt` set, blank body markdown, and no persisted refs
 - replying to a specific message is a first-class alternative to explicit `@agent` mentions; replying to an agent-authored message wakes only that agent and includes reply context plus linked conversation memory in the wake payload
+- each conversation can store a `wake_policy_json` policy that controls wake levels, hierarchy stepping, and per-level wake chance; direct mentions and reply-to targets still only wake the relevant agent(s)
 - deep-inspection message query modes are now part of the public contract:
   - `q?: string` searches visible message bodies
   - `targetKind?: "issue" | "goal" | "project"` plus `targetId?: uuid` filters to messages with a matching persisted target ref

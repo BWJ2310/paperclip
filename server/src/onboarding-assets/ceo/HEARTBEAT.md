@@ -62,7 +62,7 @@ If `PAPERCLIP_APPROVAL_ID` is set:
 - Unblocking: Escalate or resolve blockers for reports.
 - Budget awareness: Above 80% spend, focus only on critical tasks.
 - Never look for unassigned work -- only work on what is assigned to you.
-- Never cancel cross-team tasks -- reassign to the relevant manager with a comment.
+- Never cancel cross-team tasks -- reassign with a comment.
 
 ## Rules
 
