@@ -712,6 +712,13 @@ export function ConversationDetail() {
   }, [messagePages, replyTarget, replyTargetId]);
 
   useEffect(() => {
+    const lastReadSequence = conversation?.viewerReadState?.lastReadSequence ?? 0;
+    if (lastMarkedSequenceRef.current > lastReadSequence) {
+      lastMarkedSequenceRef.current = lastReadSequence;
+    }
+  }, [conversation?.viewerReadState?.lastReadSequence]);
+
+  useEffect(() => {
     if (!conversation) return;
     const latestSequence =
       messages[messages.length - 1]?.sequence ??
