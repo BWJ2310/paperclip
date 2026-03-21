@@ -14,14 +14,14 @@ export function PropertiesPanel() {
       style={{ width: panelVisible ? 320 : 0, opacity: panelVisible ? 1 : 0 }}
     >
       {panelVisible ? (
-        <div className="w-80 flex-1 flex flex-col min-w-[320px]">
+        <div className="w-80 flex-1 min-h-0 flex flex-col min-w-[320px]">
           <div className="flex items-center justify-between px-4 py-2 border-b border-border">
             <span className="text-sm font-medium">Properties</span>
             <Button variant="ghost" size="icon-xs" onClick={() => setPanelVisible(false)}>
               <X className="h-4 w-4" />
             </Button>
           </div>
-          <ScrollArea className="flex-1">
+          <ScrollArea className="flex-1 min-h-0">
             <div className="p-4">{panelContent}</div>
           </ScrollArea>
         </div>
