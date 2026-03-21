@@ -179,6 +179,7 @@ export {
   deleteConversationMessageParamsSchema,
   createConversationTargetLinkSchema,
   deleteConversationTargetLinkQuerySchema,
+  conversationWakePolicySchema,
   conversationMessageRefKindSchema,
   conversationMessageRefOriginSchema,
   conversationAuthorTypeSchema,

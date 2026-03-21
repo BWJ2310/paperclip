@@ -18,6 +18,7 @@ export interface CreateConversation {
 export interface UpdateConversation {
   title?: string;
   status?: ConversationStatus;
+  wakePolicy?: ConversationWakePolicy;
 }
 
 export interface AddConversationParticipant {
@@ -101,6 +102,12 @@ export interface ConversationReadState {
   lastReadSequence: number;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface ConversationWakePolicy {
+  agentHumanStep: number;
+  hierarchyStep: number;
+  wakeChancePercents: number[];
 }
 
 export interface ConversationMessageRef {
@@ -216,6 +223,7 @@ export interface ConversationSummary {
   title: string;
   status: ConversationStatus;
   participants: ConversationParticipant[];
+  wakePolicy: ConversationWakePolicy;
   latestMessageSequence: number;
   latestMessageAt: Date | null;
   unreadCount: number;

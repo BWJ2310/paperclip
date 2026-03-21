@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
-import { bigint, check, index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { bigint, check, index, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import type { ConversationWakePolicy } from "@paperclipai/shared";
 import { agents } from "./agents.js";
 import { companies } from "./companies.js";
 
@@ -11,6 +12,14 @@ export const conversations = pgTable(
     title: text("title").notNull(),
     status: text("status").notNull().default("active"),
     lastMessageSequence: bigint("last_message_sequence", { mode: "number" }).notNull().default(0),
+    wakePolicyJson: jsonb("wake_policy_json")
+      .$type<ConversationWakePolicy>()
+      .notNull()
+      .default({
+        agentHumanStep: 1,
+        hierarchyStep: 1,
+        wakeChancePercents: [100, 70, 50],
+      }),
     createdByUserId: text("created_by_user_id"),
     createdByAgentId: uuid("created_by_agent_id").references(() => agents.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

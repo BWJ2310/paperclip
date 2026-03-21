@@ -9,6 +9,8 @@ import {
   CONVERSATION_RESPONSE_MODES,
   CONVERSATION_STATUSES,
   CONVERSATION_TARGET_KINDS,
+  CONVERSATION_WAKE_POLICY_DEFAULT,
+  CONVERSATION_WAKE_POLICY_MAX_LEVELS,
 } from "../constants.js";
 
 function dedupeIds(values: string[]) {
@@ -16,6 +18,16 @@ function dedupeIds(values: string[]) {
 }
 
 const targetKindSchema = z.enum(CONVERSATION_TARGET_KINDS);
+
+export const conversationWakePolicySchema = z.object({
+  agentHumanStep: z.coerce.number().int().min(0).max(10).default(CONVERSATION_WAKE_POLICY_DEFAULT.agentHumanStep),
+  hierarchyStep: z.coerce.number().int().min(0).max(10).default(CONVERSATION_WAKE_POLICY_DEFAULT.hierarchyStep),
+  wakeChancePercents: z
+    .array(z.coerce.number().int().min(0).max(100))
+    .min(1)
+    .max(CONVERSATION_WAKE_POLICY_MAX_LEVELS)
+    .default([...CONVERSATION_WAKE_POLICY_DEFAULT.wakeChancePercents]),
+}).strict();
 
 export const createConversationSchema = z.object({
   title: z.string().min(1),
@@ -25,6 +37,7 @@ export const createConversationSchema = z.object({
 export const updateConversationSchema = z.object({
   title: z.string().min(1).optional(),
   status: z.enum(CONVERSATION_STATUSES).optional(),
+  wakePolicy: conversationWakePolicySchema.optional(),
 }).strict();
 
 export const listConversationsQuerySchema = z.object({

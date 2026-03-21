@@ -178,6 +178,13 @@ export type PauseReason = (typeof PAUSE_REASONS)[number];
 export const CONVERSATION_STATUSES = ["active", "archived"] as const;
 export type ConversationStatus = (typeof CONVERSATION_STATUSES)[number];
 
+export const CONVERSATION_WAKE_POLICY_MAX_LEVELS = 10;
+export const CONVERSATION_WAKE_POLICY_DEFAULT = {
+  agentHumanStep: 1,
+  hierarchyStep: 1,
+  wakeChancePercents: [100, 70, 50],
+} as const;
+
 export const CONVERSATION_AUTHOR_TYPES = ["user", "agent", "system"] as const;
 export type ConversationAuthorType = (typeof CONVERSATION_AUTHOR_TYPES)[number];
 

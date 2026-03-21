@@ -330,6 +330,13 @@
       "when": 1774042251000,
       "tag": "0046_spotty_the_renegades",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1774052843394,
+      "tag": "0047_lyrical_stellaris",
+      "breakpoints": true
     }
   ]
 }

@@ -104,6 +104,7 @@ export type {
   DeleteConversationTargetLinkResult,
   ConversationParticipant,
   ConversationReadState,
+  ConversationWakePolicy,
   ConversationMessageRef,
   ConversationMessageParentSummary,
   ConversationMessage,
