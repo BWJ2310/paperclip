@@ -350,197 +350,42 @@ describe("conversationRoutes", () => {
     };
   }
 
-  async function seedManagerFixture() {
-    const now = new Date("2026-03-18T15:00:00.000Z");
-    const [company] = await testDb.db
-      .insert(companies)
-      .values({
-        name: "Manager Conversation Co",
-        issuePrefix: `M${randomUUID().slice(0, 4).toUpperCase()}`,
-      })
-      .returning();
-
-    const [manager, reportA, reportB, peerAgent] = await testDb.db
-      .insert(agents)
-      .values([
-        {
-          companyId: company.id,
-          name: "Manager Agent",
-          role: "manager",
-          adapterType: "process",
-          status: "idle",
-        },
-        {
-          companyId: company.id,
-          name: "Report Agent A",
-          role: "general",
-          adapterType: "process",
-          status: "idle",
-        },
-        {
-          companyId: company.id,
-          name: "Report Agent B",
-          role: "general",
-          adapterType: "process",
-          status: "idle",
-        },
-        {
-          companyId: company.id,
-          name: "Peer Agent",
-          role: "general",
-          adapterType: "process",
-          status: "idle",
-        },
-      ])
-      .returning();
-
-    await testDb.db
-      .update(agents)
-      .set({ reportsTo: manager.id })
-      .where(eq(agents.id, reportA.id));
-    await testDb.db
-      .update(agents)
-      .set({ reportsTo: manager.id })
-      .where(eq(agents.id, reportB.id));
-
-    const [conversation] = await testDb.db
-      .insert(conversations)
-      .values({
-        companyId: company.id,
-        title: "Manager 1:1",
-        createdByUserId: "board-user",
-        updatedAt: now,
-      })
-      .returning();
-
-    await testDb.db.insert(conversationParticipants).values([
-      {
-        companyId: company.id,
-        conversationId: conversation.id,
-        agentId: manager.id,
-        joinedAt: now,
-        updatedAt: now,
-      },
-      {
-        companyId: company.id,
-        conversationId: conversation.id,
-        agentId: reportA.id,
-        joinedAt: now,
-        updatedAt: now,
-      },
-    ]);
-
-    setMockActor({
-      type: "board",
-      userId: "board-user",
-      companyIds: [company.id],
-      source: "session",
-      isInstanceAdmin: false,
-    });
-
-    return {
-      app: createTestApp(testDb.db),
-      company,
-      manager,
-      reportA,
-      reportB,
-      peerAgent,
-      conversation,
-    };
-  }
-
-  it("allows a manager agent to create a conversation with direct reports", async () => {
-    const fixture = await seedManagerFixture();
+  it("rejects agent-created conversations", async () => {
+    const fixture = await seedFixture();
     setMockActor({
       type: "agent",
-      agentId: fixture.manager.id,
+      agentId: fixture.agentA.id,
       companyId: fixture.company.id,
     });
 
     const res = await request(fixture.app)
       .post(`/api/companies/${fixture.company.id}/conversations`)
       .send({
-        title: "Weekly report sync",
-        participantAgentIds: [fixture.reportA.id],
-      });
-
-    expect(res.status).toBe(201);
-    expect(res.body.title).toBe("Weekly report sync");
-    expect(
-      res.body.participants.map((participant: { agentId: string }) => participant.agentId).sort(),
-    ).toEqual([fixture.manager.id, fixture.reportA.id].sort());
-
-    const createdConversation = await testDb.db
-      .select()
-      .from(conversations)
-      .where(eq(conversations.id, res.body.id))
-      .then((rows) => rows[0] ?? null);
-
-    expect(createdConversation?.createdByAgentId).toBe(fixture.manager.id);
-    expect(createdConversation?.createdByUserId).toBeNull();
-  });
-
-  it("prevents a manager agent from creating a conversation with non-direct reports", async () => {
-    const fixture = await seedManagerFixture();
-    setMockActor({
-      type: "agent",
-      agentId: fixture.manager.id,
-      companyId: fixture.company.id,
-    });
-
-    const res = await request(fixture.app)
-      .post(`/api/companies/${fixture.company.id}/conversations`)
-      .send({
-        title: "Improper participant test",
-        participantAgentIds: [fixture.peerAgent.id],
+        title: "Agent kickoff attempt",
+        participantAgentIds: [fixture.agentB.id],
       });
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toBe("Agents can only include direct reports in conversations");
+    expect(res.body.error).toBe("Board access required");
   });
 
-  it("allows a manager agent to add a direct report participant to their conversation", async () => {
-    const fixture = await seedManagerFixture();
+  it("rejects agent-added conversation participants", async () => {
+    const fixture = await seedFixture();
     setMockActor({
       type: "agent",
-      agentId: fixture.manager.id,
+      agentId: fixture.agentA.id,
       companyId: fixture.company.id,
     });
 
     const res = await request(fixture.app)
       .post(`/api/conversations/${fixture.conversation.id}/participants`)
-      .send({ agentId: fixture.reportB.id });
-
-    expect(res.status).toBe(201);
-    expect(res.body.agentId).toBe(fixture.reportB.id);
-
-    const participantRows = await testDb.db
-      .select()
-      .from(conversationParticipants)
-      .where(eq(conversationParticipants.conversationId, fixture.conversation.id));
-
-    expect(participantRows.map((row) => row.agentId).sort()).toEqual(
-      [fixture.manager.id, fixture.reportA.id, fixture.reportB.id].sort(),
-    );
-  });
-
-  it("prevents a manager agent from adding a non-direct-report participant", async () => {
-    const fixture = await seedManagerFixture();
-    setMockActor({
-      type: "agent",
-      agentId: fixture.manager.id,
-      companyId: fixture.company.id,
-    });
-
-    const res = await request(fixture.app)
-      .post(`/api/conversations/${fixture.conversation.id}/participants`)
-      .send({ agentId: fixture.peerAgent.id });
+      .send({ agentId: fixture.agentB.id });
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toBe("Agents can only include direct reports in conversations");
+    expect(res.body.error).toBe("Board access required");
   });
 
-  it("downranks direct-report mentions to a manager while keeping same-level peer mentions at normal priority", async () => {
+  it("downranks direct-report mentions to a manager while keeping same-level peer mentions at level 2", async () => {
     const now = new Date("2026-03-18T16:00:00.000Z");
     const [company] = await testDb.db
       .insert(companies)
@@ -653,9 +498,9 @@ describe("conversationRoutes", () => {
         );
       });
       expect(runs).toHaveLength(1);
-      expect(((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).wakePriority).toBe(
-        "low",
-      );
+      expect(
+        ((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).conversationWakeLevel,
+      ).toBe(3);
     });
 
     const peerMention = await request(app)
@@ -684,143 +529,9 @@ describe("conversationRoutes", () => {
         );
       });
       expect(runs).toHaveLength(1);
-      expect(((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).wakePriority).toBe(
-        "normal",
-      );
-    });
-  });
-
-  it("lets the highest-rank manager kickoff a new turn in a direct-report-only conversation", async () => {
-    const now = new Date("2026-03-18T17:00:00.000Z");
-    const [company] = await testDb.db
-      .insert(companies)
-      .values({
-        id: "55555555-5555-4555-8555-555555555555",
-        name: "Manager Kickoff Co",
-        issuePrefix: "MKOF",
-      })
-      .returning();
-
-    const [manager, report] = await testDb.db
-      .insert(agents)
-      .values([
-        {
-          id: "00000000-0000-4000-8000-000000000001",
-          companyId: company.id,
-          name: "Manager",
-          role: "manager",
-          adapterType: "process",
-          status: "idle",
-        },
-        {
-          id: "00000000-0000-4000-8000-000000000002",
-          companyId: company.id,
-          name: "Report",
-          role: "general",
-          adapterType: "process",
-          status: "idle",
-          reportsTo: "00000000-0000-4000-8000-000000000001",
-        },
-      ])
-      .returning();
-
-    const [conversation] = await testDb.db
-      .insert(conversations)
-      .values({
-        id: "33333333-3333-4333-8333-333333333333",
-        companyId: company.id,
-        title: "Manager Kickoff Test",
-        createdByUserId: "board-user",
-        lastMessageSequence: 8,
-        updatedAt: now,
-      })
-      .returning();
-
-    await testDb.db.insert(conversationParticipants).values([
-      {
-        companyId: company.id,
-        conversationId: conversation.id,
-        agentId: manager.id,
-        joinedAt: now,
-        updatedAt: now,
-      },
-      {
-        companyId: company.id,
-        conversationId: conversation.id,
-        agentId: report.id,
-        joinedAt: now,
-        updatedAt: now,
-      },
-    ]);
-
-    await testDb.db.insert(conversationMessages).values([
-      {
-        companyId: company.id,
-        conversationId: conversation.id,
-        sequence: 6,
-        authorType: "user",
-        authorUserId: "board-user",
-        bodyMarkdown: "Please discuss the latest tradeoffs.",
-        createdAt: new Date("2026-03-18T17:06:00.000Z"),
-        updatedAt: new Date("2026-03-18T17:06:00.000Z"),
-      },
-      {
-        companyId: company.id,
-        conversationId: conversation.id,
-        sequence: 7,
-        authorType: "agent",
-        authorAgentId: report.id,
-        bodyMarkdown: "First report response.",
-        createdAt: new Date("2026-03-18T17:07:00.000Z"),
-        updatedAt: new Date("2026-03-18T17:07:00.000Z"),
-      },
-      {
-        companyId: company.id,
-        conversationId: conversation.id,
-        sequence: 8,
-        authorType: "agent",
-        authorAgentId: report.id,
-        bodyMarkdown: "Second report response.",
-        createdAt: new Date("2026-03-18T17:08:00.000Z"),
-        updatedAt: new Date("2026-03-18T17:08:00.000Z"),
-      },
-    ]);
-
-    setMockActor({
-      type: "agent",
-      agentId: manager.id,
-      companyId: company.id,
-    });
-
-    const res = await request(createTestApp(testDb.db))
-      .post(`/api/conversations/${conversation.id}/messages`)
-      .send({
-        bodyMarkdown: `[@${report.name}](${buildStructuredMentionHref("agent", report.id)}) please start a fresh pass from here.`,
-        activeContextTargets: [],
-      });
-
-    expect(res.status).toBe(201);
-
-    await waitForAssertion(async () => {
-      const wakeups = (await testDb.db.select().from(agentWakeupRequests)).filter(
-        (row) =>
-          row.conversationId === conversation.id &&
-          row.conversationMessageSequence === 9,
-      );
-      expect(wakeups).toHaveLength(1);
-      expect(wakeups[0]?.agentId).toBe(report.id);
-
-      const runs = (await testDb.db.select().from(heartbeatRuns)).filter((row) => {
-        const context = (row.contextSnapshot ?? {}) as Record<string, unknown>;
-        return (
-          context.conversationId === conversation.id &&
-          context.conversationMessageSequence === 9
-        );
-      });
-      expect(runs).toHaveLength(1);
-      expect(((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).wakePriority).toBe(
-        "normal",
-      );
+      expect(
+        ((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).conversationWakeLevel,
+      ).toBe(2);
     });
   });
 
@@ -1039,7 +750,7 @@ describe("conversationRoutes", () => {
     });
   });
 
-  it("samples low-priority board-authored messages without agent mentions", async () => {
+  it("samples level 3 board-authored messages without agent mentions", async () => {
     const fixture = await seedFixture();
 
     const res = await request(fixture.app)
@@ -1073,13 +784,13 @@ describe("conversationRoutes", () => {
       expect(
         runs.every((row) => {
           const context = (row.contextSnapshot ?? {}) as Record<string, unknown>;
-          return context.wakePriority === "low";
+          return context.conversationWakeLevel === 3;
         }),
       ).toBe(true);
     });
   });
 
-  it("does not auto-wake other agents for agent-authored xlow messages", async () => {
+  it("does not auto-wake other agents for level 3 agent-authored messages", async () => {
     const fixture = await seedFixture();
     setMockActor({
       type: "agent",
@@ -1108,7 +819,7 @@ describe("conversationRoutes", () => {
     expect(wakeups).toHaveLength(0);
   });
 
-  it("wakes only the explicitly mentioned agent at high priority for board-authored handoffs", async () => {
+  it("wakes only the explicitly mentioned agent at level 1 for board-authored handoffs", async () => {
     const fixture = await seedFixture();
 
     const res = await request(fixture.app)
@@ -1140,13 +851,13 @@ describe("conversationRoutes", () => {
       });
 
       expect(runs).toHaveLength(1);
-      expect(((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).wakePriority).toBe(
-        "high",
-      );
+      expect(
+        ((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).conversationWakeLevel,
+      ).toBe(1);
     });
   });
 
-  it("samples normal-priority agent-authored mentions", async () => {
+  it("samples level 2 agent-authored mentions", async () => {
     const fixture = await seedFixture();
     setMockActor({
       type: "agent",
@@ -1183,9 +894,9 @@ describe("conversationRoutes", () => {
       });
 
       expect(runs).toHaveLength(1);
-      expect(((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).wakePriority).toBe(
-        "normal",
-      );
+      expect(
+        ((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).conversationWakeLevel,
+      ).toBe(2);
     });
   });
 
@@ -1252,9 +963,9 @@ describe("conversationRoutes", () => {
       });
 
       expect(runs).toHaveLength(1);
-      expect(((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).wakePriority).toBe(
-        "normal",
-      );
+      expect(
+        ((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).conversationWakeLevel,
+      ).toBe(2);
     });
   });
 
@@ -1435,7 +1146,7 @@ describe("conversationRoutes", () => {
     expect(wakeups).toHaveLength(0);
   });
 
-  it("samples low-priority agent-authored replies", async () => {
+  it("samples level 3 agent-authored replies", async () => {
     const fixture = await seedFixture();
     const [agentMessage] = await testDb.db
       .insert(conversationMessages)
@@ -1495,9 +1206,9 @@ describe("conversationRoutes", () => {
       });
 
       expect(runs).toHaveLength(1);
-      expect(((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).wakePriority).toBe(
-        "low",
-      );
+      expect(
+        ((runs[0]?.contextSnapshot ?? {}) as Record<string, unknown>).conversationWakeLevel,
+      ).toBe(3);
     });
   });
 

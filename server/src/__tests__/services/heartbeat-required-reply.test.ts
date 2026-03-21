@@ -304,7 +304,7 @@ describe("resolveSucceededWakeupStatus", () => {
     );
   });
 
-  it("starts a later high-priority human conversation wake before an older normal-priority queued wake", async () => {
+  it("starts a later level 1 human conversation wake before an older level 2 queued wake", async () => {
     const fixture = await seedRequiredReplyFixture();
     const heartbeat = heartbeatService(testDb.db);
 
@@ -337,7 +337,7 @@ describe("resolveSucceededWakeupStatus", () => {
         sequence: 1,
         authorType: "user",
         authorUserId: "board-user",
-        bodyMarkdown: "Older normal-priority message",
+        bodyMarkdown: "Older level 2 message",
       })
       .returning();
 
@@ -354,7 +354,6 @@ describe("resolveSucceededWakeupStatus", () => {
       source: "conversation_message",
       triggerDetail: "manual",
       reason: "conversation_message",
-      priority: "normal",
       contextSnapshot: {
         taskKey: `conversation:${otherConversation.id}`,
         wakeReason: "conversation_message",
@@ -362,6 +361,7 @@ describe("resolveSucceededWakeupStatus", () => {
         conversationMessageId: olderMessage.id,
         conversationMessageSequence: olderMessage.sequence,
         conversationResponseMode: "optional",
+        conversationWakeLevel: 2,
       },
     });
 
@@ -369,7 +369,6 @@ describe("resolveSucceededWakeupStatus", () => {
       source: "conversation_message",
       triggerDetail: "manual",
       reason: "conversation_message",
-      priority: "high",
       contextSnapshot: {
         taskKey: `conversation:${fixture.conversation.id}`,
         wakeReason: "conversation_message",
@@ -377,6 +376,7 @@ describe("resolveSucceededWakeupStatus", () => {
         conversationMessageId: fixture.triggerMessage.id,
         conversationMessageSequence: fixture.triggerMessage.sequence,
         conversationResponseMode: "optional",
+        conversationWakeLevel: 1,
       },
     });
 
@@ -385,7 +385,7 @@ describe("resolveSucceededWakeupStatus", () => {
 
     await heartbeat.cancelRun(fixture.run.id, {
       error: "test_cancelled",
-      message: "freeing scheduler slot for priority test",
+      message: "freeing scheduler slot for level ordering test",
     });
 
     const runs = await testDb.db
@@ -399,8 +399,8 @@ describe("resolveSucceededWakeupStatus", () => {
     expect(olderStoredRun?.status).toBe("queued");
     expect(newerStoredRun?.status).toBe("running");
     expect(
-      ((newerStoredRun?.contextSnapshot ?? {}) as Record<string, unknown>).wakePriority,
-    ).toBe("high");
+      ((newerStoredRun?.contextSnapshot ?? {}) as Record<string, unknown>).conversationWakeLevel,
+    ).toBe(1);
 
     await heartbeat.cancelActiveForAgent(fixture.agent.id);
   });
