@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, asc, desc, eq, inArray, isNull, max, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, max, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agentTaskSessions,
@@ -28,11 +28,17 @@ import {
   type ConversationMessageRef,
   type ConversationParticipant,
   type ConversationReadState,
+  type ConversationWakePolicy,
   type ConversationSummary,
   type ConversationTargetLink,
   type ConversationTargetKind,
   type DeleteConversationMessageResult,
   type ListConversationMessagesQuery,
+  conversationWakePolicySchema,
+} from "@paperclipai/shared";
+import {
+  CONVERSATION_WAKE_POLICY_DEFAULT,
+  CONVERSATION_WAKE_POLICY_MAX_LEVELS,
 } from "@paperclipai/shared";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { logger } from "../middleware/logger.js";
@@ -273,55 +279,60 @@ function conversationTargetLinkActorFromMessage(input: {
   };
 }
 
-type ConversationWakePriority = "xlow" | "low" | "normal" | "high";
-
 type ConversationWakeTarget = {
   agentId: string;
-  priority: ConversationWakePriority;
+  level: number;
 };
 
-function downgradeConversationWakePriority(
-  priority: ConversationWakePriority,
-  steps: number,
-): ConversationWakePriority {
-  if (steps <= 0) return priority;
-  const ordered: ConversationWakePriority[] = ["high", "normal", "low", "xlow"];
-  const index = ordered.indexOf(priority);
-  return ordered[Math.min(ordered.length - 1, index + steps)]!;
+function normalizeConversationWakePolicy(
+  raw: unknown,
+): ConversationWakePolicy {
+  const parsed = conversationWakePolicySchema.safeParse(raw);
+  if (!parsed.success) {
+    return {
+      agentHumanStep: CONVERSATION_WAKE_POLICY_DEFAULT.agentHumanStep,
+      hierarchyStep: CONVERSATION_WAKE_POLICY_DEFAULT.hierarchyStep,
+      wakeChancePercents: [...CONVERSATION_WAKE_POLICY_DEFAULT.wakeChancePercents],
+    };
+  }
+
+  const wakeChancePercents = parsed.data.wakeChancePercents
+    .slice(0, CONVERSATION_WAKE_POLICY_MAX_LEVELS)
+    .map((value) => Math.max(0, Math.min(100, Math.floor(value))));
+
+  return {
+    agentHumanStep: Math.max(0, Math.floor(parsed.data.agentHumanStep)),
+    hierarchyStep: Math.max(0, Math.floor(parsed.data.hierarchyStep)),
+    wakeChancePercents:
+      wakeChancePercents.length > 0
+        ? wakeChancePercents
+        : [...CONVERSATION_WAKE_POLICY_DEFAULT.wakeChancePercents],
+  };
 }
 
-function wakeSampleRateForConversationPriority(
-  priority: "xlow" | "low" | "normal" | "high" | null,
-): number {
-  switch (priority) {
-    case "high":
-      return 1;
-    case "normal":
-      return 0.5;
-    case "low":
-      return 0.125;
-    case "xlow":
-      return 0.025;
-    default:
-      return 0;
-  }
+function wakeChancePercentForConversationLevel(
+  wakePolicy: ConversationWakePolicy,
+  level: number,
+) {
+  const normalizedLevel = Math.max(1, Math.floor(level));
+  const index = Math.min(normalizedLevel, wakePolicy.wakeChancePercents.length) - 1;
+  return wakePolicy.wakeChancePercents[index] ?? 0;
 }
 
 function shouldTriggerConversationWakeForAgent(input: {
   conversationId: string;
   conversationMessageSequence: number;
   agentId: string;
-  priority: "xlow" | "low" | "normal" | "high" | null;
+  level: number;
+  wakePolicy: ConversationWakePolicy;
 }) {
-  const rate = wakeSampleRateForConversationPriority(input.priority);
+  const rate = wakeChancePercentForConversationLevel(input.wakePolicy, input.level) / 100;
   if (rate <= 0) return false;
   if (rate >= 1) return true;
 
   const sample = parseInt(
     createHash("sha256")
-      .update(
-        `${input.conversationId}:${input.conversationMessageSequence}:${input.agentId}:${input.priority}`,
-      )
+      .update(`${input.conversationId}:${input.conversationMessageSequence}:${input.agentId}:${input.level}`)
       .digest("hex")
       .slice(0, 8),
     16,
@@ -354,31 +365,45 @@ function conversationAncestorDistance(input: {
 function toConversationWakeTargets(input: {
   actor: ConversationActorContext;
   targetAgentIds: string[];
-  basePriority: ConversationWakePriority;
+  baseLevel: number;
+  wakePolicy: ConversationWakePolicy;
   parentById: Map<string, string | null>;
 }) {
   return input.targetAgentIds.map((agentId) => {
-    if (input.actor.viewerType !== "agent") {
-      return { agentId, priority: input.basePriority } satisfies ConversationWakeTarget;
-    }
+    const hierarchyDistance =
+      input.actor.viewerType === "agent"
+        ? conversationAncestorDistance({
+            descendantAgentId: input.actor.agentId,
+            ancestorAgentId: agentId,
+            parentById: input.parentById,
+          })
+        : null;
+    const actorStep = input.actor.viewerType === "agent" ? input.wakePolicy.agentHumanStep : 0;
+    const hierarchyStep =
+      hierarchyDistance === null ? 0 : hierarchyDistance * input.wakePolicy.hierarchyStep;
+    const level = Math.max(
+      1,
+      Math.min(
+        input.baseLevel + actorStep + hierarchyStep,
+        input.wakePolicy.wakeChancePercents.length,
+      ),
+    );
 
-    const hierarchyDistance = conversationAncestorDistance({
-      descendantAgentId: input.actor.agentId,
-      ancestorAgentId: agentId,
-      parentById: input.parentById,
-    });
-
-    return {
-      agentId,
-      priority:
-        hierarchyDistance === null
-          ? input.basePriority
-          : downgradeConversationWakePriority(
-              input.basePriority,
-              Math.min(hierarchyDistance, 2),
-            ),
-    } satisfies ConversationWakeTarget;
+    return { agentId, level } satisfies ConversationWakeTarget;
   });
+}
+
+function wakeBaseLevelForConversationBranch(input: {
+  hasMentionedAgents: boolean;
+  hasReplyTargetAgents: boolean;
+}) {
+  if (input.hasMentionedAgents) {
+    return 1;
+  }
+  if (input.hasReplyTargetAgents) {
+    return 2;
+  }
+  return 3;
 }
 
 function uniqueConversationWakeAgentIds(
@@ -397,6 +422,7 @@ function resolveConversationWakeRouting(
   mentionedAgentIds: string[],
   replyTargetAgentIds: string[],
   parentById: Map<string, string | null>,
+  wakePolicy: ConversationWakePolicy,
 ): {
   wakeTargets: ConversationWakeTarget[];
 } {
@@ -404,25 +430,32 @@ function resolveConversationWakeRouting(
   const routedMentionedAgentIds = uniqueConversationWakeAgentIds(actor, mentionedAgentIds);
   const routedReplyTargetAgentIds = uniqueConversationWakeAgentIds(actor, replyTargetAgentIds);
 
-  if (routedMentionedAgentIds.length > 0) {
+  const hasMentionedAgents = routedMentionedAgentIds.length > 0;
+  const hasReplyTargetAgents = routedReplyTargetAgentIds.length > 0;
+  const baseLevel = wakeBaseLevelForConversationBranch({
+    hasMentionedAgents,
+    hasReplyTargetAgents,
+  });
+
+  if (hasMentionedAgents) {
     return {
       wakeTargets: toConversationWakeTargets({
         actor,
-        targetAgentIds: [
-          ...new Set([...routedMentionedAgentIds, ...routedReplyTargetAgentIds]),
-        ],
-        basePriority: actor.viewerType === "board" ? "high" : "normal",
+        targetAgentIds: routedMentionedAgentIds,
+        baseLevel,
+        wakePolicy,
         parentById,
       }),
     };
   }
 
-  if (routedReplyTargetAgentIds.length > 0) {
+  if (hasReplyTargetAgents) {
     return {
       wakeTargets: toConversationWakeTargets({
         actor,
         targetAgentIds: routedReplyTargetAgentIds,
-        basePriority: actor.viewerType === "board" ? "normal" : "low",
+        baseLevel,
+        wakePolicy,
         parentById,
       }),
     };
@@ -433,7 +466,8 @@ function resolveConversationWakeRouting(
       wakeTargets: toConversationWakeTargets({
         actor,
         targetAgentIds: routedParticipantAgentIds,
-        basePriority: actor.viewerType === "board" ? "low" : "xlow",
+        baseLevel,
+        wakePolicy,
         parentById,
       }),
     };
@@ -529,16 +563,13 @@ export function conversationService(db: Db) {
       .map((row) => toConversationMessageParentSummary(row));
   }
 
-  async function loadConversationParticipantHierarchy(
+  async function loadConversationParticipantParents(
     companyId: string,
     participantAgentIds: string[],
   ) {
     const uniqueParticipantAgentIds = [...new Set(participantAgentIds)];
     if (uniqueParticipantAgentIds.length === 0) {
-      return {
-        parentById: new Map<string, string | null>(),
-        kickoffEligibleAgentIds: new Set<string>(),
-      };
+      return new Map<string, string | null>();
     }
 
     const parentById = new Map<string, string | null>();
@@ -568,20 +599,7 @@ export function conversationService(db: Db) {
         );
     }
 
-    const kickoffEligibleAgentIds = new Set(
-      uniqueParticipantAgentIds.length <= 1
-        ? []
-        : uniqueParticipantAgentIds.filter((agentId) =>
-            uniqueParticipantAgentIds
-              .filter((candidateId) => candidateId !== agentId)
-              .every((candidateId) => parentById.get(candidateId) === agentId),
-          ),
-    );
-
-    return {
-      parentById,
-      kickoffEligibleAgentIds,
-    };
+    return parentById;
   }
 
   async function hasConversationWakeCapacityForMessage(input: {
@@ -589,22 +607,12 @@ export function conversationService(db: Db) {
     conversationId: string;
     messageSequence: number;
     messageAuthorType: ConversationMessage["authorType"];
-    messageAuthorAgentId: string | null;
-    messageParentId: string | null;
     participantAgentIds: string[];
-    kickoffEligibleAgentIds: Set<string>;
   }) {
     if (input.messageAuthorType === "user") return true;
 
     const participantAgentCount = [...new Set(input.participantAgentIds)].length;
     if (participantAgentCount <= 0) return false;
-
-    const currentMessageIsManagerKickoff =
-      input.messageAuthorType === "agent" &&
-      input.messageParentId === null &&
-      input.messageAuthorAgentId !== null &&
-      input.kickoffEligibleAgentIds.has(input.messageAuthorAgentId);
-    if (currentMessageIsManagerKickoff) return true;
 
     const latestResetSequence = await db
       .select({
@@ -616,19 +624,7 @@ export function conversationService(db: Db) {
           eq(conversationMessages.companyId, input.companyId),
           eq(conversationMessages.conversationId, input.conversationId),
           sql`${conversationMessages.sequence} < ${input.messageSequence}`,
-          input.kickoffEligibleAgentIds.size > 0
-            ? or(
-                eq(conversationMessages.authorType, "user"),
-                and(
-                  eq(conversationMessages.authorType, "agent"),
-                  isNull(conversationMessages.parentId),
-                  inArray(
-                    conversationMessages.authorAgentId,
-                    [...input.kickoffEligibleAgentIds],
-                  ),
-                ),
-              )
-            : eq(conversationMessages.authorType, "user"),
+          eq(conversationMessages.authorType, "user"),
         ),
       )
       .then((rows) => rows[0]?.sequence ?? null);
@@ -658,11 +654,11 @@ export function conversationService(db: Db) {
     created: {
       message: ConversationMessage;
       participantAgentIds: string[];
-      kickoffEligibleAgentIds: Set<string>;
       wakeTargets: ConversationWakeTarget[];
     };
   }) {
     const { conversation, actor, created } = input;
+    const wakePolicy = normalizeConversationWakePolicy(conversation.wakePolicyJson);
 
     if (!(await shouldContinueMessagePostSideEffects(conversation.companyId, conversation.id, created.message.id))) {
       return;
@@ -677,10 +673,7 @@ export function conversationService(db: Db) {
         conversationId: conversation.id,
         messageSequence: created.message.sequence,
         messageAuthorType: created.message.authorType,
-        messageAuthorAgentId: created.message.authorAgentId,
-        messageParentId: created.message.parentId,
         participantAgentIds: created.participantAgentIds,
-        kickoffEligibleAgentIds: created.kickoffEligibleAgentIds,
       });
       if (!hasWakeCapacity) return;
 
@@ -700,7 +693,8 @@ export function conversationService(db: Db) {
             conversationId: conversation.id,
             conversationMessageSequence: created.message.sequence,
             agentId: wakeTarget.agentId,
-            priority: wakeTarget.priority,
+            level: wakeTarget.level,
+            wakePolicy,
           })
         ) {
           continue;
@@ -718,7 +712,6 @@ export function conversationService(db: Db) {
           source: "conversation_message",
           triggerDetail: "manual",
           reason: "conversation_message",
-          priority: wakeTarget.priority,
           requestedByActorType: actor.actorType,
           requestedByActorId: actor.actorId,
           contextSnapshot: {
@@ -728,6 +721,7 @@ export function conversationService(db: Db) {
             conversationMessageId: created.message.id,
             conversationMessageSequence: created.message.sequence,
             conversationResponseMode: "optional",
+            conversationWakeLevel: wakeTarget.level,
             conversationTargetKind: singleTarget?.targetKind ?? null,
             conversationTargetId: singleTarget?.targetId ?? null,
             conversationReplyContextMarkdown: replyContextMarkdown,
@@ -797,33 +791,6 @@ export function conversationService(db: Db) {
       const row = rowById.get(agentId);
       if (!row || row.companyId !== companyId) {
         throw unprocessable("Conversation participants must belong to the same company");
-      }
-    }
-    return rows;
-  }
-
-  async function ensureDirectReportAgents(
-    companyId: string,
-    managerAgentId: string,
-    agentIds: string[],
-  ) {
-    if (agentIds.length === 0) return [];
-    const rows = await db
-      .select({
-        id: agents.id,
-      })
-      .from(agents)
-      .where(
-        and(
-          eq(agents.companyId, companyId),
-          eq(agents.reportsTo, managerAgentId),
-          inArray(agents.id, agentIds),
-        ),
-      );
-    const allowedAgentIds = new Set(rows.map((row) => row.id));
-    for (const agentId of agentIds) {
-      if (!allowedAgentIds.has(agentId)) {
-        throw forbidden("Agents can only include direct reports in conversations");
       }
     }
     return rows;
@@ -1027,6 +994,7 @@ export function conversationService(db: Db) {
         title: row.title,
         status: row.status as ConversationSummary["status"],
         participants: participantsByConversationId.get(row.id) ?? [],
+        wakePolicy: normalizeConversationWakePolicy(row.wakePolicyJson),
         latestMessageSequence: latestMessageStats?.latestMessageSequence ?? 0,
         latestMessageAt: latestMessageStats?.latestMessageAt ?? null,
         unreadCount: unreadCountByConversationId.get(row.id) ?? 0,
@@ -1420,24 +1388,12 @@ export function conversationService(db: Db) {
       actor: ConversationActorContext,
       input: { title: string; participantAgentIds: string[] },
     ) => {
-      const requestedParticipantAgentIds =
-        actor.viewerType === "agent"
-          ? input.participantAgentIds.filter((agentId) => agentId !== actor.agentId)
-          : input.participantAgentIds;
-
-      if (actor.viewerType === "board") {
-        await ensureParticipantAgents(companyId, requestedParticipantAgentIds);
-      } else {
-        if (requestedParticipantAgentIds.length === 0) {
-          throw unprocessable("Agent-created conversations require at least one direct report");
-        }
-        await ensureDirectReportAgents(companyId, actor.agentId, requestedParticipantAgentIds);
+      if (actor.viewerType !== "board") {
+        throw forbidden("Board access required");
       }
 
-      const participantAgentIds =
-        actor.viewerType === "agent"
-          ? [...new Set([actor.agentId, ...requestedParticipantAgentIds])]
-          : requestedParticipantAgentIds;
+      const participantAgentIds = input.participantAgentIds;
+      await ensureParticipantAgents(companyId, participantAgentIds);
 
       const now = new Date();
       const conversation = await db.transaction(async (tx) => {
@@ -1446,8 +1402,8 @@ export function conversationService(db: Db) {
           .values({
             companyId,
             title: input.title,
-            createdByUserId: actor.viewerType === "board" ? actor.actorId : null,
-            createdByAgentId: actor.viewerType === "agent" ? actor.agentId : null,
+            wakePolicyJson: normalizeConversationWakePolicy(null),
+            createdByUserId: actor.actorId,
             updatedAt: now,
           })
           .returning();
@@ -1494,16 +1450,20 @@ export function conversationService(db: Db) {
     update: async (
       conversationId: string,
       actor: ConversationActorContext,
-      patch: { title?: string; status?: "active" | "archived" },
+      patch: { title?: string; status?: "active" | "archived"; wakePolicy?: ConversationWakePolicy },
     ) => {
       if (actor.viewerType !== "board") throw forbidden("Board access required");
       const conversation = await getConversationRow(conversationId);
       if (!conversation) throw notFound("Conversation not found");
 
+      const normalizedWakePolicy = patch.wakePolicy
+        ? normalizeConversationWakePolicy(patch.wakePolicy)
+        : undefined;
       const [updated] = await db
         .update(conversations)
         .set({
           ...patch,
+          ...(normalizedWakePolicy ? { wakePolicyJson: normalizedWakePolicy } : {}),
           updatedAt: new Date(),
         })
         .where(eq(conversations.id, conversationId))
@@ -1537,15 +1497,10 @@ export function conversationService(db: Db) {
     ) => {
       const conversation = await getConversationRow(conversationId);
       if (!conversation) throw notFound("Conversation not found");
-      if (actor.viewerType === "board") {
-        await ensureParticipantAgents(conversation.companyId, [agentId]);
-      } else {
-        await ensureConversationVisible(conversationId, actor);
-        if (agentId === actor.agentId) {
-          throw unprocessable("Agent is already a conversation participant");
-        }
-        await ensureDirectReportAgents(conversation.companyId, actor.agentId, [agentId]);
+      if (actor.viewerType !== "board") {
+        throw forbidden("Board access required");
       }
+      await ensureParticipantAgents(conversation.companyId, [agentId]);
 
       const existing = await db
         .select()
@@ -2166,10 +2121,11 @@ export function conversationService(db: Db) {
         };
       });
 
-      const participantHierarchy = await loadConversationParticipantHierarchy(
+      const participantParents = await loadConversationParticipantParents(
         conversation.companyId,
         created.participantAgentIds,
       );
+      const wakePolicy = normalizeConversationWakePolicy(conversation.wakePolicyJson);
       const suppressWakeRoutingForAgentHumanThreadReply =
         actor.viewerType === "agent" &&
         created.message.parentMessage !== null &&
@@ -2184,7 +2140,8 @@ export function conversationService(db: Db) {
             created.participantAgentIds,
             created.targetedAgentIds,
             created.replyTargetAgentIds,
-            participantHierarchy.parentById,
+            participantParents,
+            wakePolicy,
           );
 
       await memory.rebuildForPairs(conversation.companyId, created.affectedPairs);
@@ -2252,7 +2209,6 @@ export function conversationService(db: Db) {
           created: {
             message: created.message,
             participantAgentIds: created.participantAgentIds,
-            kickoffEligibleAgentIds: participantHierarchy.kickoffEligibleAgentIds,
             wakeTargets: wakeRouting.wakeTargets,
           },
         }).catch((err) => {

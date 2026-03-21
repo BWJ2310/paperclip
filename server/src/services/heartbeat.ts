@@ -217,7 +217,6 @@ interface WakeupOptions {
   requestedByActorType?: "user" | "agent" | "system";
   requestedByActorId?: string | null;
   contextSnapshot?: Record<string, unknown>;
-  priority?: "xlow" | "low" | "normal" | "high";
 }
 
 type UsageTotals = {
@@ -232,8 +231,6 @@ type SessionCompactionDecision = {
   handoffMarkdown: string | null;
   previousRunId: string | null;
 };
-
-type WakePriority = "xlow" | "low" | "normal" | "high";
 
 type ConversationWakeState = {
   conversationId: string;
@@ -365,57 +362,50 @@ function readConversationTargetKind(
     : null;
 }
 
-function readWakePriority(value: unknown): WakePriority | null {
-  return value === "xlow" ||
-    value === "low" ||
-    value === "normal" ||
-    value === "high"
-    ? value
-    : null;
+function readConversationWakeLevel(value: unknown): number | null {
+  const parsed = Math.floor(asNumber(value, Number.NaN));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-function compareWakePriority(
-  left: WakePriority | null | undefined,
-  right: WakePriority | null | undefined,
+function compareWakeRank(
+  left: number | null | undefined,
+  right: number | null | undefined,
 ): -1 | 0 | 1 {
-  const normalizedLeft = readWakePriority(left) ?? "normal";
-  const normalizedRight = readWakePriority(right) ?? "normal";
+  const normalizedLeft = readConversationWakeLevel(left) ?? Number.POSITIVE_INFINITY;
+  const normalizedRight = readConversationWakeLevel(right) ?? Number.POSITIVE_INFINITY;
   if (normalizedLeft === normalizedRight) return 0;
-  if (normalizedLeft === "high" || normalizedRight === "xlow") return 1;
-  if (normalizedRight === "high" || normalizedLeft === "xlow") return -1;
-  if (normalizedLeft === "normal" || normalizedRight === "low") return 1;
-  if (normalizedRight === "normal" || normalizedLeft === "low") return -1;
-  return 0;
+  return normalizedLeft < normalizedRight ? 1 : -1;
 }
 
-function mergeWakePriorities(
-  existing: WakePriority | null | undefined,
-  incoming: WakePriority | null | undefined
-): WakePriority | null {
-  const left = readWakePriority(existing);
-  const right = readWakePriority(incoming);
-  if (!left) return right ?? null;
-  if (!right) return left;
-  return compareWakePriority(left, right) < 0 ? right : left;
+function mergeWakeRanks(
+  existing: number | null | undefined,
+  incoming: number | null | undefined,
+): number | null {
+  const left = readConversationWakeLevel(existing);
+  const right = readConversationWakeLevel(incoming);
+  if (left === null) return right;
+  if (right === null) return left;
+  return Math.min(left, right);
 }
 
-function readWakePriorityFromSnapshot(
+function readConversationWakeLevelFromSnapshot(
   contextSnapshot: Record<string, unknown> | null | undefined
-): WakePriority | null {
-  return readWakePriority(contextSnapshot?.wakePriority);
+): number | null {
+  return readConversationWakeLevel(contextSnapshot?.conversationWakeLevel);
 }
 
 function compareQueuedRunsForStart(
   left: typeof heartbeatRuns.$inferSelect,
   right: typeof heartbeatRuns.$inferSelect
 ) {
-  const priorityDelta = compareWakePriority(
-    readWakePriorityFromSnapshot(left.contextSnapshot),
-    readWakePriorityFromSnapshot(right.contextSnapshot),
-  );
-  // `compareWakePriority` returns positive when the left side is higher-priority,
-  // but Array#sort expects negative for "left comes first".
-  if (priorityDelta !== 0) return -priorityDelta;
+  const leftConversationWakeLevel = readConversationWakeLevelFromSnapshot(left.contextSnapshot);
+  const rightConversationWakeLevel = readConversationWakeLevelFromSnapshot(right.contextSnapshot);
+  if (leftConversationWakeLevel !== null || rightConversationWakeLevel !== null) {
+    const rankDelta = compareWakeRank(leftConversationWakeLevel, rightConversationWakeLevel);
+    // Lower numeric ranks are higher-priority, but Array#sort expects negative
+    // when the left side should come first.
+    if (rankDelta !== 0) return -rankDelta;
+  }
 
   const createdDelta = left.createdAt.getTime() - right.createdAt.getTime();
   if (createdDelta !== 0) return createdDelta;
@@ -889,9 +879,8 @@ function enrichWakeContextSnapshot(input: {
   source: WakeupOptions["source"];
   triggerDetail: WakeupOptions["triggerDetail"] | null;
   payload: Record<string, unknown> | null;
-  priority?: WakePriority | null;
 }) {
-  const { contextSnapshot, reason, source, triggerDetail, payload, priority } = input;
+  const { contextSnapshot, reason, source, triggerDetail, payload } = input;
   const issueIdFromPayload = readNonEmptyString(payload?.["issueId"]);
   const commentIdFromPayload = readNonEmptyString(payload?.["commentId"]);
   const taskKey = deriveTaskKey(contextSnapshot, payload);
@@ -939,11 +928,6 @@ function enrichWakeContextSnapshot(input: {
     contextSnapshot.conversationTargetKind = conversationTargetKindFromPayload;
     contextSnapshot.conversationTargetId = conversationTargetIdFromPayload;
   }
-  const normalizedPriority = readWakePriority(priority);
-  if (normalizedPriority) {
-    contextSnapshot.wakePriority = normalizedPriority;
-  }
-
   return {
     contextSnapshot,
     issueIdFromPayload,
@@ -972,14 +956,14 @@ function mergeCoalescedContextSnapshot(
     readConversationWakeState(incoming, null),
   );
   applyConversationWakeState(merged, mergedConversationState);
-  const mergedPriority = mergeWakePriorities(
-    readWakePriority(existing.wakePriority),
-    readWakePriority(incoming.wakePriority),
+  const mergedConversationWakeLevel = mergeWakeRanks(
+    readConversationWakeLevel(existing.conversationWakeLevel),
+    readConversationWakeLevel(incoming.conversationWakeLevel),
   );
-  if (mergedPriority) {
-    merged.wakePriority = mergedPriority;
+  if (mergedConversationWakeLevel !== null) {
+    merged.conversationWakeLevel = mergedConversationWakeLevel;
   } else {
-    delete merged.wakePriority;
+    delete merged.conversationWakeLevel;
   }
   return normalizeTaskScopeContextSnapshot(merged);
 }
@@ -3306,7 +3290,6 @@ export function heartbeatService(db: Db) {
       source,
       triggerDetail,
       payload,
-      priority: opts.priority ?? null,
     });
     const issueId =
       readIssueIdFromTaskKey(taskKey) ??

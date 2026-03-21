@@ -66,6 +66,7 @@ export function conversationRoutes(db: Db) {
   router.post("/companies/:companyId/conversations", validate(createConversationSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    assertBoard(req);
     const detail = await svc.create(companyId, toConversationActor(req), req.body);
     res.status(201).json(detail);
   });
@@ -106,6 +107,7 @@ export function conversationRoutes(db: Db) {
         return;
       }
       assertCompanyAccess(req, companyId);
+      assertBoard(req);
       const participant = await svc.addParticipant(
         conversationId,
         toConversationActor(req),
